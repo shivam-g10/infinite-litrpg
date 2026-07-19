@@ -2,7 +2,7 @@
 
 - Updated: 2026-07-19
 - Layer: Release evaluation
-- Current phase: Phase 5 prompt `1.4.8` non-live checkpoint green; final release run pending
+- Current phase: Phase 5 counted-reservation checkpoint ready for the final sequential matrix
 - Repository: initialized on `main`
 - Remote: `git@github.com:shivam-g10/infinite-litrpg.git`
 - Initial commit: `39b19a2` (`chore: scaffold agent workflow`)
@@ -21,11 +21,11 @@
 
 ## Current Blockers
 
-- The final twelve-cycle sequential report has not run on prompt `1.4.8`.
+- The final twelve-cycle sequential report has not passed on prompt `1.4.8`.
 
 ## Next Action
 
-Create the clean prompt `1.4.8` checkpoint. Then run the final suite with prior spend `$2.3994093` and chapter cap `$0.05`.
+Commit the counted-reservation checkpoint. Then run the final suite with prior spend `$2.46416855` and chapter cap `$0.0446`.
 
 ## Evidence Log
 
@@ -93,5 +93,8 @@ Create the clean prompt `1.4.8` checkpoint. Then run the final suite with prior 
 - 2026-07-19 prompt `1.4.8` baseline fix: application code enumerates legal choices and owns every final frame field except Luna's title and option ranking. Terra targets 975 to 1,000 words. A sole 840-to-899-word failure may use one tail-only Luna continuation with a 1,200-byte request cap and no retry. Underlength validation still runs hidden-fact and every other deterministic check before recovery. Merged prose reruns full validation and independent audit, then alone is hashed, stored, and exactly replayed.
 - 2026-07-19 prompt `1.4.8` cost and review proof: the live-shaped three-agent regression includes two cache-realistic rejected frame candidates, an 848-word Terra draft, 52-word Luna recovery, full audit, exact trace accounting, hash equality, and replay equality. It committed at `$0.0332095` under `$0.05`. Every maximum request preflight stayed below the cap; the tightest was Terra narration at `$0.049653875`. Recovery is bounded at `$0.00298`. Two independent read-only reviews found no remaining defect. Targeted Vitest passed 54 tests, strict typecheck passed, and `git diff --check` passed.
 - 2026-07-19 prompt `1.4.8` non-live gate: `npm run check` and `npm audit` exited 0. Vitest passed 108 tests. Offline eval passed 14 invariant cases, 12 POV attacks, 1,000 simulations, 35 checkpoints, and the 350/no-351 horizon. Production build, 17 E2E tests with one intentional desktop skip, secret scan across 142 working files, client-bundle scan, 526 package licenses, and zero-vulnerability audit passed.
+- 2026-07-19 prompt `1.4.8` full run command `npm run evals:live:full -- --prior-spend-usd 2.3994093 --chapter-cap-usd 0.05` exited 1 after one of twelve chapters. Rowan chapter 1 passed at 1,049 words, `$0.033194375`, 22,808 ms, exact 12-chunk replay, empty leak list, and all audit scores 2. Rowan chapter 2 spent `$0.031564875` across two background agents, Luna option ranking, and valid Terra narration. Its 12,545-byte Luna audit reserved `$0.01902125`, exceeding the `$0.018435125` left by `$0.000586125`. Run exposure was `$0.06475925`; cumulative conservative exposure is `$2.46416855`, leaving `$0.53583145`. Archived report: `evals/reports/live-full-sequential-prompt-1.4.8.json`.
+- 2026-07-19 counted-reservation research: the official `POST /responses/input_tokens` endpoint and installed SDK accept the exact generation input, instructions, model, reasoning, and structured format. A reconstructed Rowan narration counted 1,260 tokens, matching live usage exactly. A reconstructed accepted audit counted 2,931 tokens versus 2,947 reported live. Count plus the 512-token margin reserves `$0.0265375` for narration and `$0.00700375` for audit. Conservatively using the higher 2,947-token live audit usage raises that audit reserve to `$0.00702375`; the failed chapter-two checkpoint becomes `$0.038588625`, leaving `$0.006011375` under the next `$0.0446` cap. The full prompt, seven-dimension audit, and maximum-three-agent gate are unchanged.
+- 2026-07-19 counted-reservation non-live gate: `npm run check` and `npm audit` exited 0. Vitest passed 119 tests. Offline eval passed 14 invariant cases, 12 POV attacks, 1,000 simulations, 35 checkpoints, and the 350/no-351 horizon. Production build, 17 E2E tests with one intentional desktop skip, secret scan across 145 working files, client-bundle scan, 526 package licenses, and zero-vulnerability audit passed. Final read-only review found no runtime, correctness, security, accounting, or gate defect; its one documentation arithmetic correction is applied.
 
 Add exact command, date, exit code, cost, and report path after every future milestone gate.

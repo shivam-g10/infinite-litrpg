@@ -8,6 +8,7 @@ import {
   createAuditedNarrationReplay,
   runStructuredResponse,
   type StableOpenAIClient,
+  type StructuredResponseRequest,
 } from "./stable";
 
 const ResultSchema = z.object({ answer: z.string() }).strict();
@@ -154,6 +155,102 @@ describe("stable Responses adapter", () => {
     expect(parse).not.toHaveBeenCalled();
   });
 
+  it("uses the official input count when the byte bound would block a safe request", async () => {
+    const count = vi.fn().mockResolvedValue(countResponse(100));
+    const parse = vi.fn().mockResolvedValue(parsedResponse({ answer: "counted" }));
+    const request = structuredRequest({ maxRetries: 0 });
+    request.input = "x".repeat(5_000);
+    request.policy = { budget: new ChapterCostBudget(0.005), maxRetries: 0 };
+
+    const result = await runStructuredResponse(stableClient({ count, parse }), request);
+
+    expect(result.data).toEqual({ answer: "counted" });
+    expect(count).toHaveBeenCalledTimes(1);
+    expect(parse).toHaveBeenCalledTimes(1);
+    expect(count.mock.calls[0]?.[0]).toMatchObject({
+      input: request.input,
+      instructions: request.instructions,
+      model: "gpt-5.6-terra",
+      reasoning: { effort: "none" },
+      text: { format: { name: "test_result", strict: true, type: "json_schema" } },
+    });
+    expect(count.mock.calls[0]?.[1]).toEqual({ maxRetries: 0, timeout: 10_000 });
+  });
+
+  it("falls back to the byte bound when input counting fails", async () => {
+    const count = vi.fn().mockRejectedValue(new Error("counter unavailable"));
+    const parse = vi.fn().mockResolvedValue(parsedResponse({ answer: "blocked" }));
+    const request = structuredRequest({ maxRetries: 0 });
+    request.input = "x".repeat(5_000);
+    request.policy = { budget: new ChapterCostBudget(0.005), maxRetries: 0 };
+
+    await expectRuntimeError(
+      runStructuredResponse(stableClient({ count, parse }), request),
+      "COST_CAP_EXCEEDED",
+    );
+    expect(count).toHaveBeenCalledTimes(1);
+    expect(parse).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["wrong object", { input_tokens: 100, object: "wrong" }],
+    ["zero", { input_tokens: 0, object: "response.input_tokens" }],
+    ["fraction", { input_tokens: 1.5, object: "response.input_tokens" }],
+    [
+      "unsafe integer",
+      { input_tokens: Number.MAX_SAFE_INTEGER + 1, object: "response.input_tokens" },
+    ],
+  ])("keeps the byte bound for a malformed count: %s", async (_label, countResponseValue) => {
+    const count = vi.fn().mockResolvedValue(countResponseValue);
+    const parse = vi.fn().mockResolvedValue(parsedResponse({ answer: "blocked" }));
+    const request = structuredRequest({ maxRetries: 0 });
+    request.input = "x".repeat(5_000);
+    request.policy = { budget: new ChapterCostBudget(0.005), maxRetries: 0 };
+
+    await expectRuntimeError(
+      runStructuredResponse(stableClient({ count, parse }), request),
+      "COST_CAP_EXCEEDED",
+    );
+    expect(count).toHaveBeenCalledTimes(1);
+    expect(parse).not.toHaveBeenCalled();
+  });
+
+  it("rejects actual usage above a counted reservation", async () => {
+    const count = vi.fn().mockResolvedValue(countResponse(1));
+    const onAttempt = vi.fn();
+    const parse = vi.fn().mockResolvedValue(
+      parsedResponse(
+        { answer: "under-counted" },
+        {
+          usage: {
+            input_tokens: 2_000,
+            input_tokens_details: { cache_write_tokens: 2_000, cached_tokens: 0 },
+            output_tokens: 20,
+            output_tokens_details: { reasoning_tokens: 0 },
+            total_tokens: 2_020,
+          },
+        },
+      ),
+    );
+    const request = structuredRequest({ maxRetries: 0 });
+    request.input = "x".repeat(5_000);
+    request.policy = { budget: new ChapterCostBudget(0.005), maxRetries: 0, onAttempt };
+
+    await expectRuntimeError(
+      runStructuredResponse(stableClient({ count, parse }), request),
+      "INVALID_USAGE",
+    );
+    expect(parse).toHaveBeenCalledTimes(1);
+    expect(request.policy.budget.spentUsd).toBeCloseTo(0.00655, 10);
+    expect(onAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        costUsd: 0.00655,
+        errorCode: "INVALID_USAGE",
+        usage: expect.objectContaining({ inputTokens: 2_000, outputTokens: 20 }),
+      }),
+    );
+  });
+
   it("buffers stable stream, audits full prose, then replays", async () => {
     const sequence: string[] = [];
     const response = narrationResponse("Ash crown");
@@ -181,6 +278,34 @@ describe("stable Responses adapter", () => {
     }
     expect(chunks.join("")).toBe("Ash crown");
     expect(sequence).toEqual(["audit:Ash crown", "replay:Ash ", "replay:crow", "replay:n"]);
+  });
+
+  it("counts the exact narration input before a byte-bound rejection", async () => {
+    const input = "x".repeat(5_000);
+    const count = vi.fn().mockResolvedValue(countResponse(100));
+    const response = narrationResponse("Counted ash");
+    const stream = vi.fn().mockReturnValue(fakeStream(["Counted ash"], response));
+
+    const result = await createAuditedNarrationReplay(stableClient({ count, stream }), {
+      audit: () => ({ accepted: true }),
+      input,
+      instructions: "Narrate.",
+      maxOutputTokens: 100,
+      model: "gpt-5.6-terra",
+      policy: { budget: new ChapterCostBudget(0.005), maxRetries: 0 },
+      reasoningEffort: "none",
+    });
+
+    expect(result.prose).toBe("Counted ash");
+    expect(count).toHaveBeenCalledTimes(1);
+    expect(stream).toHaveBeenCalledTimes(1);
+    expect(count.mock.calls[0]?.[0]).toMatchObject({
+      input,
+      instructions: "Narrate.",
+      model: "gpt-5.6-terra",
+      reasoning: { effort: "none" },
+    });
+    expect(count.mock.calls[0]?.[0]).not.toHaveProperty("text");
   });
 
   it("never returns a replay when audit rejects prose", async () => {
@@ -252,9 +377,49 @@ describe("stable Responses adapter", () => {
       "safe POV context attempt 2",
     ]);
   });
+
+  it("counts and generates from one materialized input per narration attempt", async () => {
+    const rejected = narrationResponse("rejected prose");
+    const approved = narrationResponse("approved prose");
+    const count = vi.fn().mockResolvedValue(countResponse(100));
+    const stream = vi
+      .fn()
+      .mockReturnValueOnce(fakeStream(["rejected prose"], rejected))
+      .mockReturnValueOnce(fakeStream(["approved prose"], approved));
+    const audit = vi
+      .fn()
+      .mockReturnValueOnce({ accepted: false, reason: "retry" })
+      .mockReturnValueOnce({ accepted: true });
+    const inputForAttempt = vi.fn((attempt: number) => `${"x".repeat(5_000)}-${attempt}`);
+
+    const result = await createAuditedNarrationReplay(stableClient({ count, stream }), {
+      audit,
+      input: inputForAttempt,
+      instructions: "Narrate.",
+      maxOutputTokens: 100,
+      model: "gpt-5.6-terra",
+      policy: { budget: new ChapterCostBudget(0.01), maxRetries: 1 },
+      reasoningEffort: "none",
+    });
+
+    expect(result.prose).toBe("approved prose");
+    expect(inputForAttempt.mock.calls.map(([attempt]) => attempt)).toEqual([0, 1]);
+    expect(count.mock.calls.map(([body]) => (body as { input: string }).input)).toEqual([
+      `${"x".repeat(5_000)}-0`,
+      `${"x".repeat(5_000)}-1`,
+    ]);
+    expect(stream.mock.calls.map(([body]) => (body as { input: string }).input)).toEqual([
+      `${"x".repeat(5_000)}-0`,
+      `${"x".repeat(5_000)}-1`,
+    ]);
+  });
 });
 
-function structuredRequest(overrides: { maxRetries?: number; timeoutMs?: number } = {}) {
+type Mutable<T> = { -readonly [Key in keyof T]: T[Key] };
+
+function structuredRequest(
+  overrides: { maxRetries?: number; timeoutMs?: number } = {},
+): Mutable<StructuredResponseRequest<z.infer<typeof ResultSchema>>> {
   return {
     input: "input",
     instructions: "Return JSON.",
@@ -271,13 +436,22 @@ function structuredRequest(overrides: { maxRetries?: number; timeoutMs?: number 
   };
 }
 
-function stableClient(methods: { parse?: unknown; stream?: unknown }): StableOpenAIClient {
+function stableClient(methods: {
+  count?: unknown;
+  parse?: unknown;
+  stream?: unknown;
+}): StableOpenAIClient {
   return {
     responses: {
+      inputTokens: { count: methods.count },
       parse: methods.parse,
       stream: methods.stream,
     },
   } as unknown as StableOpenAIClient;
+}
+
+function countResponse(inputTokens: number) {
+  return { input_tokens: inputTokens, object: "response.input_tokens" as const };
 }
 
 function parsedResponse<T>(

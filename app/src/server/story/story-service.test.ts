@@ -342,11 +342,19 @@ describe("StoryService", () => {
       .fn()
       .mockReturnValueOnce(fakeStream(rawProse, "resp_narration_three", usage(1_252, 1_052)))
       .mockReturnValueOnce(fakeStream(continuation, "resp_recovery_three", usage(300, 80)));
-    const service = new StoryService(store, { responses: { parse, stream } } as unknown as OpenAI, {
-      maxBackgroundAgents: 3,
-      maxCostUsdPerChapter: 0.05,
-      nativeMultiAgent: false,
-    });
+    const count = vi
+      .fn()
+      .mockResolvedValueOnce({ input_tokens: 1_252, object: "response.input_tokens" })
+      .mockResolvedValueOnce({ input_tokens: 3_000, object: "response.input_tokens" });
+    const service = new StoryService(
+      store,
+      { responses: { inputTokens: { count }, parse, stream } } as unknown as OpenAI,
+      {
+        maxBackgroundAgents: 3,
+        maxCostUsdPerChapter: 0.0446,
+        nativeMultiAgent: false,
+      },
+    );
     const selected = service.selectPov("elara-voss");
 
     const replayed: string[] = [];
@@ -363,10 +371,15 @@ describe("StoryService", () => {
     );
 
     expect(result.world).toMatchObject({ chapter: 1, version: 2 });
-    expect(result.estimatedCostUsd).toBeLessThanOrEqual(0.05);
+    expect(result.estimatedCostUsd).toBeLessThanOrEqual(0.0446);
     expect(result.chapter.prose).toBe(prose);
     expect(parse).toHaveBeenCalledTimes(7);
     expect(stream).toHaveBeenCalledTimes(2);
+    expect(count).toHaveBeenCalledTimes(2);
+    expect(count.mock.calls.map(([body]) => (body as { model: string }).model)).toEqual([
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
+    ]);
     expect(replayed.join("")).toBe(prose);
     const calls = result.godMode.calls as readonly {
       agentId: string | null;

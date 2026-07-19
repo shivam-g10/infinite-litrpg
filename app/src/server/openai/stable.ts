@@ -1,19 +1,20 @@
 import { ReasoningEffortSchema, type ModelCallTrace } from "@infinite-litrpg/shared";
 import type OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
-import type { ParsedResponse, Response, ResponseInput } from "openai/resources/responses/responses";
+import type { InputTokenCountParams } from "openai/resources/responses/input-tokens";
+import type { ParsedResponse, Response } from "openai/resources/responses/responses";
 import type { z } from "zod";
 
 import { OpenAIRuntimeError } from "./errors";
 import { parseRuntimeModel, type RuntimeModel, type RuntimeReasoningEffort } from "./models";
 import { runRetriedRequest, type RuntimeCallResult, type RuntimePolicy } from "./policy";
-import { estimateMaximumRequestCostUsd } from "./usage";
+import { estimateMaximumCountedRequestCostUsd, estimateMaximumRequestCostUsd } from "./usage";
 
 export type StableOpenAIClient = Pick<OpenAI, "responses">;
 
 export interface StructuredResponseRequest<T> {
   readonly agentId?: string | null;
-  readonly input: string | ResponseInput;
+  readonly input: string;
   readonly instructions: string;
   readonly maxOutputTokens: number;
   readonly model: RuntimeModel;
@@ -32,6 +33,15 @@ export async function runStructuredResponse<T>(
   const reasoningEffort = ReasoningEffortSchema.parse(request.reasoningEffort);
   validateGenerationSettings(request.schemaName, request.maxOutputTokens);
   const format = zodTextFormat(request.schema, request.schemaName);
+  const maximumCostUsd = createStableMaximumCostResolver(client, {
+    format,
+    inputForAttempt: () => request.input,
+    instructions: request.instructions,
+    maxOutputTokens: request.maxOutputTokens,
+    model,
+    policy: request.policy,
+    reasoningEffort,
+  });
 
   return runRetriedRequest({
     agentId: request.agentId ?? null,
@@ -85,11 +95,7 @@ export async function runStructuredResponse<T>(
         { signal },
       ),
     model,
-    maximumCostUsd: estimateMaximumRequestCostUsd(
-      model,
-      promptBytes(request.input, request.instructions, format),
-      request.maxOutputTokens,
-    ),
+    maximumCostUsd,
     policy: request.policy,
   });
 }
@@ -103,7 +109,7 @@ export interface NarrativeAuditVerdict {
 export interface BufferedNarrationRequest {
   readonly audit: (completeProse: string) => NarrativeAuditVerdict | Promise<NarrativeAuditVerdict>;
   readonly chunkCharacters?: number;
-  readonly input: string | ResponseInput | ((attempt: number) => string | ResponseInput);
+  readonly input: string | ((attempt: number) => string);
   readonly instructions: string;
   readonly maxOutputTokens: number;
   readonly model: RuntimeModel;
@@ -136,6 +142,22 @@ export async function createAuditedNarrationReplay(
       "chunkCharacters must be an integer between 1 and 4096",
     );
   }
+  const attemptInputs = new Map<number, string>();
+  const inputForAttempt = (attempt: number): string => {
+    const cached = attemptInputs.get(attempt);
+    if (cached !== undefined) return cached;
+    const input = typeof request.input === "function" ? request.input(attempt) : request.input;
+    attemptInputs.set(attempt, input);
+    return input;
+  };
+  const maximumCostUsd = createStableMaximumCostResolver(client, {
+    inputForAttempt,
+    instructions: request.instructions,
+    maxOutputTokens: request.maxOutputTokens,
+    model,
+    policy: request.policy,
+    reasoningEffort,
+  });
 
   const call = await runRetriedRequest({
     evaluate: async ({ bufferedDelta, response }: BufferedStreamResponse) => {
@@ -180,7 +202,7 @@ export async function createAuditedNarrationReplay(
     invoke: async (signal, attempt): Promise<BufferedStreamResponse> => {
       const stream = client.responses.stream(
         {
-          input: typeof request.input === "function" ? request.input(attempt) : request.input,
+          input: inputForAttempt(attempt),
           instructions: request.instructions,
           max_output_tokens: request.maxOutputTokens,
           model,
@@ -197,15 +219,7 @@ export async function createAuditedNarrationReplay(
       return { bufferedDelta, response };
     },
     model,
-    maximumCostUsd: (attempt) =>
-      estimateMaximumRequestCostUsd(
-        model,
-        promptBytes(
-          typeof request.input === "function" ? request.input(attempt) : request.input,
-          request.instructions,
-        ),
-        request.maxOutputTokens,
-      ),
+    maximumCostUsd,
     policy: request.policy,
   });
 
@@ -268,15 +282,85 @@ function validateGenerationSettings(schemaName: string, maxOutputTokens: number)
   }
 }
 
-function promptBytes(
-  input: string | ResponseInput,
-  instructions: string,
-  format?: unknown,
-): number {
-  const serializedInput = typeof input === "string" ? input : JSON.stringify(input);
+function promptBytes(input: string, instructions: string, format?: unknown): number {
+  return new TextEncoder().encode(serializePrompt(input, instructions, format)).byteLength;
+}
+
+function serializePrompt(input: string, instructions: string, format?: unknown): string {
   const serializedFormat = format === undefined ? "" : JSON.stringify(format);
-  return new TextEncoder().encode(`${instructions}\n${serializedInput}\n${serializedFormat}`)
-    .byteLength;
+  return `${instructions}\n${input}\n${serializedFormat}`;
+}
+
+type InputTokenFormat = NonNullable<InputTokenCountParams["text"]>["format"];
+
+interface StableMaximumCostRequest {
+  readonly format?: InputTokenFormat;
+  readonly inputForAttempt: (attempt: number) => string;
+  readonly instructions: string;
+  readonly maxOutputTokens: number;
+  readonly model: RuntimeModel;
+  readonly policy: RuntimePolicy;
+  readonly reasoningEffort: RuntimeReasoningEffort;
+}
+
+function createStableMaximumCostResolver(
+  client: StableOpenAIClient,
+  request: StableMaximumCostRequest,
+): (attempt: number) => Promise<number> {
+  const countedCostByPrompt = new Map<string, Promise<number>>();
+  return async (attempt) => {
+    const input = request.inputForAttempt(attempt);
+    const byteBound = estimateMaximumRequestCostUsd(
+      request.model,
+      promptBytes(input, request.instructions, request.format),
+      request.maxOutputTokens,
+    );
+    if (byteBound <= request.policy.budget.remainingUsd) return byteBound;
+
+    const promptKey = serializePrompt(input, request.instructions, request.format);
+    let countedCost = countedCostByPrompt.get(promptKey);
+    if (countedCost === undefined) {
+      countedCost = countMaximumRequestCost(client, request, input, byteBound);
+      countedCostByPrompt.set(promptKey, countedCost);
+    }
+    return countedCost;
+  };
+}
+
+async function countMaximumRequestCost(
+  client: StableOpenAIClient,
+  request: StableMaximumCostRequest,
+  input: string,
+  byteBound: number,
+): Promise<number> {
+  const inputTokens = client.responses.inputTokens;
+  if (inputTokens === undefined || typeof inputTokens.count !== "function") return byteBound;
+  try {
+    const counted = await inputTokens.count(
+      {
+        input,
+        instructions: request.instructions,
+        model: request.model,
+        reasoning: { effort: request.reasoningEffort },
+        ...(request.format === undefined ? {} : { text: { format: request.format } }),
+      },
+      { maxRetries: 0, timeout: 10_000 },
+    );
+    if (
+      counted.object !== "response.input_tokens" ||
+      !Number.isSafeInteger(counted.input_tokens) ||
+      counted.input_tokens < 1
+    ) {
+      return byteBound;
+    }
+    return estimateMaximumCountedRequestCostUsd(
+      request.model,
+      counted.input_tokens,
+      request.maxOutputTokens,
+    );
+  } catch {
+    return byteBound;
+  }
 }
 
 export type RuntimePhase = ModelCallTrace["phase"];

@@ -88,12 +88,19 @@ export class ChapterCostBudget {
       !Number.isFinite(reservedCostUsd) ||
       reservedCostUsd <= 0 ||
       !Number.isFinite(actualCostUsd) ||
-      actualCostUsd < 0 ||
-      actualCostUsd > reservedCostUsd + Number.EPSILON
+      actualCostUsd < 0
     ) {
       throw new OpenAIRuntimeError(
         "INVALID_USAGE",
-        "Actual request cost is invalid or exceeds its reserved bound",
+        "Actual request cost or its reservation is invalid",
+      );
+    }
+    if (actualCostUsd > reservedCostUsd + Number.EPSILON) {
+      this.#spentUsd -= reservedCostUsd;
+      this.#spentUsd += actualCostUsd;
+      throw new OpenAIRuntimeError(
+        "INVALID_USAGE",
+        "Actual request cost exceeds its reserved bound",
       );
     }
     this.#spentUsd -= reservedCostUsd;
@@ -124,7 +131,7 @@ interface RetriedRequestOptions<TResponse, TData> {
   readonly getUsage: (response: TResponse) => ResponseUsageValue;
   readonly getResponseId: (response: TResponse) => string;
   readonly invoke: (signal: AbortSignal, attempt: number) => Promise<TResponse>;
-  readonly maximumCostUsd: number | ((attempt: number) => number);
+  readonly maximumCostUsd: number | ((attempt: number) => number | Promise<number>);
   readonly model: RuntimeModel;
   readonly policy: RuntimePolicy;
 }
@@ -146,10 +153,10 @@ export async function runRetriedRequest<TResponse, TData>({
   let aggregateCostUsd = 0;
 
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
-    const reservedCostUsd =
-      typeof maximumCostUsd === "function" ? maximumCostUsd(attempt) : maximumCostUsd;
-    policy.budget.reserve(reservedCostUsd);
     const attemptStartedAt = performance.now();
+    const reservedCostUsd =
+      typeof maximumCostUsd === "function" ? await maximumCostUsd(attempt) : maximumCostUsd;
+    policy.budget.reserve(reservedCostUsd);
     let attemptCostUsd = reservedCostUsd;
     let attemptUsage = ZERO_USAGE;
     let responseId: string | null = null;
@@ -159,11 +166,11 @@ export async function runRetriedRequest<TResponse, TData>({
       responseId = getResponseId(response);
       const usage = mapResponseUsage(getUsage(response));
       const costUsd = estimateResponseCostUsd(model, usage);
-      policy.budget.settleReservation(reservedCostUsd, costUsd);
-      aggregateCostUsd += costUsd - reservedCostUsd;
       attemptUsage = usage;
       attemptCostUsd = costUsd;
       aggregateUsage = addUsage(aggregateUsage, usage);
+      aggregateCostUsd += costUsd - reservedCostUsd;
+      policy.budget.settleReservation(reservedCostUsd, costUsd);
 
       const evaluated = await evaluate(response);
       policy.onAttempt?.({

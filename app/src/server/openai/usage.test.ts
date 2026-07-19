@@ -4,7 +4,14 @@ import { describe, expect, it } from "vitest";
 import { OpenAIRuntimeError } from "./errors";
 import { parseRuntimeModel, RUNTIME_MODELS } from "./models";
 import { ChapterCostBudget } from "./policy";
-import { estimateResponseCostUsd, mapResponseUsage, MODEL_PRICES, PRICING_VERSION } from "./usage";
+import {
+  estimateMaximumCountedRequestCostUsd,
+  estimateResponseCostUsd,
+  INPUT_TOKEN_COUNT_SAFETY_MARGIN,
+  mapResponseUsage,
+  MODEL_PRICES,
+  PRICING_VERSION,
+} from "./usage";
 
 describe("OpenAI runtime models and accounting", () => {
   it("allows only exact Sol, Terra, and Luna slugs", () => {
@@ -65,6 +72,34 @@ describe("OpenAI runtime models and accounting", () => {
         totalTokens: 100,
       }),
     ).toBeCloseTo(0.000125, 10);
+  });
+
+  it("reserves counted input with a 512-token margin and maximum output", () => {
+    expect(INPUT_TOKEN_COUNT_SAFETY_MARGIN).toBe(512);
+    expect(estimateMaximumCountedRequestCostUsd("gpt-5.6-luna", 2_947, 450)).toBeCloseTo(
+      0.00702375,
+      10,
+    );
+    expect(estimateMaximumCountedRequestCostUsd("gpt-5.6-terra", 1_308, 1_400)).toBeCloseTo(
+      0.0266875,
+      10,
+    );
+  });
+
+  it("locks the failed Rowan audit boundary at the remaining release budget", () => {
+    const fits = new ChapterCostBudget(0.044652620833);
+    fits.charge(0.031564875);
+    fits.assertRequestAllowed(estimateMaximumCountedRequestCostUsd("gpt-5.6-luna", 7_798, 450));
+
+    const blocks = new ChapterCostBudget(0.044652620833);
+    blocks.charge(0.031564875);
+    expectRuntimeError(
+      () =>
+        blocks.assertRequestAllowed(
+          estimateMaximumCountedRequestCostUsd("gpt-5.6-luna", 7_799, 450),
+        ),
+      "COST_CAP_EXCEEDED",
+    );
   });
 
   it("records actual spend and stops a chapter above its cap", () => {

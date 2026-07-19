@@ -99,7 +99,7 @@ The full command requires explicit `--confirm-cost` through its npm script. Repo
 - Reader JSON excludes hidden world facts and other characters' private ledgers.
 - God Mode JSON is an explicit full-canon export.
 - Every request carries a UUID and expected world version for replay safety.
-- Per-chapter cost, retries, timeout, and background concurrency are bounded. Unknown response cost keeps its worst-case reservation, and failed exposure carries into later chapter retries.
+- Per-chapter cost, retries, timeout, and background concurrency are bounded. Generation uses a byte-based worst case first. When that bound would falsely block, the official input-token counter supplies an exact count plus a 512-token margin. Counter failure keeps the byte bound. Unknown response cost keeps its reservation, and failed exposure carries into later chapter retries.
 
 ## Build Week
 

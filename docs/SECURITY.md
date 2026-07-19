@@ -15,7 +15,7 @@
 - Reject unknown fields.
 - Handle refusal and incomplete output without state mutation.
 - Cap retries, timeout, concurrency, and cost.
-- Reserve worst-case request cost before transport and retain that reservation when response usage is unknown.
+- Reserve worst-case generation cost before transport and retain that reservation when response usage is unknown. Byte bounds may narrow only through the official input-token counter plus a 512-token safety margin; counter failure keeps the byte bound.
 - Carry failed-turn exposure into later attempts for the same chapter and serialize local turn execution.
 - Validate all state mutations deterministically.
 

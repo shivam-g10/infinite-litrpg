@@ -106,4 +106,6 @@ Never store API key or raw environment.
 
 These are planning estimates. Runtime usage fields are token source of truth. OpenAI responses do not return cost, so UI must show actual tokens, latency, and estimated cost from a versioned pricing table after each call.
 
-Each request reserves its maximum estimated exposure before transport. Known usage settles the reservation to measured estimated cost. Timeouts and transport failures retain the full reservation because provider billing is unknown. Failed exposure carries into every retry for the same world version.
+Each generation request reserves its maximum estimated exposure before transport. The local byte bound is first. If that bound would block, stable Responses may call the official input-token counter with the exact input, instructions, model, reasoning, and schema. Counted reservations price the returned input plus 512 safety tokens entirely at the cache-write rate and add maximum output. Invalid, failed, or timed-out counting falls back to the byte bound and blocks safely. Native Multi-agent keeps the byte bound because its counter schema does not include the multi-agent configuration.
+
+Known generation usage settles the reservation to measured estimated cost. An actual cost above the reservation aborts before commit and records exact usage and exposure. Timeouts and transport failures retain the full reservation because provider billing is unknown. Failed exposure carries into every retry for the same world version.

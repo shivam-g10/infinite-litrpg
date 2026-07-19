@@ -7,6 +7,7 @@ import { OpenAIRuntimeError } from "./errors";
 import type { RuntimeModel } from "./models";
 
 export const PRICING_VERSION = "openai-standard-2026-07-19" as const;
+export const INPUT_TOKEN_COUNT_SAFETY_MARGIN = 512 as const;
 
 export type RuntimeUsage = z.infer<typeof UsageSchema>;
 
@@ -132,16 +133,33 @@ export function estimateMaximumRequestCostUsd(
   promptUtf8Bytes: number,
   maxOutputTokens: number,
 ): number {
-  if (
-    !Number.isSafeInteger(promptUtf8Bytes) ||
-    promptUtf8Bytes < 0 ||
-    !Number.isSafeInteger(maxOutputTokens) ||
-    maxOutputTokens < 1
-  ) {
-    throw new OpenAIRuntimeError("INVALID_POLICY", "Request cost bound inputs are invalid");
-  }
+  validateMaximumCostInputs(promptUtf8Bytes, maxOutputTokens);
+  return estimateMaximumCostFromInputUpperBound(
+    model,
+    promptUtf8Bytes + INPUT_TOKEN_COUNT_SAFETY_MARGIN,
+    maxOutputTokens,
+  );
+}
+
+export function estimateMaximumCountedRequestCostUsd(
+  model: RuntimeModel,
+  countedInputTokens: number,
+  maxOutputTokens: number,
+): number {
+  validateMaximumCostInputs(countedInputTokens, maxOutputTokens);
+  return estimateMaximumCostFromInputUpperBound(
+    model,
+    countedInputTokens + INPUT_TOKEN_COUNT_SAFETY_MARGIN,
+    maxOutputTokens,
+  );
+}
+
+function estimateMaximumCostFromInputUpperBound(
+  model: RuntimeModel,
+  inputTokenUpperBound: number,
+  maxOutputTokens: number,
+): number {
   const price = MODEL_PRICES[model];
-  const inputTokenUpperBound = promptUtf8Bytes + 512;
   const longContext = inputTokenUpperBound > price.longContextThresholdTokens;
   const inputMultiplier = longContext ? price.longContextInputMultiplier : 1;
   const outputMultiplier = longContext ? price.longContextOutputMultiplier : 1;
@@ -153,4 +171,15 @@ export function estimateMaximumRequestCostUsd(
       maxOutputTokens * price.outputUsdPerMillion * outputMultiplier) /
     1_000_000
   );
+}
+
+function validateMaximumCostInputs(inputSize: number, maxOutputTokens: number): void {
+  if (
+    !Number.isSafeInteger(inputSize) ||
+    inputSize < 0 ||
+    !Number.isSafeInteger(maxOutputTokens) ||
+    maxOutputTokens < 1
+  ) {
+    throw new OpenAIRuntimeError("INVALID_POLICY", "Request cost bound inputs are invalid");
+  }
 }
