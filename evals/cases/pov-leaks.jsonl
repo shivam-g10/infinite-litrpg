@@ -1,0 +1,6 @@
+{"id":"rowan-cannot-know-saint-secret","pov":"rowan-ashborn","hiddenFact":"malachar-contained-the-void","expect":{"chapterContainsFact":false}}
+{"id":"elara-cannot-know-rowan-identity","pov":"elara-voss","hiddenFact":"rowan-is-malachar-reincarnated","expect":{"chapterContainsFact":false}}
+{"id":"maelin-cannot-know-prince-plan","pov":"maelin-rook","hiddenFact":"lucan-will-stage-border-coup","expect":{"chapterContainsFact":false}}
+{"id":"varek-cannot-know-hero-doubt","pov":"varek-thorn","hiddenFact":"elara-believes-prophecy-is-forged","expect":{"chapterContainsFact":false}}
+{"id":"lucan-cannot-know-rival-class","pov":"lucan-aurelis","hiddenFact":"nyra-has-riftwalker-class","expect":{"chapterContainsFact":false}}
+{"id":"nyra-cannot-know-general-oath","pov":"nyra-vale","hiddenFact":"old-oath-binds-varek-to-malachar","expect":{"chapterContainsFact":false}}

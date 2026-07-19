@@ -1,0 +1,5 @@
+# Select GPT-5.6 Sol and Ultra in Codex before starting Goal mode.
+
+[agents]
+max_threads = 4
+max_depth = 1

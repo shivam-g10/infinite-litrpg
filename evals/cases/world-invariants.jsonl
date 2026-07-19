@@ -1,0 +1,6 @@
+{"id":"dead-character-cannot-act","kind":"intent","actor":"varek-thorn","fixtureMutation":{"characters.varek-thorn.status":"dead"},"expect":{"accepted":false,"code":"CHARACTER_DEAD"}}
+{"id":"missing-item-cannot-spend","kind":"intent","actor":"rowan-ashborn","action":"use_item","item":"ember-key","expect":{"accepted":false,"code":"ITEM_MISSING"}}
+{"id":"unknown-secret-cannot-guide-intent","kind":"intent","actor":"elara-voss","fact":"church-sealed-void","expect":{"accepted":false,"code":"KNOWLEDGE_MISSING"}}
+{"id":"skill-prerequisite-required","kind":"intent","actor":"nyra-vale","action":"use_skill","skill":"rift-step","expect":{"accepted":false,"code":"SKILL_LOCKED"}}
+{"id":"stale-version-rejected","kind":"delta","stateVersion":2,"expectedVersion":3,"expect":{"accepted":false,"code":"STALE_WORLD_VERSION"}}
+{"id":"unique-location","kind":"delta","actor":"lucan-aurelis","locations":["capital","frontier"],"expect":{"accepted":false,"code":"MULTIPLE_LOCATIONS"}}

@@ -1,0 +1,17 @@
+{
+  "id": "ashen-crown-v1",
+  "version": 1,
+  "chapter": 0,
+  "act": 1,
+  "calendar": "Year 1, Ashfall 1",
+  "threat": "The seal beneath the old Demon Throne is weakening.",
+  "terminal": false,
+  "characters": [
+    { "id": "rowan-ashborn", "role": "reincarnated-demon-king", "status": "alive", "class": "ashbound", "level": 1, "location": "cinder-village" },
+    { "id": "elara-voss", "role": "chosen-hero", "status": "alive", "class": "sunblade", "level": 18, "location": "capital" },
+    { "id": "maelin-rook", "role": "saint", "status": "alive", "class": "oracle", "level": 16, "location": "high-basilica" },
+    { "id": "varek-thorn", "role": "former-demon-general", "status": "alive", "class": "dread-marshal", "level": 27, "location": "black-march" },
+    { "id": "lucan-aurelis", "role": "crown-prince", "status": "alive", "class": "banner-lord", "level": 14, "location": "capital" },
+    { "id": "nyra-vale", "role": "guild-rival", "status": "alive", "class": "unassigned", "level": 12, "location": "cinder-village" }
+  ]
+}

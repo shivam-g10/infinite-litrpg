@@ -1,0 +1,10 @@
+{
+  "rowan-is-malachar-reincarnated": { "visibility": "rowan-private" },
+  "prophecy-has-missing-lines": { "visibility": "elara-private" },
+  "elara-believes-prophecy-is-forged": { "visibility": "elara-private" },
+  "malachar-contained-the-void": { "visibility": "maelin-private" },
+  "old-oath-binds-varek-to-malachar": { "visibility": "varek-private" },
+  "empire-profits-from-demon-war": { "visibility": "lucan-private" },
+  "lucan-will-stage-border-coup": { "visibility": "lucan-private" },
+  "nyra-has-riftwalker-class": { "visibility": "nyra-private" }
+}

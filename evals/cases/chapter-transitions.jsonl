@@ -1,0 +1,6 @@
+{"id":"act-one-last-open-choice","chapter":48,"expect":{"act":1,"choicesRequireMilestone":true}}
+{"id":"act-one-transition","chapter":50,"expect":{"nextAct":2,"transitionRequired":true}}
+{"id":"act-six-transition","chapter":300,"expect":{"nextAct":7,"transitionRequired":true}}
+{"id":"final-campaign-entry","chapter":301,"expect":{"act":7,"finalCampaign":true}}
+{"id":"terminal-chapter","chapter":350,"expect":{"terminal":true,"nextChapterAllowed":false,"modelCallAllowed":false}}
+{"id":"chapter-351-rejected","chapter":351,"expect":{"accepted":false,"code":"STORY_TERMINAL","modelCallAllowed":false}}
