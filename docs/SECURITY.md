@@ -15,6 +15,8 @@
 - Reject unknown fields.
 - Handle refusal and incomplete output without state mutation.
 - Cap retries, timeout, concurrency, and cost.
+- Reserve worst-case request cost before transport and retain that reservation when response usage is unknown.
+- Carry failed-turn exposure into later attempts for the same chapter and serialize local turn execution.
 - Validate all state mutations deterministically.
 
 ## Content and IP
@@ -31,3 +33,9 @@
 - Error path does not echo request headers.
 - Exports contain no hidden system state unless user explicitly selects God Mode export.
 - Dependency licenses inventoried.
+
+## Dependency License Policy
+
+- Allow permissive licenses, attribution licenses, and dynamically linked weak-copyleft runtime dependencies that permit MIT application distribution.
+- Record every installed package and declared license in `evals/reports/licenses.json`.
+- Reject unknown, proprietary, strong-copyleft, or unrecognized license expressions until reviewed and documented.

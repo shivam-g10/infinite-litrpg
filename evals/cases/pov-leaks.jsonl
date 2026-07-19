@@ -4,3 +4,9 @@
 {"id":"varek-cannot-know-hero-doubt","pov":"varek-thorn","hiddenFact":"elara-believes-prophecy-is-forged","expect":{"chapterContainsFact":false}}
 {"id":"lucan-cannot-know-rival-class","pov":"lucan-aurelis","hiddenFact":"nyra-has-riftwalker-class","expect":{"chapterContainsFact":false}}
 {"id":"nyra-cannot-know-general-oath","pov":"nyra-vale","hiddenFact":"old-oath-binds-varek-to-malachar","expect":{"chapterContainsFact":false}}
+{"id":"rowan-context-hides-saint-teaser","pov":"rowan-ashborn","hiddenFact":"malachar-contained-the-void","forbiddenText":"buried proof","expect":{"chapterContainsFact":false}}
+{"id":"elara-context-hides-rival-teaser","pov":"elara-voss","hiddenFact":"nyra-has-riftwalker-class","forbiddenText":"unrecorded class","expect":{"chapterContainsFact":false}}
+{"id":"maelin-context-hides-prince-teaser","pov":"maelin-rook","hiddenFact":"empire-profits-from-demon-war","forbiddenText":"profits from war","expect":{"chapterContainsFact":false}}
+{"id":"varek-context-hides-hero-teaser","pov":"varek-thorn","hiddenFact":"elara-believes-prophecy-is-forged","forbiddenText":"doubts the prophecy","expect":{"chapterContainsFact":false}}
+{"id":"lucan-context-hides-general-teaser","pov":"lucan-aurelis","hiddenFact":"old-oath-binds-varek-to-malachar","forbiddenText":"between oath and people","expect":{"chapterContainsFact":false}}
+{"id":"nyra-context-hides-saint-teaser","pov":"nyra-vale","hiddenFact":"malachar-contained-the-void","forbiddenText":"buried proof","expect":{"chapterContainsFact":false}}

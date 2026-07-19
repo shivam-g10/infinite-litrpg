@@ -12,66 +12,66 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 - [x] Eval gates and seed fixtures specified.
 - [x] Codex loop and bounded subagent roles configured.
 - [x] Git repository and remote configured.
-- [ ] Initial scaffold commit created.
+- [x] Initial scaffold commit created (`39b19a2`).
 
 ### Phase 1: App Bootstrap
 
-- [ ] Create root npm workspace with `app` and `shared` packages.
-- [ ] Initialize Next.js TypeScript app inside `app/` without nested Git repository.
-- [ ] Add strict TypeScript, lint, format, Vitest, Playwright, Zod, SQLite, and OpenAI SDK.
-- [ ] Add stable root commands listed in `AGENTS.md`.
-- [ ] Load root `.env` for app and eval runners.
-- [ ] Prove API key never enters client bundle.
+- [x] Create root npm workspace with `app` and `shared` packages.
+- [x] Initialize Next.js TypeScript app inside `app/` without nested Git repository.
+- [x] Add strict TypeScript, lint, format, Vitest, Playwright, Zod, SQLite, and OpenAI SDK.
+- [x] Add stable root commands listed in `AGENTS.md`.
+- [x] Load root `.env` for app and eval runners.
+- [x] Prove API key never enters client bundle.
 
 ### Phase 2: Contracts and Offline Evals
 
-- [ ] Implement schemas under `shared/contracts/`.
-- [ ] Implement deterministic invariant validator.
-- [ ] Load fixtures and JSONL cases.
-- [ ] Run 1,000 seeded offline simulations.
-- [ ] Make schema and invariant gates pass before live API work.
+- [x] Implement schemas under `shared/contracts/`.
+- [x] Implement deterministic invariant validator.
+- [x] Load fixtures and JSONL cases.
+- [x] Run 1,000 seeded offline simulations.
+- [x] Make schema and invariant gates pass before live API work.
 
 ### Phase 3: Deterministic World Engine
 
-- [ ] Implement state versioning and chapter clock.
-- [ ] Implement intent preconditions and conflict resolution.
-- [ ] Implement knowledge propagation and visibility rules.
-- [ ] Implement atomic SQLite commit.
-- [ ] Reject chapter 351 before any model call.
+- [x] Implement state versioning and chapter clock.
+- [x] Implement intent preconditions and conflict resolution.
+- [x] Implement deterministic investigation clues, relationship progression, and visibility rules.
+- [x] Implement atomic SQLite commit.
+- [x] Reject chapter 351 before any model call.
 
 ### Phase 4: OpenAI Runtime
 
-- [ ] Implement GPT-5.6-only model allowlist.
-- [ ] Implement Responses structured-output adapters.
-- [ ] Implement Luna native Multi-agent world tick.
-- [ ] Implement sequential Luna fallback.
-- [ ] Implement bounded refusal, retry, timeout, and cost handling.
-- [ ] Persist full trace envelope without secrets.
+- [x] Implement GPT-5.6-only model allowlist.
+- [x] Implement Responses structured-output adapters.
+- [x] Implement Luna native Multi-agent world tick.
+- [x] Implement sequential Luna fallback.
+- [x] Implement bounded refusal, retry, timeout, and preflight cost handling.
+- [x] Persist successful calls and every failed or successful runtime attempt without secrets.
 
 ### Phase 5: Narrative Loop
 
-- [ ] Implement two valid choices plus custom action.
-- [ ] Implement POV-safe Terra narration and streaming.
-- [ ] Implement chapter fact audit that can reject prose but cannot create canon.
+- [x] Implement two valid choices plus custom action.
+- [x] Implement POV-safe Terra narration and audited NDJSON replay.
+- [x] Implement chapter fact audit that can reject prose but cannot create canon.
 - [ ] Pass twelve full live chapter cycles.
 - [ ] Pass zero-leak checks across six POVs.
 
 ### Phase 6: Product UI
 
-- [ ] Seed or generate Ashen Crown world.
-- [ ] Character selection and permanent viewpoint lock.
-- [ ] World, character, chapter, progression, and clock views.
-- [ ] Reader mode hides private state.
-- [ ] God Mode shows intents, resolution, delta, usage, cost, and latency.
-- [ ] Export story and world state as Markdown and JSON.
+- [x] Seed Ashen Crown world.
+- [x] Character selection and permanent viewpoint lock.
+- [x] World, character, chapter, progression, and clock views.
+- [x] Reader mode hides private state.
+- [x] God Mode shows intents, resolution, delta, usage, cost, and latency.
+- [x] Export POV-safe Reader state, Markdown, and explicit full God Mode JSON.
 
 ### Phase 7: Hardening
 
-- [ ] Full check command green.
-- [ ] Browser smoke path green.
-- [ ] Multi-agent and sequential paths green.
+- [x] Full check command green.
+- [x] Browser smoke path green.
+- [x] Native multi-agent and sequential live smoke paths green.
 - [ ] Six POV review packets generated and agent-reviewed.
-- [ ] Secret scan and dependency-license check green.
+- [x] Secret scan and dependency-license check green.
 - [ ] Clean-clone setup verified.
 
 ### Phase 8: Build Week Submission
@@ -89,16 +89,36 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 ## Surprises and Discoveries
 
 - Next.js setup intentionally deferred during planning scaffold.
-- Native Multi-agent beta access is unknown until first live probe.
+- Native Multi-agent beta access is confirmed for the configured key.
+- OpenAI Responses return token usage but no cost field; cost must use a versioned local pricing table.
+- Native Multi-agent TypeScript calls require `client.beta.responses.create` plus the beta option; raw HTTP uses the beta header.
+- Safe chapter streaming conflicts with post-generation narrative audit. MVP will buffer, audit, then replay validated text as a stream so rejected prose never reaches the reader.
+- `research/2026-07-19-openai-runtime.md` incorrectly said Terra narrates after commit. Prospective state, narration, audit, then atomic commit remains authoritative.
+- Fixtures now cover strict schemas, atomic rollback, 35 clock checkpoints, semantic POV attacks, and both adapter paths.
+- Initial seeded simulation was only repeated clone validation. It was replaced before AI changes with 1,000 actual resolve-and-stage commits plus a 350-commit terminal horizon.
+- Engine review found and closed teleport injection, missing effect, hidden-fact action, duplicate intent, cross-owner unique item, dynamic remote POV state, milestone, and existing-fact propagation defects. Each has a regression test.
+- First live narration exceeded 1,300 words. Bounded audit-aware regeneration and an oversized-prose regression now prevent commit.
+- Audit then found invented skills, clues, elapsed years, and semantic private-role hints. Narration now receives exact before/delta/after projections; remote public-role teasers were removed from agent context and semantic leak cases doubled from six to twelve.
+- Native Multi-agent beta is available for this API key. Both native and sequential capped live chapters committed successfully.
+- Next.js hot reload retained an obsolete global service during browser QA. A clean server restart removed the mismatch; clean-start real Reader, God Mode, exports, and two chapter commits passed.
+- The first twelve-cycle run stopped after four commits. One chapter exceeded the `$0.10` cap and Maelin exposed remote-character claims, contradictory audit evidence, and an 897-word draft. Cost preflight, structured audit issue codes, tighter remote-character rules, retry feedback, and a 975 to 1,025 word target now have regressions.
+- Read-only release review found replay retry double-commit risk, arbitrary action targets, unreachable knowledge progression, hidden Reader JSON state, missing failed-attempt trace cost, and missing live streaming proof. Expected-version UUID idempotency, target allowlists, deterministic clues and relationships, safe exports, attempt traces, and exact stream reconstruction now close them.
+- Stable Next `16.2.10` pins vulnerable PostCSS `8.4.31`. Pinned Next `16.3.0-canary.89` carries PostCSS `8.5.10`; the full build and both dependency audits are green.
+- Contract, prompt, and fixture versions moved to `1.1.0` before new live traces. Investigation now stops emitting new facts at world or ledger capacity, and failed nested audit attempts remain in exact cost and usage totals.
+- Final paid-run review found unknown-cost retries, remote-delta audit leakage, lost failed-turn traces, missing sequential-agent attribution, and retry budget resets. Worst-case reservations, POV-visible audit projections, durable failure traces, exact agent IDs, cumulative world-version exposure, and a serialized local turn queue now have regressions.
 
 ## Decision Log
 
 - See `decisions/`.
+- Fixed 50-chapter act boundaries are authoritative; early terminal endings may end the story but do not create shortened nonterminal acts.
+- `World Director` is deterministic application code for MVP. Models emit intents and prose only; no model owns conflict resolution or canonical state.
+- `WorldState.chapter` means last committed chapter. Generation from 349 may create terminal chapter 350. Any request when current chapter is 350 is rejected before model access.
+- Validated narration uses buffer-audit-replay streaming. This trades first-token latency for zero exposure of rejected prose.
 
 ## Outcomes and Retrospective
 
-- Not built yet.
+- Phases 1 through 4 and Phase 6 are implemented. Offline contracts, deterministic transitions, knowledge boundaries, atomic storage, both OpenAI adapters, and the product UI are green. Phase 5 has green live smoke and awaits the twelve-cycle release run.
 
 ## Current Milestone
 
-Create initial scaffold commit. Then Phase 1: create root npm workspace, bootstrap app, and establish stable offline verification commands. Do not begin live model behavior before contracts and baseline eval runner exist.
+Phase 5 release eval: checkpoint the green tree, rerun capped Maelin smoke, then run twelve complete live cycles across all six viewpoints.

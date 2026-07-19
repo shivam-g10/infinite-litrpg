@@ -1,17 +1,673 @@
 {
-  "id": "ashen-crown-v1",
-  "version": 1,
-  "chapter": 0,
   "act": 1,
-  "calendar": "Year 1, Ashfall 1",
-  "threat": "The seal beneath the old Demon Throne is weakening.",
-  "terminal": false,
+  "activeEvents": [
+    {
+      "id": "cinder-raid-aftermath",
+      "locationId": "cinder-village",
+      "observerIds": [],
+      "participantIds": ["rowan-ashborn", "nyra-vale"],
+      "summary": "Ash-raiders struck Cinder Village and withdrew toward Ash Road.",
+      "visibility": "public"
+    }
+  ],
+  "arcClock": {
+    "convergencePressure": false,
+    "milestones": [
+      {
+        "act": 1,
+        "compatibleActionTypes": ["move", "investigate", "defend"],
+        "completed": false,
+        "description": "Survive reincarnation and identify the first seal fracture.",
+        "id": "act-one-survival",
+        "requiredByChapter": 50
+      },
+      {
+        "act": 2,
+        "compatibleActionTypes": ["interact", "investigate", "rally"],
+        "completed": false,
+        "description": "Commit to a class path and join or oppose a faction.",
+        "id": "act-two-faction",
+        "requiredByChapter": 100
+      },
+      {
+        "act": 3,
+        "compatibleActionTypes": ["defend", "investigate", "interact", "rally"],
+        "completed": false,
+        "description": "Resolve the first regional war over the broken seals.",
+        "id": "act-three-region",
+        "requiredByChapter": 150
+      },
+      {
+        "act": 4,
+        "compatibleActionTypes": ["investigate", "interact", "use_skill"],
+        "completed": false,
+        "description": "Reveal why Malachar contained the Void.",
+        "id": "act-four-history",
+        "requiredByChapter": 200
+      },
+      {
+        "act": 5,
+        "compatibleActionTypes": ["defend", "investigate", "interact", "rally"],
+        "completed": false,
+        "description": "Determine the outcome of the continental war.",
+        "id": "act-five-war",
+        "requiredByChapter": 250
+      },
+      {
+        "act": 6,
+        "compatibleActionTypes": ["move", "defend", "investigate", "rally"],
+        "completed": false,
+        "description": "Force all surviving factions toward the final seal.",
+        "id": "act-six-convergence",
+        "requiredByChapter": 300
+      },
+      {
+        "act": 7,
+        "compatibleActionTypes": ["investigate", "interact", "use_skill"],
+        "completed": false,
+        "description": "Resolve the Void, the Crown, and the chosen life.",
+        "id": "act-seven-ending",
+        "requiredByChapter": 350
+      }
+    ],
+    "transitionRequired": false
+  },
+  "calendar": {
+    "day": 1,
+    "label": "Year 1, Ashfall 1"
+  },
+  "chapter": 0,
   "characters": [
-    { "id": "rowan-ashborn", "role": "reincarnated-demon-king", "status": "alive", "class": "ashbound", "level": 1, "location": "cinder-village" },
-    { "id": "elara-voss", "role": "chosen-hero", "status": "alive", "class": "sunblade", "level": 18, "location": "capital" },
-    { "id": "maelin-rook", "role": "saint", "status": "alive", "class": "oracle", "level": 16, "location": "high-basilica" },
-    { "id": "varek-thorn", "role": "former-demon-general", "status": "alive", "class": "dread-marshal", "level": 27, "location": "black-march" },
-    { "id": "lucan-aurelis", "role": "crown-prince", "status": "alive", "class": "banner-lord", "level": 14, "location": "capital" },
-    { "id": "nyra-vale", "role": "guild-rival", "status": "alive", "class": "unassigned", "level": 12, "location": "cinder-village" }
-  ]
+    {
+      "beliefs": ["Power without restraint destroyed Malachar", "No one can know who he was"],
+      "characterClassId": "ashbound",
+      "characterClassName": "Ashbound",
+      "conditions": [],
+      "equipmentItemIds": ["rusted-sword"],
+      "experience": 0,
+      "factionId": "cinder-survivors",
+      "goals": ["Survive the ash-raider aftermath", "Hide his old identity"],
+      "health": { "current": 42, "maximum": 42 },
+      "id": "rowan-ashborn",
+      "inventory": [
+        {
+          "equipped": true,
+          "itemId": "rusted-sword",
+          "name": "Rusted sword",
+          "quantity": 1,
+          "unique": true
+        },
+        {
+          "equipped": false,
+          "itemId": "copper-coin",
+          "name": "Copper coin",
+          "quantity": 9,
+          "unique": false
+        }
+      ],
+      "level": 1,
+      "locationId": "cinder-village",
+      "mana": { "current": 18, "maximum": 18 },
+      "name": "Rowan Ashborn",
+      "plan": ["Read the ash trail", "Learn what Nyra noticed"],
+      "publicRole": "Malachar reincarnated as a level-one human",
+      "relationships": [
+        { "characterId": "nyra-vale", "label": "uneasy ally", "score": 10 },
+        { "characterId": "varek-thorn", "label": "forgotten subordinate", "score": 0 }
+      ],
+      "role": "reincarnated-demon-king",
+      "secretFactIds": ["rowan-is-malachar-reincarnated"],
+      "skills": [
+        {
+          "id": "ember-sense",
+          "manaCost": 2,
+          "minimumLevel": 1,
+          "name": "Ember Sense",
+          "prerequisiteSkillIds": [],
+          "rank": 1,
+          "requiredClassId": "ashbound"
+        },
+        {
+          "id": "sovereigns-echo",
+          "manaCost": 5,
+          "minimumLevel": 1,
+          "name": "Sovereign's Echo",
+          "prerequisiteSkillIds": ["ember-sense"],
+          "rank": 1,
+          "requiredClassId": "ashbound"
+        }
+      ],
+      "stats": { "agility": 6, "intellect": 10, "strength": 5, "vitality": 7, "willpower": 12 },
+      "status": "alive"
+    },
+    {
+      "beliefs": ["The prophecy was edited", "Duty survives doubt"],
+      "characterClassId": "sunblade",
+      "characterClassName": "Sunblade",
+      "conditions": [],
+      "equipmentItemIds": ["dawn-edge"],
+      "experience": 1400,
+      "factionId": "solar-church",
+      "goals": ["Find the prophecy's missing lines", "Protect the capital"],
+      "health": { "current": 188, "maximum": 188 },
+      "id": "elara-voss",
+      "inventory": [
+        {
+          "equipped": true,
+          "itemId": "dawn-edge",
+          "name": "Dawn Edge",
+          "quantity": 1,
+          "unique": true
+        },
+        {
+          "equipped": false,
+          "itemId": "sun-tonic",
+          "name": "Sun tonic",
+          "quantity": 2,
+          "unique": false
+        }
+      ],
+      "level": 18,
+      "locationId": "capital",
+      "mana": { "current": 96, "maximum": 96 },
+      "name": "Elara Voss",
+      "plan": ["Inspect the sealed archive", "Confront the prophecy keeper"],
+      "publicRole": "Chosen Hero who doubts the prophecy",
+      "relationships": [
+        { "characterId": "maelin-rook", "label": "trusted saint", "score": 45 },
+        { "characterId": "lucan-aurelis", "label": "political ally", "score": 5 }
+      ],
+      "role": "chosen-hero",
+      "secretFactIds": ["prophecy-has-missing-lines", "elara-believes-prophecy-is-forged"],
+      "skills": [
+        {
+          "id": "solar-cut",
+          "manaCost": 12,
+          "minimumLevel": 5,
+          "name": "Solar Cut",
+          "prerequisiteSkillIds": [],
+          "rank": 4,
+          "requiredClassId": "sunblade"
+        }
+      ],
+      "stats": { "agility": 31, "intellect": 22, "strength": 34, "vitality": 29, "willpower": 33 },
+      "status": "alive"
+    },
+    {
+      "beliefs": ["Truth can survive the Church", "Mercy without truth becomes obedience"],
+      "characterClassId": "oracle",
+      "characterClassName": "Oracle",
+      "conditions": [],
+      "equipmentItemIds": ["saints-censer"],
+      "experience": 900,
+      "factionId": "solar-church",
+      "goals": ["Preserve proof of the deeper threat", "Keep the Church from purging witnesses"],
+      "health": { "current": 132, "maximum": 132 },
+      "id": "maelin-rook",
+      "inventory": [
+        {
+          "equipped": true,
+          "itemId": "saints-censer",
+          "name": "Saint's censer",
+          "quantity": 1,
+          "unique": true
+        },
+        {
+          "equipped": false,
+          "itemId": "sealed-testimony",
+          "name": "Sealed testimony",
+          "quantity": 1,
+          "unique": true
+        }
+      ],
+      "level": 16,
+      "locationId": "high-basilica",
+      "mana": { "current": 154, "maximum": 154 },
+      "name": "Maelin Rook",
+      "plan": ["Move the testimony", "Contact Elara without alerting the synod"],
+      "publicRole": "Saint guarding the Church's buried proof",
+      "relationships": [
+        { "characterId": "elara-voss", "label": "trusted hero", "score": 45 },
+        { "characterId": "lucan-aurelis", "label": "watched prince", "score": -5 }
+      ],
+      "role": "saint",
+      "secretFactIds": ["malachar-contained-the-void"],
+      "skills": [
+        {
+          "id": "truths-lantern",
+          "manaCost": 10,
+          "minimumLevel": 10,
+          "name": "Truth's Lantern",
+          "prerequisiteSkillIds": [],
+          "rank": 3,
+          "requiredClassId": "oracle"
+        }
+      ],
+      "stats": { "agility": 14, "intellect": 36, "strength": 12, "vitality": 22, "willpower": 41 },
+      "status": "alive"
+    },
+    {
+      "beliefs": [
+        "Oaths bind only while they protect the living",
+        "The Black March remembers loyalty"
+      ],
+      "characterClassId": "dread-marshal",
+      "characterClassName": "Dread Marshal",
+      "conditions": [],
+      "equipmentItemIds": ["march-cleaver"],
+      "experience": 2100,
+      "factionId": "ashen-legion",
+      "goals": ["Protect the Black March", "Decide whether Malachar's oath still rules him"],
+      "health": { "current": 318, "maximum": 318 },
+      "id": "varek-thorn",
+      "inventory": [
+        {
+          "equipped": true,
+          "itemId": "march-cleaver",
+          "name": "March cleaver",
+          "quantity": 1,
+          "unique": true
+        },
+        {
+          "equipped": false,
+          "itemId": "black-ration",
+          "name": "Black ration",
+          "quantity": 5,
+          "unique": false
+        }
+      ],
+      "level": 27,
+      "locationId": "black-march",
+      "mana": { "current": 88, "maximum": 88 },
+      "name": "Varek Thorn",
+      "plan": ["Rally isolated companies", "Test reports of the old sovereign's return"],
+      "publicRole": "Former Demon General between oath and people",
+      "relationships": [
+        { "characterId": "rowan-ashborn", "label": "unknown echo", "score": 0 },
+        { "characterId": "lucan-aurelis", "label": "enemy prince", "score": -50 }
+      ],
+      "role": "former-demon-general",
+      "secretFactIds": ["old-oath-binds-varek-to-malachar"],
+      "skills": [
+        {
+          "id": "iron-command",
+          "manaCost": 8,
+          "minimumLevel": 15,
+          "name": "Iron Command",
+          "prerequisiteSkillIds": [],
+          "rank": 5,
+          "requiredClassId": "dread-marshal"
+        }
+      ],
+      "stats": { "agility": 28, "intellect": 24, "strength": 52, "vitality": 55, "willpower": 46 },
+      "status": "alive"
+    },
+    {
+      "beliefs": [
+        "Peace is impossible while war pays the throne",
+        "A prince must master appearances"
+      ],
+      "characterClassId": "banner-lord",
+      "characterClassName": "Banner Lord",
+      "conditions": [],
+      "equipmentItemIds": ["imperial-rapier"],
+      "experience": 600,
+      "factionId": "imperial-court",
+      "goals": ["Secure the succession", "Break the empire's dependence on demon war"],
+      "health": { "current": 146, "maximum": 146 },
+      "id": "lucan-aurelis",
+      "inventory": [
+        {
+          "equipped": true,
+          "itemId": "imperial-rapier",
+          "name": "Imperial rapier",
+          "quantity": 1,
+          "unique": true
+        },
+        {
+          "equipped": false,
+          "itemId": "imperial-seal",
+          "name": "Imperial seal",
+          "quantity": 1,
+          "unique": true
+        }
+      ],
+      "level": 14,
+      "locationId": "capital",
+      "mana": { "current": 72, "maximum": 72 },
+      "name": "Lucan Aurelis",
+      "plan": ["Audit border accounts", "Prepare loyal banners"],
+      "publicRole": "Crown Prince whose throne profits from war",
+      "relationships": [
+        { "characterId": "elara-voss", "label": "necessary hero", "score": 5 },
+        { "characterId": "varek-thorn", "label": "strategic enemy", "score": -50 }
+      ],
+      "role": "crown-prince",
+      "secretFactIds": ["empire-profits-from-demon-war", "lucan-will-stage-border-coup"],
+      "skills": [
+        {
+          "id": "rallying-standard",
+          "manaCost": 9,
+          "minimumLevel": 8,
+          "name": "Rallying Standard",
+          "prerequisiteSkillIds": [],
+          "rank": 3,
+          "requiredClassId": "banner-lord"
+        }
+      ],
+      "stats": { "agility": 23, "intellect": 31, "strength": 21, "vitality": 25, "willpower": 35 },
+      "status": "alive"
+    },
+    {
+      "beliefs": ["The System made no mistake", "Guild ranks are cages with polished bars"],
+      "characterClassId": "unassigned",
+      "characterClassName": "Unassigned",
+      "conditions": [],
+      "equipmentItemIds": ["guild-spear"],
+      "experience": 400,
+      "factionId": "adventurers-guild",
+      "goals": ["Identify her unrecorded class", "Beat the guild's hunters to the rift"],
+      "health": { "current": 118, "maximum": 118 },
+      "id": "nyra-vale",
+      "inventory": [
+        {
+          "equipped": true,
+          "itemId": "guild-spear",
+          "name": "Guild spear",
+          "quantity": 1,
+          "unique": true
+        },
+        {
+          "equipped": false,
+          "itemId": "chalk-charge",
+          "name": "Chalk charge",
+          "quantity": 3,
+          "unique": false
+        }
+      ],
+      "level": 12,
+      "locationId": "cinder-village",
+      "mana": { "current": 84, "maximum": 84 },
+      "name": "Nyra Vale",
+      "plan": ["Read the unmarked sigil", "Follow the ash trail before Rowan"],
+      "publicRole": "Guild rival carrying an unrecorded class",
+      "relationships": [
+        { "characterId": "rowan-ashborn", "label": "intriguing rival", "score": 10 },
+        { "characterId": "elara-voss", "label": "distant benchmark", "score": 0 }
+      ],
+      "role": "guild-rival",
+      "secretFactIds": ["nyra-has-riftwalker-class"],
+      "skills": [
+        {
+          "id": "spear-feint",
+          "manaCost": 4,
+          "minimumLevel": 4,
+          "name": "Spear Feint",
+          "prerequisiteSkillIds": [],
+          "rank": 3,
+          "requiredClassId": "unassigned"
+        },
+        {
+          "id": "rift-step",
+          "manaCost": 18,
+          "minimumLevel": 15,
+          "name": "Rift Step",
+          "prerequisiteSkillIds": ["spear-feint"],
+          "rank": 1,
+          "requiredClassId": "riftwalker"
+        }
+      ],
+      "stats": { "agility": 34, "intellect": 28, "strength": 22, "vitality": 21, "willpower": 30 },
+      "status": "alive"
+    }
+  ],
+  "contractVersion": "1.1.0",
+  "endingConstraints": [
+    "Resolve the weakening Void seal.",
+    "Resolve the fate of the Ashen Crown.",
+    "Give the locked viewpoint a terminal personal outcome."
+  ],
+  "factions": [
+    {
+      "id": "cinder-survivors",
+      "name": "Cinder Survivors",
+      "publicGoal": "Rebuild Cinder Village."
+    },
+    { "id": "solar-church", "name": "Solar Church", "publicGoal": "Preserve the postwar faith." },
+    {
+      "id": "imperial-court",
+      "name": "Imperial Court",
+      "publicGoal": "Hold the continent together."
+    },
+    { "id": "ashen-legion", "name": "Ashen Legion", "publicGoal": "Protect the Black March." },
+    {
+      "id": "adventurers-guild",
+      "name": "Adventurers Guild",
+      "publicGoal": "Control dangerous classes."
+    },
+    { "id": "unaffiliated", "name": "Unaffiliated", "publicGoal": "Survive outside faction rule." }
+  ],
+  "facts": [
+    {
+      "certainty": "certain",
+      "claim": "Rowan is Malachar reincarnated.",
+      "discoveredChapter": 0,
+      "id": "rowan-is-malachar-reincarnated",
+      "ownerCharacterId": "rowan-ashborn",
+      "source": "Reincarnation memory",
+      "visibility": "private"
+    },
+    {
+      "certainty": "certain",
+      "claim": "The official prophecy has missing lines.",
+      "discoveredChapter": 0,
+      "id": "prophecy-has-missing-lines",
+      "ownerCharacterId": "elara-voss",
+      "source": "Hero archive comparison",
+      "visibility": "private"
+    },
+    {
+      "certainty": "likely",
+      "claim": "Elara believes the prophecy was forged.",
+      "discoveredChapter": 0,
+      "id": "elara-believes-prophecy-is-forged",
+      "ownerCharacterId": "elara-voss",
+      "source": "Elara's private conclusion",
+      "visibility": "private"
+    },
+    {
+      "certainty": "certain",
+      "claim": "Malachar contained the Void beneath his throne.",
+      "discoveredChapter": 0,
+      "id": "malachar-contained-the-void",
+      "ownerCharacterId": "maelin-rook",
+      "source": "Sealed Church testimony",
+      "visibility": "private"
+    },
+    {
+      "certainty": "certain",
+      "claim": "Varek's old oath binds him to Malachar.",
+      "discoveredChapter": 0,
+      "id": "old-oath-binds-varek-to-malachar",
+      "ownerCharacterId": "varek-thorn",
+      "source": "Blood oath",
+      "visibility": "private"
+    },
+    {
+      "certainty": "certain",
+      "claim": "The empire profits from continued demon war.",
+      "discoveredChapter": 0,
+      "id": "empire-profits-from-demon-war",
+      "ownerCharacterId": "lucan-aurelis",
+      "source": "Imperial border accounts",
+      "visibility": "private"
+    },
+    {
+      "certainty": "likely",
+      "claim": "Lucan plans to stage a border coup.",
+      "discoveredChapter": 0,
+      "id": "lucan-will-stage-border-coup",
+      "ownerCharacterId": "lucan-aurelis",
+      "source": "Lucan's private plan",
+      "visibility": "private"
+    },
+    {
+      "certainty": "certain",
+      "claim": "Nyra's hidden class is Riftwalker.",
+      "discoveredChapter": 0,
+      "id": "nyra-has-riftwalker-class",
+      "ownerCharacterId": "nyra-vale",
+      "source": "Unmarked System sigil",
+      "visibility": "private"
+    },
+    {
+      "certainty": "certain",
+      "claim": "Demon King Malachar died at the end of the war.",
+      "discoveredChapter": 0,
+      "id": "malachar-publicly-dead",
+      "ownerCharacterId": null,
+      "source": "Public history",
+      "visibility": "public"
+    },
+    {
+      "certainty": "certain",
+      "claim": "Ash-raiders attacked Cinder Village and fled toward Ash Road.",
+      "discoveredChapter": 0,
+      "id": "cinder-village-raided",
+      "ownerCharacterId": null,
+      "source": "Cinder survivor reports",
+      "visibility": "public"
+    }
+  ],
+  "fixtureVersion": "1.1.0",
+  "id": "ashen-crown-v1",
+  "knowledgeLedgers": [
+    {
+      "characterId": "rowan-ashborn",
+      "entries": [
+        {
+          "certainty": "certain",
+          "discoveredChapter": 0,
+          "factId": "rowan-is-malachar-reincarnated",
+          "source": "Reincarnation memory"
+        }
+      ]
+    },
+    {
+      "characterId": "elara-voss",
+      "entries": [
+        {
+          "certainty": "certain",
+          "discoveredChapter": 0,
+          "factId": "prophecy-has-missing-lines",
+          "source": "Hero archive comparison"
+        },
+        {
+          "certainty": "likely",
+          "discoveredChapter": 0,
+          "factId": "elara-believes-prophecy-is-forged",
+          "source": "Elara's private conclusion"
+        }
+      ]
+    },
+    {
+      "characterId": "maelin-rook",
+      "entries": [
+        {
+          "certainty": "certain",
+          "discoveredChapter": 0,
+          "factId": "malachar-contained-the-void",
+          "source": "Sealed Church testimony"
+        }
+      ]
+    },
+    {
+      "characterId": "varek-thorn",
+      "entries": [
+        {
+          "certainty": "certain",
+          "discoveredChapter": 0,
+          "factId": "old-oath-binds-varek-to-malachar",
+          "source": "Blood oath"
+        }
+      ]
+    },
+    {
+      "characterId": "lucan-aurelis",
+      "entries": [
+        {
+          "certainty": "certain",
+          "discoveredChapter": 0,
+          "factId": "empire-profits-from-demon-war",
+          "source": "Imperial border accounts"
+        },
+        {
+          "certainty": "likely",
+          "discoveredChapter": 0,
+          "factId": "lucan-will-stage-border-coup",
+          "source": "Lucan's private plan"
+        }
+      ]
+    },
+    {
+      "characterId": "nyra-vale",
+      "entries": [
+        {
+          "certainty": "certain",
+          "discoveredChapter": 0,
+          "factId": "nyra-has-riftwalker-class",
+          "source": "Unmarked System sigil"
+        }
+      ]
+    }
+  ],
+  "locations": [
+    {
+      "adjacentLocationIds": ["ash-road", "guild-outpost"],
+      "id": "cinder-village",
+      "name": "Cinder Village",
+      "publicDescription": "A burned frontier village rebuilding beside old demon roads."
+    },
+    {
+      "adjacentLocationIds": ["cinder-village", "capital-road", "black-march"],
+      "id": "ash-road",
+      "name": "Ash Road",
+      "publicDescription": "A gray trade road cut through old battlefields."
+    },
+    {
+      "adjacentLocationIds": ["capital-road", "high-basilica"],
+      "id": "capital",
+      "name": "Aurelis Capital",
+      "publicDescription": "Imperial center of the postwar continent."
+    },
+    {
+      "adjacentLocationIds": ["capital", "ash-road"],
+      "id": "capital-road",
+      "name": "Capital Road",
+      "publicDescription": "The guarded road between the frontier and imperial center."
+    },
+    {
+      "adjacentLocationIds": ["capital"],
+      "id": "high-basilica",
+      "name": "High Basilica",
+      "publicDescription": "Seat of the Solar Church and its sealed archives."
+    },
+    {
+      "adjacentLocationIds": ["ash-road"],
+      "id": "black-march",
+      "name": "Black March",
+      "publicDescription": "A hard borderland defended by remnants of the Ashen Legion."
+    },
+    {
+      "adjacentLocationIds": ["cinder-village"],
+      "id": "guild-outpost",
+      "name": "Guild Outpost",
+      "publicDescription": "A registry and supply post watching frontier classes."
+    }
+  ],
+  "lockedPovId": null,
+  "terminal": false,
+  "terminalReason": null,
+  "threat": "The seal beneath the old Demon Throne is weakening.",
+  "version": 1
 }

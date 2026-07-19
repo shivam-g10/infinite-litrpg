@@ -1,0 +1,34 @@
+{
+  "date": "2026-07-19",
+  "command": "npm run evals",
+  "exitCode": 1,
+  "gates": {
+    "fixture-schema": {
+      "passed": false,
+      "factFixtureParsed": false,
+      "ledgerFixtureParsed": false,
+      "worldFixtureParsed": false
+    },
+    "strict-contracts": {
+      "passed": true,
+      "oversizedBatchRejected": true,
+      "unknownIntentRejected": true,
+      "validIntentParsed": true
+    },
+    "case-coverage": {
+      "passed": false,
+      "invariantCases": 6,
+      "transitionCases": 6
+    },
+    "pov-knowledge": {
+      "passed": false,
+      "checked": 0,
+      "leaks": 0
+    },
+    "seeded-simulations": {
+      "passed": false,
+      "simulations": 0,
+      "invalidSimulations": 0
+    }
+  }
+}

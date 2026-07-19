@@ -1,0 +1,49 @@
+{
+  "name": "infinite-litrpg",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "app",
+    "shared"
+  ],
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "overrides": {
+    "postcss": "8.5.20"
+  },
+  "scripts": {
+    "dev": "npm run dev --workspace @infinite-litrpg/app",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit -p shared/tsconfig.json && tsc --noEmit -p app/tsconfig.json && tsc --noEmit -p tsconfig.tools.json",
+    "test": "vitest run",
+    "evals": "tsx evals/run-offline.ts",
+    "evals:live:smoke": "tsx evals/run-live.ts --suite smoke",
+    "evals:live:full": "tsx evals/run-live.ts --suite full --confirm-cost",
+    "build": "npm run build --workspace @infinite-litrpg/app",
+    "test:e2e": "playwright test",
+    "security:secrets": "tsx scripts/secret-scan.ts",
+    "security:bundle": "tsx scripts/bundle-scan.ts",
+    "licenses": "tsx scripts/license-check.ts",
+    "verify:clean-clone": "tsx scripts/verify-clean-clone.ts",
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm run test && npm run evals && npm run build && npm run test:e2e && npm run security:secrets && npm run security:bundle && npm run licenses"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.61.1",
+    "@types/better-sqlite3": "7.6.13",
+    "@types/node": "24.13.3",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "@vitest/coverage-v8": "4.1.10",
+    "eslint": "9.39.5",
+    "eslint-config-next": "16.3.0-canary.89",
+    "eslint-config-prettier": "10.1.8",
+    "prettier": "3.9.5",
+    "tsx": "4.23.1",
+    "typescript": "5.9.3",
+    "vitest": "4.1.10"
+  }
+}

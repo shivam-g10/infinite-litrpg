@@ -8,6 +8,9 @@ What current OpenAI architecture best supports persistent multi-character LitRPG
 
 - [GPT-5.6 guidance](https://developers.openai.com/api/docs/guides/latest-model?model=gpt-5.6), accessed 2026-07-19.
 - [GPT-5.6 models](https://developers.openai.com/api/docs/models), accessed 2026-07-19.
+- [GPT-5.6 Sol model](https://developers.openai.com/api/docs/models/gpt-5.6-sol), accessed 2026-07-19.
+- [GPT-5.6 Terra model](https://developers.openai.com/api/docs/models/gpt-5.6-terra), accessed 2026-07-19.
+- [GPT-5.6 Luna model](https://developers.openai.com/api/docs/models/gpt-5.6-luna), accessed 2026-07-19.
 - [Responses Multi-agent](https://developers.openai.com/api/docs/guides/responses-multi-agent), accessed 2026-07-19.
 - [Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs), accessed 2026-07-19.
 - [Evaluation best practices](https://developers.openai.com/api/docs/guides/evaluation-best-practices), accessed 2026-07-19.
@@ -21,6 +24,7 @@ What current OpenAI architecture best supports persistent multi-character LitRPG
 - GPT-5.6 supports Responses API, streaming, functions, and structured outputs.
 - Exact runtime IDs are `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`; `gpt-5.6` aliases Sol.
 - Listed token prices per million tokens are Sol `$5` input and `$30` output, Terra `$2.50` input and `$15` output, and Luna `$1` input and `$6` output.
+- Cached input prices per million tokens are Sol `$0.50`, Terra `$0.25`, and Luna `$0.10`. Cache writes cost `1.25x` the uncached input rate.
 - Structured Outputs enforce schema adherence. Refusals still need explicit handling.
 - Multi-agent beta supports GPT-5.6. Recommended concurrency is three.
 - TypeScript native Multi-agent uses `client.beta.responses.create` with `multi_agent.enabled`, `max_concurrent_subagents: 3`, and `betas: ["responses_multi_agent=v1"]`; raw HTTP and WebSocket use the beta header.
@@ -35,7 +39,7 @@ What current OpenAI architecture best supports persistent multi-character LitRPG
 
 - Luna agents should read one immutable snapshot and emit intent only.
 - One Director and deterministic validator should own canonical delta.
-- Terra should narrate after commit from POV-safe context.
+- Terra should narrate from staged prospective state and POV-safe context. Narrative audit must pass before one atomic commit.
 - Sol should handle high-value low-frequency world and finale work.
 - Native Multi-agent needs adapter and sequential Luna fallback.
 - Trace every call and convert failures into local regression cases.

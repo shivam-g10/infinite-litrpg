@@ -30,19 +30,19 @@ flowchart LR
 6. Check version, death, location, inventory, progression, knowledge, and clock invariants.
 7. Stage prospective state in memory. Canon remains at current version.
 8. Give Terra only POV-safe context and prospective visible events.
-9. Generate complete 900 to 1,300 word chapter and run narrative contract audit.
+9. Target 975 to 1,025 words, reject outside the absolute 900 to 1,300 word range, and run the narrative contract audit.
 10. Atomically commit delta, knowledge, chapter, trace metadata, usage, cost, and next version.
 
 Narration failure leaves canon unchanged. Accepted `WorldDelta` is sole source of new canon. Audit can reject prose but cannot add state mutations.
 
 ## Model Routing
 
-| Work | Model | Baseline effort |
-| --- | --- | --- |
-| World blueprint and seven-act constraints | `gpt-5.6-sol` | medium |
-| Hard recovery and finale | `gpt-5.6-sol` | medium |
-| Choice generation and narration | `gpt-5.6-terra` | none |
-| Character intents and chapter fact audit | `gpt-5.6-luna` | none or low |
+| Work                                      | Model           | Baseline effort |
+| ----------------------------------------- | --------------- | --------------- |
+| World blueprint and seven-act constraints | `gpt-5.6-sol`   | medium          |
+| Hard recovery and finale                  | `gpt-5.6-sol`   | medium          |
+| Choice generation and narration           | `gpt-5.6-terra` | none            |
+| Character intents and chapter fact audit  | `gpt-5.6-luna`  | none or low     |
 
 Use Responses API. Use strict structured outputs for state-changing calls. Measure before changing effort.
 
@@ -82,6 +82,8 @@ Rollback everything on failure.
 - refusal, retry, timeout, validation failure.
 - final gate result.
 
+Successful chapter traces include every attempt for that world version, including attempts from earlier failed retries. Fully failed turns persist a separate strict failure trace without mutating canon. Sequential Luna attempts retain the responsible character ID.
+
 Never store API key or raw environment.
 
 ## Planning Envelope
@@ -94,3 +96,5 @@ Never store API key or raw environment.
 - Streamed full chapter p95 target: at most 60 seconds.
 
 These are planning estimates. Runtime usage fields are token source of truth. OpenAI responses do not return cost, so UI must show actual tokens, latency, and estimated cost from a versioned pricing table after each call.
+
+Each request reserves its maximum estimated exposure before transport. Known usage settles the reservation to measured estimated cost. Timeouts and transport failures retain the full reservation because provider billing is unknown. Failed exposure carries into every retry for the same world version.

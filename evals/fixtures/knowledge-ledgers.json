@@ -1,8 +1,80 @@
-{
-  "rowan-ashborn": ["rowan-is-malachar-reincarnated"],
-  "elara-voss": ["prophecy-has-missing-lines", "elara-believes-prophecy-is-forged"],
-  "maelin-rook": ["malachar-contained-the-void"],
-  "varek-thorn": ["old-oath-binds-varek-to-malachar"],
-  "lucan-aurelis": ["empire-profits-from-demon-war", "lucan-will-stage-border-coup"],
-  "nyra-vale": ["nyra-has-riftwalker-class"]
-}
+[
+  {
+    "characterId": "rowan-ashborn",
+    "entries": [
+      {
+        "certainty": "certain",
+        "discoveredChapter": 0,
+        "factId": "rowan-is-malachar-reincarnated",
+        "source": "Reincarnation memory"
+      }
+    ]
+  },
+  {
+    "characterId": "elara-voss",
+    "entries": [
+      {
+        "certainty": "certain",
+        "discoveredChapter": 0,
+        "factId": "prophecy-has-missing-lines",
+        "source": "Hero archive comparison"
+      },
+      {
+        "certainty": "likely",
+        "discoveredChapter": 0,
+        "factId": "elara-believes-prophecy-is-forged",
+        "source": "Elara's private conclusion"
+      }
+    ]
+  },
+  {
+    "characterId": "maelin-rook",
+    "entries": [
+      {
+        "certainty": "certain",
+        "discoveredChapter": 0,
+        "factId": "malachar-contained-the-void",
+        "source": "Sealed Church testimony"
+      }
+    ]
+  },
+  {
+    "characterId": "varek-thorn",
+    "entries": [
+      {
+        "certainty": "certain",
+        "discoveredChapter": 0,
+        "factId": "old-oath-binds-varek-to-malachar",
+        "source": "Blood oath"
+      }
+    ]
+  },
+  {
+    "characterId": "lucan-aurelis",
+    "entries": [
+      {
+        "certainty": "certain",
+        "discoveredChapter": 0,
+        "factId": "empire-profits-from-demon-war",
+        "source": "Imperial border accounts"
+      },
+      {
+        "certainty": "likely",
+        "discoveredChapter": 0,
+        "factId": "lucan-will-stage-border-coup",
+        "source": "Lucan's private plan"
+      }
+    ]
+  },
+  {
+    "characterId": "nyra-vale",
+    "entries": [
+      {
+        "certainty": "certain",
+        "discoveredChapter": 0,
+        "factId": "nyra-has-riftwalker-class",
+        "source": "Unmarked System sigil"
+      }
+    ]
+  }
+]

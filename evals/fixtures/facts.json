@@ -1,10 +1,92 @@
-{
-  "rowan-is-malachar-reincarnated": { "visibility": "rowan-private" },
-  "prophecy-has-missing-lines": { "visibility": "elara-private" },
-  "elara-believes-prophecy-is-forged": { "visibility": "elara-private" },
-  "malachar-contained-the-void": { "visibility": "maelin-private" },
-  "old-oath-binds-varek-to-malachar": { "visibility": "varek-private" },
-  "empire-profits-from-demon-war": { "visibility": "lucan-private" },
-  "lucan-will-stage-border-coup": { "visibility": "lucan-private" },
-  "nyra-has-riftwalker-class": { "visibility": "nyra-private" }
-}
+[
+  {
+    "certainty": "certain",
+    "claim": "Rowan is Malachar reincarnated.",
+    "discoveredChapter": 0,
+    "id": "rowan-is-malachar-reincarnated",
+    "ownerCharacterId": "rowan-ashborn",
+    "source": "Reincarnation memory",
+    "visibility": "private"
+  },
+  {
+    "certainty": "certain",
+    "claim": "The official prophecy has missing lines.",
+    "discoveredChapter": 0,
+    "id": "prophecy-has-missing-lines",
+    "ownerCharacterId": "elara-voss",
+    "source": "Hero archive comparison",
+    "visibility": "private"
+  },
+  {
+    "certainty": "likely",
+    "claim": "Elara believes the prophecy was forged.",
+    "discoveredChapter": 0,
+    "id": "elara-believes-prophecy-is-forged",
+    "ownerCharacterId": "elara-voss",
+    "source": "Elara's private conclusion",
+    "visibility": "private"
+  },
+  {
+    "certainty": "certain",
+    "claim": "Malachar contained the Void beneath his throne.",
+    "discoveredChapter": 0,
+    "id": "malachar-contained-the-void",
+    "ownerCharacterId": "maelin-rook",
+    "source": "Sealed Church testimony",
+    "visibility": "private"
+  },
+  {
+    "certainty": "certain",
+    "claim": "Varek's old oath binds him to Malachar.",
+    "discoveredChapter": 0,
+    "id": "old-oath-binds-varek-to-malachar",
+    "ownerCharacterId": "varek-thorn",
+    "source": "Blood oath",
+    "visibility": "private"
+  },
+  {
+    "certainty": "certain",
+    "claim": "The empire profits from continued demon war.",
+    "discoveredChapter": 0,
+    "id": "empire-profits-from-demon-war",
+    "ownerCharacterId": "lucan-aurelis",
+    "source": "Imperial border accounts",
+    "visibility": "private"
+  },
+  {
+    "certainty": "likely",
+    "claim": "Lucan plans to stage a border coup.",
+    "discoveredChapter": 0,
+    "id": "lucan-will-stage-border-coup",
+    "ownerCharacterId": "lucan-aurelis",
+    "source": "Lucan's private plan",
+    "visibility": "private"
+  },
+  {
+    "certainty": "certain",
+    "claim": "Nyra's hidden class is Riftwalker.",
+    "discoveredChapter": 0,
+    "id": "nyra-has-riftwalker-class",
+    "ownerCharacterId": "nyra-vale",
+    "source": "Unmarked System sigil",
+    "visibility": "private"
+  },
+  {
+    "certainty": "certain",
+    "claim": "Demon King Malachar died at the end of the war.",
+    "discoveredChapter": 0,
+    "id": "malachar-publicly-dead",
+    "ownerCharacterId": null,
+    "source": "Public history",
+    "visibility": "public"
+  },
+  {
+    "certainty": "certain",
+    "claim": "Ash-raiders attacked Cinder Village and fled toward Ash Road.",
+    "discoveredChapter": 0,
+    "id": "cinder-village-raided",
+    "ownerCharacterId": null,
+    "source": "Cinder survivor reports",
+    "visibility": "public"
+  }
+]

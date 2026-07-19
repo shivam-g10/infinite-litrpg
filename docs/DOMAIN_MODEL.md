@@ -83,14 +83,14 @@
 
 ## Seven-Act Clock
 
-| Chapters | Arc |
-| --- | --- |
-| 1 to 50 | Reincarnation and survival |
-| 51 to 100 | Class growth and first faction |
-| 101 to 150 | Regional conflict |
-| 151 to 200 | Hidden-history reveal |
-| 201 to 250 | Continental war |
-| 251 to 300 | Convergence and betrayals |
-| 301 to 350 | Final campaign and resolution |
+| Chapters   | Arc                            |
+| ---------- | ------------------------------ |
+| 1 to 50    | Reincarnation and survival     |
+| 51 to 100  | Class growth and first faction |
+| 101 to 150 | Regional conflict              |
+| 151 to 200 | Hidden-history reveal          |
+| 201 to 250 | Continental war                |
+| 251 to 300 | Convergence and betrayals      |
+| 301 to 350 | Final campaign and resolution  |
 
 At chapter 40 inside each act, raise convergence pressure. At chapter 48, offer only actions compatible with required transition. Chapter 50 forces transition.

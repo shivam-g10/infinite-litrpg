@@ -12,14 +12,14 @@ Original setting: Ashen Crown, a continent rebuilding after Demon King Malachar 
 
 Six selectable characters already exist:
 
-| Character | Role | Starting conflict |
-| --- | --- | --- |
-| Rowan Ashborn | Malachar reincarnated as level-one human | Survive without revealing old identity |
-| Elara Voss | Chosen Hero | Victory feels staged; prophecy has missing lines |
-| Maelin Rook | Saint | Church hid proof Demon King was containing something worse |
-| Varek Thorn | Former Demon General | Must choose between dead oath and living people |
-| Lucan Aurelis | Imperial Crown Prince | Throne profits from endless demon war |
-| Nyra Vale | Guild-ranked rival | System assigned a class no archive recognizes |
+| Character     | Role                                     | Starting conflict                                          |
+| ------------- | ---------------------------------------- | ---------------------------------------------------------- |
+| Rowan Ashborn | Malachar reincarnated as level-one human | Survive without revealing old identity                     |
+| Elara Voss    | Chosen Hero                              | Victory feels staged; prophecy has missing lines           |
+| Maelin Rook   | Saint                                    | Church hid proof Demon King was containing something worse |
+| Varek Thorn   | Former Demon General                     | Must choose between dead oath and living people            |
+| Lucan Aurelis | Imperial Crown Prince                    | Throne profits from endless demon war                      |
+| Nyra Vale     | Guild-ranked rival                       | System assigned a class no archive recognizes              |
 
 Each starts with class, level, stats, skills, inventory, location, goals, beliefs, secrets, relationships, faction, and private knowledge.
 

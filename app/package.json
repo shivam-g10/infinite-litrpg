@@ -1,0 +1,21 @@
+{
+  "name": "@infinite-litrpg/app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "@infinite-litrpg/shared": "*",
+    "better-sqlite3": "12.11.1",
+    "dotenv": "17.4.2",
+    "next": "16.3.0-canary.89",
+    "openai": "6.48.0",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "server-only": "0.0.1"
+  }
+}

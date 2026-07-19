@@ -1,51 +1,105 @@
 # Infinite LitRPG
 
-Open-source, local-first LitRPG engine for one viewpoint inside a living multi-character world.
+Infinite LitRPG is a local, bring-your-own-key story engine for one locked viewpoint inside a living six-character world. The original Ashen Crown setting follows a reincarnated Demon King through seven acts. The story ends by chapter 350. Chapter 351 cannot run.
 
-## Premise
+AI generates chapter prose and background-character intents. Deterministic application code validates actions, owns canon, audits every chapter, and commits the accepted world delta atomically.
 
-- Scenario: reincarnated Demon King.
-- Six existing characters compete, cooperate, and progress.
-- Player locks one viewpoint for the full story.
-- Other characters act off-screen through bounded background agents.
-- One canonical resolver owns world state.
-- Story ends early or at chapter 350. Chapter 351 is impossible.
+![Reader view](docs/screenshots/reader-desktop.png)
 
-## Build Status
+## Requirements
 
-Planning scaffold ready. Next.js app not initialized.
+- Node.js 24 or newer
+- npm 11 or newer
+- An OpenAI API key with GPT-5.6 Sol, Terra, and Luna access
 
-Read in order:
+## Run locally
 
-1. `AGENTS.md`
-2. `LOOP.md`
-3. `docs/PLAN.md`
-4. `docs/STATUS.md`
-
-## Start Codex Goal
-
-Select GPT-5.6 Sol with Ultra. Then run:
-
-```text
-/goal Complete Infinite LitRPG end to end. Follow AGENTS.md, LOOP.md, and docs/PLAN.md. Keep docs/STATUS.md and the living plan current. Research unknowns, establish eval baselines before changing AI behavior, implement verifiable vertical slices, use subagents only for bounded independent work, and continue until every documented acceptance gate passes or an external blocker is proven.
+```powershell
+git clone git@github.com:shivam-g10/infinite-litrpg.git
+Set-Location infinite-litrpg
+npm ci
+Copy-Item .env.example .env
 ```
 
-Goal mode keeps existing permissions. Add `OPENAI_API_KEY` to root `.env` before live API evals.
+Put the key in root `.env`:
 
-## Runtime Model Roles
+```dotenv
+OPENAI_API_KEY=
+OPENAI_MAX_COST_USD_PER_CHAPTER=0.10
+OPENAI_MAX_BACKGROUND_AGENTS=3
+OPENAI_NATIVE_MULTI_AGENT=false
+```
 
-| Role | Model |
-| --- | --- |
-| World genesis, arc recovery, finale | `gpt-5.6-sol` |
-| POV choices and chapter narration | `gpt-5.6-terra` |
-| Background intents and chapter fact audit | `gpt-5.6-luna` |
+Paste the key after the first equals sign.
 
-No other model family is allowed.
+Start the app:
 
-## Remote
+```powershell
+npm run dev
+```
 
-`git@github.com:shivam-g10/infinite-litrpg.git`
+Open `http://127.0.0.1:3000`. Choose one of six characters. The viewpoint locks for that local world. Runtime state stays in ignored `data/ashen-crown.db`.
+
+Set `OPENAI_NATIVE_MULTI_AGENT=true` to use the native Multi-agent beta. The default sequential Luna adapter preserves the same intent schema and deterministic resolver.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    U["Player action"] --> V["Deterministic validation"]
+    L["Up to 3 Luna intent agents"] --> R["Single world resolver"]
+    V --> R
+    R --> S["Prospective state"]
+    S --> T["Terra POV chapter"]
+    K["POV-safe knowledge"] --> T
+    T --> A["Luna narrative audit"]
+    A --> C["Atomic SQLite commit"]
+    C --> P["Reader and God Mode"]
+```
+
+Models emit intent or prose. They never mutate canonical state. Accepted `WorldDelta` is the only source of new canon. Narration sees only the selected character's knowledge. Rejected prose never reaches the reader because generation is buffered, audited, then replayed as NDJSON.
+
+See [architecture](docs/ARCHITECTURE.md), [domain model](docs/DOMAIN_MODEL.md), and [security](docs/SECURITY.md).
+
+## Model roles
+
+| Work                                         | Model           |
+| -------------------------------------------- | --------------- |
+| World genesis, hard recovery, finale         | `gpt-5.6-sol`   |
+| Action translation, chapter frame, narration | `gpt-5.6-terra` |
+| Background intents, narrative audit          | `gpt-5.6-luna`  |
+
+Only the OpenAI Responses API is used.
+
+## Verify
+
+```powershell
+npm run check
+```
+
+This runs format, lint, strict type checks, unit tests, 1,000 deterministic simulations, POV and chapter-350 evals, production build, desktop and mobile E2E tests, secret and client-bundle scans, and license checks.
+
+Live API evals are separate and capped:
+
+```powershell
+npm run evals:live:smoke
+npm run evals:live:full
+```
+
+The full command requires explicit `--confirm-cost` through its npm script. Reports stay in ignored `evals/reports/`. See [eval gates](evals/README.md) and [current status](docs/STATUS.md).
+
+## Safety
+
+- The API key stays server-side and is never written to traces or exports.
+- Reader JSON excludes hidden world facts and other characters' private ledgers.
+- God Mode JSON is an explicit full-canon export.
+- Every request carries a UUID and expected world version for replay safety.
+- Per-chapter cost, retries, timeout, and background concurrency are bounded. Unknown response cost keeps its worst-case reservation, and failed exposure carries into later chapter retries.
+
+## Build Week
+
+Track: Apps for Your Life. Demo materials and submission evidence live in [Build Week notes](docs/BUILD_WEEK.md).
 
 ## License
 
-MIT
+[MIT](LICENSE)
