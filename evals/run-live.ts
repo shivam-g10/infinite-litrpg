@@ -1,18 +1,25 @@
-import { randomUUID } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 
 import { config } from "dotenv";
 
 import {
   CHARACTER_IDS,
+  NarrativeAuditSchema,
+  PROMPT_VERSION,
+  RuntimeAttemptTraceSchema,
+  TraceEnvelopeSchema,
+  UsageSchema,
+  VALIDATION_CODES,
   validateWorldState,
-  type ChapterRecord,
   type CharacterId,
-  type TraceEnvelope,
-  type ValidationIssue,
 } from "@infinite-litrpg/shared";
 import OpenAI from "openai";
+import { z } from "zod";
 
 import { OpenAIRuntimeError } from "../app/src/server/openai/errors";
 import { StoryService } from "../app/src/server/story/story-service";
@@ -23,50 +30,193 @@ const REPORT_DIRECTORY = resolve(ROOT, "evals", "reports");
 const REVIEW_DIRECTORY = resolve(ROOT, "docs", "review-packets");
 const DEFAULT_PER_CHAPTER_CAP_USD = 0.1;
 const TOTAL_CAP_USD = 3;
+const REPORT_VERSION = 5;
+const MONEY_EPSILON_USD = 0.000_000_1;
 
-interface LiveResult {
-  readonly adapterMode: string;
-  readonly audit: ChapterRecord["narrativeAudit"];
-  readonly chapter: number;
-  readonly costUsd: number;
-  readonly latencyMs: number;
-  readonly povId: CharacterId;
-  readonly prose: string;
-  readonly streamChunkCount: number;
-  readonly streamingLatencyMs: number;
-  readonly streamReconstructed: boolean;
-  readonly trace: TraceEnvelope;
-  readonly usage: ChapterRecord["usage"];
-  readonly wordCount: number;
+const PovIdSchema = z.enum(CHARACTER_IDS);
+const AdapterModeSchema = z.enum(["native-multi-agent", "sequential"]);
+const ValidationIssueSchema = z
+  .object({
+    code: z.enum(VALIDATION_CODES),
+    message: z.string().min(1).max(4_000),
+    path: z.string().max(1_000),
+  })
+  .strict();
+
+export const LiveResultSchema = z
+  .object({
+    adapterMode: AdapterModeSchema,
+    audit: NarrativeAuditSchema,
+    chapter: z.number().int().min(1).max(2),
+    costUsd: z.number().min(0).max(TOTAL_CAP_USD),
+    latencyMs: z.number().int().min(0),
+    povId: PovIdSchema,
+    prose: z.string().min(1).max(20_000),
+    streamChunkCount: z.number().int().min(1),
+    streamingLatencyMs: z.number().int().min(0),
+    streamReconstructed: z.boolean(),
+    trace: TraceEnvelopeSchema,
+    usage: UsageSchema,
+    wordCount: z.number().int().min(900).max(1_300),
+  })
+  .strict()
+  .superRefine((result, context) => {
+    if (wordCount(result.prose) !== result.wordCount) {
+      context.addIssue({ code: "custom", message: "Result word count does not match prose" });
+    }
+    if (hashText(result.prose) !== result.audit.proseHash) {
+      context.addIssue({ code: "custom", message: "Result prose hash does not match audit" });
+    }
+    if (!isDeepStrictEqual(result.usage, result.trace.totalUsage)) {
+      context.addIssue({ code: "custom", message: "Result usage does not match trace" });
+    }
+    if (!costsMatch(result.costUsd, result.trace.totalEstimatedCostUsd)) {
+      context.addIssue({ code: "custom", message: "Result cost does not match trace total" });
+    }
+    if (!resultTraceCostMatches(result)) {
+      context.addIssue({ code: "custom", message: "Result cost does not match trace attempts" });
+    }
+    if (result.trace.gateResult !== "passed") {
+      context.addIssue({ code: "custom", message: "Result trace gate did not pass" });
+    }
+  });
+
+const GateSchema = z
+  .object({
+    allAuditsApproved: z.boolean(),
+    allCommitsCompleted: z.boolean(),
+    allCostsWithinChapterCap: z.boolean(),
+    allPovLeakListsEmpty: z.boolean(),
+    allProseWithinWordLimit: z.boolean(),
+    allStreamsReconstructed: z.boolean(),
+    p95WithinSixtySeconds: z.boolean(),
+    traceCostMatchesAttempts: z.boolean(),
+    totalCostWithinCap: z.boolean(),
+  })
+  .strict();
+
+export const LiveReportSchema = z
+  .object({
+    adapterMode: AdapterModeSchema,
+    attempts: z.array(RuntimeAttemptTraceSchema).max(1_000),
+    auditRejections: z
+      .array(z.object({ audit: NarrativeAuditSchema, povId: PovIdSchema }).strict())
+      .max(100),
+    chapterCostCapUsd: z.number().positive().max(DEFAULT_PER_CHAPTER_CAP_USD),
+    completedChapters: z.number().int().min(0).max(12),
+    cumulativeCostUsd: z.number().min(0).max(TOTAL_CAP_USD),
+    error: z
+      .object({ code: z.string().min(1).max(240), message: z.string().min(1).max(4_000) })
+      .strict()
+      .nullable(),
+    draftRejections: z
+      .array(
+        z.object({ issues: z.array(ValidationIssueSchema).max(100), povId: PovIdSchema }).strict(),
+      )
+      .max(100),
+    finishedAt: z.string().datetime(),
+    gates: GateSchema,
+    nativeRequested: z.boolean(),
+    povFilter: PovIdSchema.nullable(),
+    priorSpendUsd: z.number().min(0).max(TOTAL_CAP_USD),
+    projectedMaximumCumulativeCostUsd: z.number().min(0),
+    promptVersion: z.string().min(1).max(240),
+    results: z.array(LiveResultSchema).max(12),
+    resume: z
+      .object({
+        discardedResultCount: z.number().int().min(0).max(12),
+        existingAttemptCostUsd: z.number().min(0).max(TOTAL_CAP_USD),
+        retainedPovIds: z.array(PovIdSchema).max(6),
+        sourceReportPath: z.string().min(1).max(4_000),
+      })
+      .strict()
+      .nullable(),
+    sourceGitSha: z.string().regex(/^[a-f0-9]{7,40}$/u),
+    startedAt: z.string().datetime(),
+    suite: z.enum(["full", "smoke"]),
+    totalCostCapUsd: z.literal(TOTAL_CAP_USD),
+    totalCostUsd: z.number().min(0).max(TOTAL_CAP_USD),
+    version: z.literal(REPORT_VERSION),
+  })
+  .strict()
+  .superRefine((report, context) => {
+    const attemptCostUsd = sum(report.attempts.map(({ costUsd }) => costUsd));
+    if (!costsMatch(attemptCostUsd, report.totalCostUsd)) {
+      context.addIssue({ code: "custom", message: "Report total cost does not match attempts" });
+    }
+    if (!costsMatch(report.priorSpendUsd + attemptCostUsd, report.cumulativeCostUsd)) {
+      context.addIssue({ code: "custom", message: "Report cumulative cost is inconsistent" });
+    }
+    if (report.completedChapters !== report.results.length) {
+      context.addIssue({
+        code: "custom",
+        message: "Report completed chapter count is inconsistent",
+      });
+    }
+    const wantedAdapter = report.nativeRequested ? "native-multi-agent" : "sequential";
+    if (report.adapterMode !== wantedAdapter) {
+      context.addIssue({ code: "custom", message: "Report adapter fields disagree" });
+    }
+    for (const [index, result] of report.results.entries()) {
+      if (
+        result.adapterMode !== report.adapterMode ||
+        result.trace.adapterMode !== report.adapterMode
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: `Result ${index} adapter does not match report`,
+          path: ["results", index, "adapterMode"],
+        });
+      }
+      if (result.trace.promptVersion !== report.promptVersion) {
+        context.addIssue({
+          code: "custom",
+          message: `Result ${index} prompt version does not match report`,
+          path: ["results", index, "trace", "promptVersion"],
+        });
+      }
+      if (result.trace.gitSha !== report.sourceGitSha) {
+        context.addIssue({
+          code: "custom",
+          message: `Result ${index} Git SHA does not match report`,
+          path: ["results", index, "trace", "gitSha"],
+        });
+      }
+    }
+  });
+
+export type LiveResult = z.infer<typeof LiveResultSchema>;
+export type LiveReport = z.infer<typeof LiveReportSchema>;
+
+export interface ResumeRequirements {
+  readonly adapterMode: z.infer<typeof AdapterModeSchema>;
+  readonly chapterCostCapUsd: number;
+  readonly priorSpendUsd: number;
+  readonly promptVersion: string;
+  readonly sourceGitSha: string;
 }
 
-interface LiveReport {
-  attempts: TraceEnvelope["attempts"];
-  auditRejections: { audit: ChapterRecord["narrativeAudit"]; povId: CharacterId }[];
-  chapterCostCapUsd: number;
-  completedChapters: number;
-  cumulativeCostUsd: number;
-  error: { code: string; message: string } | null;
-  draftRejections: { issues: readonly ValidationIssue[]; povId: CharacterId }[];
-  finishedAt: string;
-  gates: Record<string, boolean>;
-  nativeRequested: boolean;
-  povFilter: CharacterId | null;
-  priorSpendUsd: number;
-  projectedMaximumCumulativeCostUsd: number;
-  results: LiveResult[];
-  startedAt: string;
-  suite: "full" | "smoke";
-  totalCostCapUsd: number;
-  totalCostUsd: number;
-  version: 4;
+export interface ResumePreparation {
+  readonly attempts: LiveReport["attempts"];
+  readonly auditRejections: LiveReport["auditRejections"];
+  readonly discardedResultCount: number;
+  readonly draftRejections: LiveReport["draftRejections"];
+  readonly existingAttemptCostUsd: number;
+  readonly pendingPovIds: CharacterId[];
+  readonly retainedPovIds: CharacterId[];
+  readonly retainedResults: LiveResult[];
 }
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const suite = parseSuite(args);
   const nativeRequested = args.includes("--native");
+  const adapterMode = nativeRequested ? "native-multi-agent" : "sequential";
   const povFilter = parsePov(args);
+  const resumeReportArgument = parseOptionalFlag(args, "--resume-report");
+  if (resumeReportArgument !== null && suite !== "full") {
+    throw new Error("--resume-report is only valid for the full live suite");
+  }
   const perChapterCapUsd = parseUsdFlag(
     args,
     "--chapter-cap-usd",
@@ -78,27 +228,56 @@ async function main(): Promise<void> {
   if (suite === "full" && !args.includes("--confirm-cost")) {
     throw new Error("Full live eval requires --confirm-cost");
   }
-
+  if (suite === "full") assertCleanGitCheckpoint();
   config({ path: resolve(ROOT, ".env"), quiet: true });
+  const sourceGitSha = currentGitSha();
+  const resumeReportPath =
+    resumeReportArgument === null ? null : resolve(ROOT, resumeReportArgument);
+  const resumeReport = resumeReportPath === null ? null : readLiveReport(resumeReportPath);
+  const resumePreparation =
+    resumeReport === null
+      ? null
+      : prepareResume(resumeReport, {
+          adapterMode,
+          chapterCostCapUsd: perChapterCapUsd,
+          priorSpendUsd,
+          promptVersion: PROMPT_VERSION,
+          sourceGitSha,
+        });
+  const plannedPovIds =
+    suite === "smoke"
+      ? [povFilter ?? "rowan-ashborn"]
+      : (resumePreparation?.pendingPovIds ?? [...CHARACTER_IDS]);
+  const turnsPerPov = suite === "smoke" ? 1 : 2;
+  const pendingChapterCount = plannedPovIds.length * turnsPerPov;
+  const existingAttemptCostUsd = resumePreparation?.existingAttemptCostUsd ?? 0;
+  const projectedMaximumCumulativeCostUsd = projectedCumulativeCostUsd(
+    priorSpendUsd,
+    existingAttemptCostUsd,
+    pendingChapterCount,
+    perChapterCapUsd,
+  );
+  if (projectedMaximumCumulativeCostUsd > TOTAL_CAP_USD) {
+    throw new Error("Prior spend, existing attempts, and pending chapter caps can exceed $3");
+  }
+
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("OPENAI_API_KEY is not configured");
   const client = new OpenAI({ apiKey });
   mkdirSync(REPORT_DIRECTORY, { recursive: true });
 
   const startedAt = new Date().toISOString();
-  const results: LiveResult[] = [];
-  const attempts: TraceEnvelope["attempts"] = [];
-  const auditRejections: LiveReport["auditRejections"] = [];
-  const draftRejections: LiveReport["draftRejections"] = [];
+  const results: LiveResult[] = [...(resumePreparation?.retainedResults ?? [])];
+  const attempts: LiveReport["attempts"] = [...(resumePreparation?.attempts ?? [])];
+  const auditRejections: LiveReport["auditRejections"] = [
+    ...(resumePreparation?.auditRejections ?? []),
+  ];
+  const draftRejections: LiveReport["draftRejections"] = [
+    ...(resumePreparation?.draftRejections ?? []),
+  ];
   let failure: unknown = null;
   try {
-    const povs = suite === "smoke" ? [povFilter ?? "rowan-ashborn"] : CHARACTER_IDS;
-    const turnsPerPov = suite === "smoke" ? 1 : 2;
-    const expectedChapters = povs.length * turnsPerPov;
-    if (priorSpendUsd + expectedChapters * perChapterCapUsd > TOTAL_CAP_USD) {
-      throw new Error("Prior spend plus configured chapter caps can exceed the $3 total cap");
-    }
-    for (const povId of povs) {
+    for (const povId of plannedPovIds) {
       const store = new StoryStore();
       try {
         const service = new StoryService(store, client, {
@@ -114,7 +293,7 @@ async function main(): Promise<void> {
             }
           },
           onNarrativeDraftRejected: (issues) => {
-            draftRejections.push({ issues, povId });
+            draftRejections.push({ issues: [...issues], povId });
             console.log(
               `draft rejected: ${issues.map(({ code, message }) => `${code}: ${message}`).join("; ")}`,
             );
@@ -182,7 +361,9 @@ async function main(): Promise<void> {
           assertChapterResult(result, nativeRequested, perChapterCapUsd);
           results.push(result);
           const totalCost = sum(attempts.map(({ costUsd }) => costUsd));
-          if (totalCost > TOTAL_CAP_USD) throw new Error("Live suite exceeded the $3 total cap");
+          if (priorSpendUsd + totalCost > TOTAL_CAP_USD) {
+            throw new Error("Prior spend plus live suite attempts exceeded the $3 total cap");
+          }
           console.log(
             `${povId} chapter ${chapter.chapter}: ${result.wordCount} words, $${result.costUsd.toFixed(5)}, ${result.latencyMs}ms, ${result.adapterMode}`,
           );
@@ -201,9 +382,10 @@ async function main(): Promise<void> {
     results.map(({ streamingLatencyMs }) => streamingLatencyMs),
     0.95,
   );
+  const completeMatrix = suite === "full" ? hasExactFullMatrix(results) : results.length === 1;
   const gates = {
     allAuditsApproved: results.length === expected && results.every(({ audit }) => audit.approved),
-    allCommitsCompleted: results.length === expected,
+    allCommitsCompleted: completeMatrix,
     allCostsWithinChapterCap:
       results.length === expected && results.every(({ costUsd }) => costUsd <= perChapterCapUsd),
     allPovLeakListsEmpty:
@@ -223,10 +405,11 @@ async function main(): Promise<void> {
         0.95,
       ) <= 60_000,
     traceCostMatchesAttempts:
-      Math.abs(sum(results.map(({ costUsd }) => costUsd)) - totalCostUsd) < 0.000_000_1,
+      results.length === expected && results.every((result) => resultTraceCostMatches(result)),
     totalCostWithinCap: priorSpendUsd + totalCostUsd <= TOTAL_CAP_USD,
   };
-  const report: LiveReport = {
+  const report = LiveReportSchema.parse({
+    adapterMode,
     attempts,
     auditRejections,
     chapterCostCapUsd: perChapterCapUsd,
@@ -239,14 +422,25 @@ async function main(): Promise<void> {
     nativeRequested,
     povFilter,
     priorSpendUsd,
-    projectedMaximumCumulativeCostUsd: priorSpendUsd + expected * perChapterCapUsd,
+    projectedMaximumCumulativeCostUsd,
+    promptVersion: PROMPT_VERSION,
     results,
+    resume:
+      resumeReportPath === null || resumePreparation === null
+        ? null
+        : {
+            discardedResultCount: resumePreparation.discardedResultCount,
+            existingAttemptCostUsd,
+            retainedPovIds: resumePreparation.retainedPovIds,
+            sourceReportPath: resumeReportPath,
+          },
+    sourceGitSha,
     startedAt,
     suite,
     totalCostCapUsd: TOTAL_CAP_USD,
     totalCostUsd,
-    version: 4,
-  };
+    version: REPORT_VERSION,
+  });
   const reportPath = resolve(
     REPORT_DIRECTORY,
     `live-${suite}-${nativeRequested ? "native" : "sequential"}${povFilter ? `-${povFilter}` : ""}.json`,
@@ -301,12 +495,20 @@ function assertChapterResult(
   if (result.adapterMode !== wantedMode) {
     throw new Error(`Adapter mode ${result.adapterMode} did not match ${wantedMode}`);
   }
+  if (!resultTraceCostMatches(result)) {
+    throw new Error("Chapter cost does not match its trace attempts");
+  }
 }
 
 function writeReviewPackets(results: readonly LiveResult[]): void {
+  if (!hasExactFullMatrix(results)) {
+    throw new Error("Review packets require exact chapter 1 and 2 pairs for all six POVs");
+  }
   mkdirSync(REVIEW_DIRECTORY, { recursive: true });
   for (const povId of CHARACTER_IDS) {
-    const chapters = results.filter((result) => result.povId === povId);
+    const chapters = results
+      .filter((result) => result.povId === povId)
+      .sort((left, right) => left.chapter - right.chapter);
     const body = [
       `# POV Review Packet: ${povId}`,
       "",
@@ -331,6 +533,111 @@ function writeReviewPackets(results: readonly LiveResult[]): void {
   }
 }
 
+export function prepareResume(
+  report: LiveReport,
+  requirements: ResumeRequirements,
+): ResumePreparation {
+  if (report.version !== REPORT_VERSION || report.suite !== "full") {
+    throw new Error("Resume report must be a version 5 full-suite report");
+  }
+  if (report.priorSpendUsd !== requirements.priorSpendUsd) {
+    throw new Error("Resume report prior spend does not match this run");
+  }
+  if (report.chapterCostCapUsd !== requirements.chapterCostCapUsd) {
+    throw new Error("Resume report chapter cap does not match this run");
+  }
+  if (report.adapterMode !== requirements.adapterMode) {
+    throw new Error("Resume report adapter does not match this run");
+  }
+  if (report.promptVersion !== requirements.promptVersion) {
+    throw new Error("Resume report prompt version does not match current prompts");
+  }
+  if (report.sourceGitSha !== requirements.sourceGitSha) {
+    throw new Error("Resume report Git SHA does not match current HEAD");
+  }
+
+  const retainedResults: LiveResult[] = [];
+  const retainedPovIds: CharacterId[] = [];
+  const pendingPovIds: CharacterId[] = [];
+  let discardedResultCount = 0;
+  for (const povId of CHARACTER_IDS) {
+    const povResults = report.results.filter((result) => result.povId === povId);
+    const chapters = [...povResults].sort((left, right) => left.chapter - right.chapter);
+    const completePair =
+      chapters.length === 2 && chapters[0]?.chapter === 1 && chapters[1]?.chapter === 2;
+    if (completePair) {
+      for (const result of chapters) {
+        assertChapterResult(
+          result,
+          requirements.adapterMode === "native-multi-agent",
+          requirements.chapterCostCapUsd,
+        );
+        assertResultPayloadConsistency(result);
+      }
+      retainedResults.push(...chapters);
+      retainedPovIds.push(povId);
+    } else {
+      discardedResultCount += chapters.length;
+      pendingPovIds.push(povId);
+    }
+  }
+  const attempts = [...report.attempts];
+  return {
+    attempts,
+    auditRejections: [...report.auditRejections],
+    discardedResultCount,
+    draftRejections: [...report.draftRejections],
+    existingAttemptCostUsd: sum(attempts.map(({ costUsd }) => costUsd)),
+    pendingPovIds,
+    retainedPovIds,
+    retainedResults,
+  };
+}
+
+export function projectedCumulativeCostUsd(
+  priorSpendUsd: number,
+  existingAttemptCostUsd: number,
+  pendingChapterCount: number,
+  chapterCostCapUsd: number,
+): number {
+  return priorSpendUsd + existingAttemptCostUsd + pendingChapterCount * chapterCostCapUsd;
+}
+
+export function hasExactFullMatrix(results: readonly LiveResult[]): boolean {
+  if (results.length !== CHARACTER_IDS.length * 2) return false;
+  return CHARACTER_IDS.every((povId) => {
+    const chapters = results
+      .filter((result) => result.povId === povId)
+      .map(({ chapter }) => chapter)
+      .sort((left, right) => left - right);
+    return chapters.length === 2 && chapters[0] === 1 && chapters[1] === 2;
+  });
+}
+
+export function resultTraceCostMatches(result: LiveResult): boolean {
+  return costsMatch(result.costUsd, sum(result.trace.attempts.map(({ costUsd }) => costUsd)));
+}
+
+function readLiveReport(path: string): LiveReport {
+  let candidate: unknown;
+  try {
+    candidate = JSON.parse(readFileSync(path, "utf8")) as unknown;
+  } catch (error) {
+    throw new Error(
+      `Cannot read resume report: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  const parsed = LiveReportSchema.safeParse(candidate);
+  if (!parsed.success) {
+    const details = parsed.error.issues
+      .slice(0, 5)
+      .map((issue) => `${issue.path.join(".") || "report"}: ${issue.message}`)
+      .join("; ");
+    throw new Error(`Resume report is not valid version 5 data: ${details}`);
+  }
+  return parsed.data;
+}
+
 function parseSuite(args: readonly string[]): "full" | "smoke" {
   const index = args.indexOf("--suite");
   const value = index === -1 ? undefined : args[index + 1];
@@ -348,6 +655,16 @@ function parsePov(args: readonly string[]): CharacterId | null {
     throw new Error(`Unknown --pov value ${value ?? "missing"}`);
   }
   return value as CharacterId;
+}
+
+function parseOptionalFlag(args: readonly string[], name: string): string | null {
+  const index = args.indexOf(name);
+  if (index === -1) return null;
+  const value = args[index + 1];
+  if (value === undefined || value.startsWith("--")) {
+    throw new Error(`${name} requires a path`);
+  }
+  return value;
 }
 
 function parseUsdFlag(
@@ -382,15 +699,74 @@ function sum(values: readonly number[]): number {
   return values.reduce((total, value) => total + value, 0);
 }
 
+function costsMatch(left: number, right: number): boolean {
+  return Math.abs(left - right) < MONEY_EPSILON_USD;
+}
+
+function assertResultPayloadConsistency(result: LiveResult): void {
+  if (wordCount(result.prose) !== result.wordCount) {
+    throw new Error("Resume result word count does not match prose");
+  }
+  if (hashText(result.prose) !== result.audit.proseHash) {
+    throw new Error("Resume result prose hash does not match audit");
+  }
+  if (!isDeepStrictEqual(result.usage, result.trace.totalUsage)) {
+    throw new Error("Resume result usage does not match trace");
+  }
+  if (!costsMatch(result.costUsd, result.trace.totalEstimatedCostUsd)) {
+    throw new Error("Resume result cost does not match trace total");
+  }
+  if (result.trace.gateResult !== "passed") {
+    throw new Error("Resume result trace gate did not pass");
+  }
+}
+
+function hashText(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function currentGitSha(): string {
+  const configured = process.env.GIT_SHA;
+  if (configured && /^[a-f0-9]{7,40}$/u.test(configured)) return configured;
+  try {
+    return execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: ROOT,
+      encoding: "utf8",
+      timeout: 2_000,
+      windowsHide: true,
+    }).trim();
+  } catch {
+    return "0000000";
+  }
+}
+
+function assertCleanGitCheckpoint(): void {
+  const status = execFileSync(
+    "git",
+    ["status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none"],
+    {
+      cwd: ROOT,
+      encoding: "utf8",
+      timeout: 2_000,
+      windowsHide: true,
+    },
+  ).trim();
+  if (status.length > 0) {
+    throw new Error("Full live eval requires a clean committed Git checkpoint");
+  }
+}
+
 function percentile(values: readonly number[], quantile: number): number {
   if (values.length === 0) return 0;
   const sorted = [...values].sort((left, right) => left - right);
   return sorted[Math.ceil(quantile * sorted.length) - 1] ?? sorted.at(-1) ?? 0;
 }
 
-void main().catch((error: unknown) => {
-  const apiKey = process.env.OPENAI_API_KEY ?? "";
-  const safe = safeError(error, apiKey || "never-match-empty-key");
-  console.error(`${safe.code}: ${safe.message}`);
-  process.exitCode = 1;
-});
+if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  void main().catch((error: unknown) => {
+    const apiKey = process.env.OPENAI_API_KEY ?? "";
+    const safe = safeError(error, apiKey || "never-match-empty-key");
+    console.error(`${safe.code}: ${safe.message}`);
+    process.exitCode = 1;
+  });
+}

@@ -6,6 +6,6 @@ export default defineConfig({
       provider: "v8",
       reporter: ["text", "json-summary"],
     },
-    include: ["app/src/**/*.test.{ts,tsx}", "shared/src/**/*.test.ts"],
+    include: ["app/src/**/*.test.{ts,tsx}", "evals/**/*.test.ts", "shared/src/**/*.test.ts"],
   },
 });

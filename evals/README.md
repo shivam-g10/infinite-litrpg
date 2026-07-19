@@ -8,11 +8,17 @@ Evals define completion. Implement runner before live prompt work.
 - `npm run evals:live:smoke`: smallest capped API suite.
 - `npm run evals:live:full`: release-only live suite with explicit cost confirmation.
 
-Live runs accept `--prior-spend-usd` and `--chapter-cap-usd`. The runner rejects a suite when prior spend plus every configured chapter ceiling could exceed the cumulative `$3` POC cap. Report version 4 records prior spend, projected maximum, exact cumulative cost, attempt phase, audit rejections, deterministic draft rejections, and approved prose for recovery and human review.
+Live runs accept `--prior-spend-usd` and `--chapter-cap-usd`. The runner rejects a suite when prior spend plus every configured chapter ceiling could exceed the cumulative `$3` POC cap. Report version 5 records prior spend, projected maximum, exact cumulative attempt cost, attempt phase, audit rejections, deterministic draft rejections, approved prose, prompt version, Git SHA, and adapter checkpoint.
 
 ```powershell
 npm run evals:live:smoke -- --prior-spend-usd 1.25 --chapter-cap-usd 0.10
 npm run evals:live:full -- --prior-spend-usd 1.30 --chapter-cap-usd 0.09
+```
+
+A full run requires a clean committed worktree. A failed run can resume from a version 5 report. Use the exact same prior spend, chapter cap, adapter, prompt version, and Git commit. Resume keeps all old attempt cost and rejections, retains only complete chapter 1 and 2 POV pairs, and reruns every incomplete POV from chapter 1.
+
+```powershell
+npm run evals:live:full -- --prior-spend-usd 1.30 --chapter-cap-usd 0.09 --resume-report evals/reports/live-full-sequential.json
 ```
 
 Runner must load root `.env`, redact secrets, write reports under ignored `evals/reports/`, and return nonzero on gate failure.

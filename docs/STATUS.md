@@ -2,7 +2,7 @@
 
 - Updated: 2026-07-19
 - Layer: Release evaluation
-- Current phase: Phase 5 prompt `1.4.5` non-live checkpoint green before final release run
+- Current phase: Phase 5 prompt `1.4.6` non-live checkpoint green before final release run
 - Repository: initialized on `main`
 - Remote: `git@github.com:shivam-g10/infinite-litrpg.git`
 - Initial commit: `39b19a2` (`chore: scaffold agent workflow`)
@@ -21,11 +21,11 @@
 
 ## Current Blockers
 
-- Prompt `1.4.5` needs the final twelve-cycle sequential report.
+- Prompt `1.4.6` needs the final twelve-cycle sequential report.
 
 ## Next Action
 
-Commit prompt `1.4.5`. Run the final suite with prior conservative spend `$2.222336225` and chapter cap `$0.0648`.
+Commit prompt `1.4.6` and report version 5. Run the final suite with prior spend `$2.340283175` and chapter cap `$0.0549`.
 
 ## Evidence Log
 
@@ -81,5 +81,9 @@ Commit prompt `1.4.5`. Run the final suite with prior conservative spend `$2.222
 - 2026-07-19 prompt `1.4.4` full run command `npm run evals:live:full -- --prior-spend-usd 2.09344135 --chapter-cap-usd 0.07` exited 1 after two of twelve cycles. Rowan chapters 1 and 2 passed at 1,059 and 1,083 words, `$0.03187375` and `$0.0471935`, 24,633 and 27,351 ms, exact replay, all audit scores 2, and empty leak lists. One structurally invalid Luna audit on Elara exhausted the chapter's safe retry reservation. Run exposure was `$0.128894875`; cumulative conservative exposure is `$2.222336225`, leaving `$0.777663775`. Report: `evals/reports/live-full-sequential.json`.
 - 2026-07-19 prompt `1.4.5` baseline fix: Luna output first parses through a permissive candidate schema. Application code then derives approval from all seven scores and leak IDs, locks `proseHash`, and validates the final stored audit. Positive scores require `pass`; zero scores require dimension-specific failure codes. Narrator and auditor receive identical POV and world canon, including factions, class, equipment, fact provenance, and version. Evidence detail is capped at 120 characters. The 400-token experiment lacked safe headroom, so the cap remains 550. Narration targets 925 to 975 words. A six-POV 975-word empty-delta probe measured 10,174 to 10,365 serialized audit-prompt bytes and `$0.01882625` to `$0.019065` full structured-request reservation. Live report version 4 retains approved prose for recovery and human review.
 - 2026-07-19 prompt `1.4.5` non-live gate: `npm run check` and `npm audit` exited 0. Vitest passed 91 tests. Offline eval passed 14 invariant cases, 12 POV attacks, 1,000 simulations, 35 checkpoints, and the 350/no-351 horizon. Production build, 17 E2E tests with one intentional desktop skip, both security scans, 526 package licenses, and zero-vulnerability audit passed. Read-only audit review found no remaining blocker.
+- 2026-07-19 prompt `1.4.5` full run command `npm run evals:live:full -- --prior-spend-usd 2.222336225 --chapter-cap-usd 0.0648` exited 1 after two of twelve cycles. Rowan chapters 1 and 2 passed at 1,002 and 1,057 words, `$0.03570725` and `$0.0400985`, 26,593 and 27,301 ms, exact replay, all audit scores 2, and empty leak lists. Elara's audit retried one invalid structured output, then rejected prose for referring to the supplied public threat concept, “The seal beneath the old Demon Throne is weakening.” The safe preflight blocked regeneration. Run exposure was `$0.11794695`; cumulative conservative exposure is `$2.340283175`, leaving `$0.659716825`. Report: `evals/reports/live-full-sequential.json`.
+- 2026-07-19 prompt `1.4.6` baseline fix: narrator and auditor instructions now state that every `world` field is established public canon and exact restatements or faithful paraphrases are permitted. Public world support takes precedence over semantically overlapping forbidden facts; only details exclusive to forbidden facts fail. Both still forbid combining fields into new causes, mechanisms, relationships, or history. Narrator prohibitions now match that whitelist. The first invalid audit's exact cause is unavailable because rejected model output is not stored; its bounded retry worked, so the 120-character evidence limit remains unchanged.
+- 2026-07-19 report version 5: full runs require a clean committed worktree. Failed runs can resume only with the exact same prior spend, chapter cap, adapter, prompt version, and Git SHA. Strict schemas verify prose hashes, word counts, usage, audit state, trace costs, and the exact six-POV chapter 1 and 2 matrix. Resume preserves every prior attempt and rejection, retains complete POV pairs, and reruns an incomplete pair from chapter 1. Eight regressions cover strict parsing, pair retention and discard, checkpoint drift, payload tampering, matrix completeness, trace costs, and projected spend.
+- 2026-07-19 prompt `1.4.6` non-live gate: `npm run check` and `npm audit` exited 0. Vitest passed 99 tests. Offline eval passed 14 invariant cases, 12 POV attacks, 1,000 simulations, 35 checkpoints, and the 350/no-351 horizon. Production build, 17 E2E tests with one intentional desktop skip, both security scans, 526 package licenses, and zero-vulnerability audit passed. The `$0.0549` chapter cap projects worst-case cumulative exposure of `$2.999083175`.
 
 Add exact command, date, exit code, cost, and report path after every future milestone gate.

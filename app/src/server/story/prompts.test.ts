@@ -77,6 +77,9 @@ describe("background actor selection", () => {
     ) as Record<string, unknown>;
 
     expect(JSON.stringify(prompt)).toContain("No unlisted skill or item use");
+    expect(JSON.stringify(prompt)).toContain(
+      "beyond afterTurnViewpointCanon, world, currentChapterVisibleEvents",
+    );
     expect(JSON.stringify(prompt)).toContain("Never narrate what that character found");
     expect(JSON.stringify(prompt)).toContain("Never combine an identity, threat, location");
     expect(prompt.instruction).toContain("Knowledge whitelist");
@@ -126,6 +129,12 @@ describe("background actor selection", () => {
     expect(prompt).not.toHaveProperty("stateProspective");
     expect(JSON.stringify(prompt)).not.toContain("knowledgeLedgers");
     expect(prompt.instruction).toContain("Every field in afterTurnViewpointCanon");
+    expect(prompt.instruction).toContain("Every field in afterTurnViewpointCanon and world");
+    expect(prompt.instruction).toContain("world fields are not leaks");
+    expect(prompt.instruction).toContain(
+      "do not reject it solely because it overlaps a forbidden fact",
+    );
+    expect(prompt.instruction).toContain("reject only details exclusive to forbiddenFacts");
     expect(prompt.instruction).toContain("Referring to an intention");
     expect(prompt.instruction).toContain("nextChoices are future options");
     expect((prompt.forbiddenFacts as readonly { id: string }[]).map(({ id }) => id)).not.toContain(
@@ -133,6 +142,14 @@ describe("background actor selection", () => {
     );
     expect(prompt.afterTurnViewpointCanon).toEqual(narration.afterTurnViewpointCanon);
     expect(prompt.world).toEqual(narration.world);
+    expect(narration.instruction).toContain(
+      "afterTurnViewpointCanon, currentChapterVisibleEvents, currentChapterCanonicalEffects, and world",
+    );
+    expect(narration.instruction).toContain("Every field in world is established public canon");
+    expect(prompt).toHaveProperty(
+      "world.threat",
+      "The seal beneath the old Demon Throne is weakening.",
+    );
   });
 
   it("marks remote canon as forbidden audit context, not narratable canon", () => {
