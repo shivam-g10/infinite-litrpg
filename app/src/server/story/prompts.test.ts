@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import {
+  CHARACTER_IDS,
   CONTRACT_VERSION,
   PROMPT_VERSION,
   validateWorldState,
@@ -10,11 +11,15 @@ import {
 } from "@infinite-litrpg/shared";
 import { describe, expect, it } from "vitest";
 
+import { estimateMaximumRequestCostUsd } from "../openai";
+
 import {
   buildAuditPrompt,
   buildChapterFramePrompt,
   buildCustomActionPrompt,
   buildNarrationPrompt,
+  buildNarrationRecoveryPrompt,
+  MAX_NARRATION_RECOVERY_PROMPT_BYTES,
   selectBackgroundActors,
 } from "./prompts";
 
@@ -417,7 +422,7 @@ describe("background actor selection", () => {
     expect(prompt.instruction).toContain("a listed effect is not pre-existing");
   });
 
-  it("explains incomplete milestone targets and exposes two grounded action shapes", () => {
+  it("exposes app-owned milestone options and exact custom-action targets", () => {
     const state = seed();
     state.lockedPovId = "rowan-ashborn";
     state.arcClock.convergencePressure = true;
@@ -432,19 +437,59 @@ describe("background actor selection", () => {
       unknown
     >;
 
-    for (const prompt of [frame, custom]) {
-      expect(prompt).toHaveProperty("milestone.id", "act-one-survival");
-      expect(prompt).toHaveProperty("milestone.completed", false);
-      expect(prompt).toHaveProperty(
-        "milestone.description",
-        "Survive reincarnation and identify the first seal fracture.",
-      );
-      expect(prompt).toHaveProperty("legalActionTargets.investigate");
-      expect(prompt).toHaveProperty("legalActionTargets.defend");
-      expect(JSON.stringify(prompt)).toContain("directly target");
-    }
+    expect(frame).not.toHaveProperty("milestone");
+    expect(frame).not.toHaveProperty("legalActionTargets");
+    expect(frame).toHaveProperty("options.0.id", "option-1");
+    expect(frame).toHaveProperty("options.1.id", "option-2");
+    expect(JSON.stringify(frame)).toContain("urgent danger");
+    expect(JSON.stringify(frame)).not.toContain("first seal fracture");
+    expect(frame.instruction).toContain("Application code owns");
+    expect(custom).toHaveProperty("milestone.id", "act-one-survival");
+    expect(custom).toHaveProperty("milestone.completed", false);
+    expect(custom).toHaveProperty("legalActionTargets.investigate");
+    expect(custom).toHaveProperty("legalActionTargets.defend");
+    expect(JSON.stringify(custom)).toContain("directly target");
     expect(custom.instruction).toContain("Never replace an explicit investigation with wait");
     expect(custom.instruction).toContain("first legalActionTargets.investigate ID");
+  });
+
+  it("keeps the hidden act-four history out of unauthorized frame prompts", () => {
+    for (const characterId of CHARACTER_IDS.filter((id) => id !== "maelin-rook")) {
+      const state = seed();
+      state.act = 4;
+      state.arcClock.convergencePressure = true;
+      state.calendar.day = 198;
+      state.calendar.label = "Year 1, Ashfall 198";
+      state.chapter = 197;
+      state.lockedPovId = characterId;
+      state.version = 198;
+      for (const milestone of state.arcClock.milestones) {
+        milestone.completed = milestone.requiredByChapter <= state.chapter;
+      }
+
+      const prompt = buildChapterFramePrompt(state);
+      expect(prompt).not.toContain("Malachar contained the Void");
+      expect(prompt).not.toContain("malachar-contained-the-void");
+      expect(prompt).not.toContain("Reveal why Malachar");
+    }
+  });
+
+  it("bounds a tail-only 848-word narration recovery request", () => {
+    const prose = Array.from({ length: 848 }, (_, index) => `ember${index}`).join(" ");
+    const recovery = buildNarrationRecoveryPrompt(prose);
+    const requestBytes = new TextEncoder().encode(
+      `${recovery.instructions}\n${recovery.input}\n`,
+    ).byteLength;
+
+    expect(recovery.minimumAdditionalWords).toBe(52);
+    expect(recovery.maximumAdditionalWords).toBe(67);
+    expect(requestBytes).toBeLessThanOrEqual(MAX_NARRATION_RECOVERY_PROMPT_BYTES);
+    expect(estimateMaximumRequestCostUsd("gpt-5.6-luna", requestBytes, 140)).toBeLessThanOrEqual(
+      0.00298,
+    );
+    expect(recovery.input).not.toContain("ember0");
+    expect(recovery.input).toContain("ember847");
+    expect(() => buildNarrationRecoveryPrompt("ember ".repeat(839))).toThrow("840 and 899");
   });
 });
 

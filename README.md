@@ -50,9 +50,14 @@ flowchart LR
     L["Up to 3 Luna intent agents"] --> R["Single world resolver"]
     V --> R
     R --> S["Prospective state"]
+    S --> O["Luna title and option ranking"]
+    O --> F["App-owned legal choices"]
     S --> T["Terra POV chapter"]
     K["POV-safe knowledge"] --> T
+    T --> X["Bounded Luna length recovery when needed"]
+    X --> A
     T --> A["Luna narrative audit"]
+    F --> A
     A --> C["Atomic SQLite commit"]
     C --> P["Reader and God Mode"]
 ```
@@ -63,11 +68,11 @@ See [architecture](docs/ARCHITECTURE.md), [domain model](docs/DOMAIN_MODEL.md), 
 
 ## Model roles
 
-| Work                                         | Model           |
-| -------------------------------------------- | --------------- |
-| World genesis, hard recovery, finale         | `gpt-5.6-sol`   |
-| Action translation, chapter frame, narration | `gpt-5.6-terra` |
-| Background intents, narrative audit          | `gpt-5.6-luna`  |
+| Work                                                       | Model           |
+| ---------------------------------------------------------- | --------------- |
+| World genesis, hard recovery, finale                       | `gpt-5.6-sol`   |
+| Custom-action translation and narration                    | `gpt-5.6-terra` |
+| Background intents, option ranking, length recovery, audit | `gpt-5.6-luna`  |
 
 Only the OpenAI Responses API is used.
 

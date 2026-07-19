@@ -200,6 +200,26 @@ describe("stable Responses adapter", () => {
     );
   });
 
+  it("replays the exact prose accepted by an audit repair", async () => {
+    const response = narrationResponse("Ash crown");
+    const stream = vi.fn().mockReturnValue(fakeStream(["Ash crown"], response));
+
+    const result = await createAuditedNarrationReplay(stableClient({ stream }), {
+      audit: () => ({ accepted: true, auditedProse: "Ash crown settled." }),
+      input: "safe POV context",
+      instructions: "Narrate.",
+      maxOutputTokens: 100,
+      model: "gpt-5.6-terra",
+      policy: { budget: new ChapterCostBudget(1), maxRetries: 0 },
+      reasoningEffort: "none",
+    });
+
+    expect(result.prose).toBe("Ash crown settled.");
+    const chunks: string[] = [];
+    for await (const chunk of result.replay) chunks.push(chunk);
+    expect(chunks.join("")).toBe("Ash crown settled.");
+  });
+
   it("regenerates rejected prose within the retry bound and aggregates usage", async () => {
     const rejected = narrationResponse("too long");
     const approved = narrationResponse("valid prose");

@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { CHARACTER_IDS } from "../characters";
 import {
   CONTRACT_VERSION,
   NARRATIVE_AUDIT_DIMENSIONS,
@@ -11,6 +12,8 @@ import {
   type WorldState,
 } from "../contracts";
 import {
+  buildChapterChoiceOptions,
+  canonicalizeChapterFrameCandidate,
   validateChapterDraft,
   validateChapterFrameSafety,
   validateSuggestedChoices,
@@ -60,6 +63,81 @@ describe("narrative gates", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("canonicalizes model option rankings into legal app-owned choices", () => {
+    for (const characterId of CHARACTER_IDS) {
+      const state = seedState();
+      state.lockedPovId = characterId;
+      const options = buildChapterChoiceOptions(state);
+      expect(options.length).toBeGreaterThanOrEqual(2);
+      const frame = canonicalizeChapterFrameCandidate(state, {
+        optionIds: [options[1]!.id, options[1]!.id],
+        title: "A Canonical Turn",
+      });
+      expect(frame.ok).toBe(true);
+      if (frame.ok) {
+        expect(frame.data.choices.map(({ id }) => id)).toEqual(["choice-1", "choice-2"]);
+        expect(validateSuggestedChoices(state, frame.data.choices).ok).toBe(true);
+      }
+    }
+  });
+
+  it("keeps app-owned choices legal with maximum-length source names", () => {
+    const state = seedState();
+    for (const location of state.locations) location.name = "L".repeat(240);
+    for (const character of state.characters) {
+      character.name = "C".repeat(240);
+      for (const skill of character.skills) skill.name = "S".repeat(240);
+      for (const item of character.inventory) item.name = "I".repeat(240);
+    }
+    expect(validateWorldState(state).ok).toBe(true);
+
+    const options = buildChapterChoiceOptions(state);
+    expect(options.length).toBeGreaterThanOrEqual(2);
+    expect(options.every(({ description }) => description.length <= 240)).toBe(true);
+    expect(
+      canonicalizeChapterFrameCandidate(state, {
+        optionIds: options.slice(0, 2).map(({ id }) => id),
+        title: "Long Names",
+      }).ok,
+    ).toBe(true);
+  });
+
+  it("builds direct milestone choices and a zero-choice terminal frame", () => {
+    for (const chapter of [47, 97, 147, 197, 247, 297, 347]) {
+      const locked = seedState();
+      locked.act = (Math.floor(chapter / 50) + 1) as WorldState["act"];
+      locked.arcClock.convergencePressure = true;
+      locked.calendar.day = chapter + 1;
+      locked.calendar.label = `Year 1, Ashfall ${chapter + 1}`;
+      locked.chapter = chapter;
+      locked.version = chapter + 1;
+      for (const milestone of locked.arcClock.milestones) {
+        milestone.completed = milestone.requiredByChapter <= chapter;
+      }
+      const expectedMilestone = locked.arcClock.milestones.find(({ act }) => act === locked.act);
+      const lockedOptions = buildChapterChoiceOptions(locked);
+      expect(lockedOptions.length).toBeGreaterThanOrEqual(2);
+      expect(
+        lockedOptions.slice(0, 2).every(({ milestoneId }) => milestoneId === expectedMilestone?.id),
+      ).toBe(true);
+    }
+
+    const terminal = seedState();
+    terminal.act = 7;
+    terminal.calendar.day = 351;
+    terminal.calendar.label = "Year 1, Ashfall 351";
+    terminal.chapter = 350;
+    terminal.terminal = true;
+    terminal.terminalReason = "Chapter 350 terminal resolution";
+    terminal.version = 351;
+    for (const milestone of terminal.arcClock.milestones) milestone.completed = true;
+    const frame = canonicalizeChapterFrameCandidate(terminal, {
+      optionIds: ["invented-option"],
+      title: "The Last Crown",
+    });
+    expect(frame).toMatchObject({ ok: true, data: { choices: [], terminal: true } });
+  });
+
   it("rejects duplicate attempts and literal hidden-fact leakage", () => {
     const state = seedState();
     const duplicate = [legalChoices()[0], { ...legalChoices()[0], id: "choice-2" }];
@@ -67,6 +145,12 @@ describe("narrative gates", () => {
     expect(choiceResult.ok).toBe(false);
     if (!choiceResult.ok) {
       expect(choiceResult.issues.some(({ code }) => code === "CHOICES_NOT_DISTINCT")).toBe(true);
+    }
+    const duplicateIds = [legalChoices()[0], { ...legalChoices()[1], id: "choice-1" }];
+    const duplicateIdResult = validateSuggestedChoices(state, duplicateIds);
+    expect(duplicateIdResult.ok).toBe(false);
+    if (!duplicateIdResult.ok) {
+      expect(duplicateIdResult.issues.some(({ code }) => code === "INVALID_SCHEMA")).toBe(true);
     }
 
     const leaked = validateChapterDraft(state, {

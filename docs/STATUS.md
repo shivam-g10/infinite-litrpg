@@ -2,7 +2,7 @@
 
 - Updated: 2026-07-19
 - Layer: Release evaluation
-- Current phase: Phase 5 prompt `1.4.7` non-live checkpoint green; final release run pending
+- Current phase: Phase 5 prompt `1.4.8` non-live checkpoint green; final release run pending
 - Repository: initialized on `main`
 - Remote: `git@github.com:shivam-g10/infinite-litrpg.git`
 - Initial commit: `39b19a2` (`chore: scaffold agent workflow`)
@@ -21,11 +21,11 @@
 
 ## Current Blockers
 
-- The final twelve-cycle sequential report has not run on prompt `1.4.7`.
+- The final twelve-cycle sequential report has not run on prompt `1.4.8`.
 
 ## Next Action
 
-Run the final suite from the clean prompt `1.4.7` checkpoint with prior spend `$2.371789175` and chapter cap `$0.0523`.
+Create the clean prompt `1.4.8` checkpoint. Then run the final suite with prior spend `$2.3994093` and chapter cap `$0.05`.
 
 ## Evidence Log
 
@@ -89,5 +89,9 @@ Run the final suite from the clean prompt `1.4.7` checkpoint with prior spend `$
 - 2026-07-19 prompt `1.4.7` baseline fix: the full live runner still permits three background agents. Strict chapter frames move from Terra to Luna under ADR-008; deterministic frame validation is unchanged. Narration targets 900 to 925 words. Narration and audit deduplicate same-turn visible events. Compact labeled maps and tuples preserve every deliberate narration-whitelist value and every forbidden remote-effect value. Existing-fact provenance, skill unlock metadata, world version, and non-POV factions stay outside the whitelist; projection regressions lock those safety boundaries. Luna returns ordered scores, evidence strings, and leak IDs; application code derives issue codes, approval, and the prose hash, then validates the unchanged final `NarrativeAudit`. Targeted typecheck and 36 prompt, narrative, and service tests exited 0.
 - 2026-07-19 prompt `1.4.7` cost proof: reconstructing the old 1,057-word Rowan chapter produced an 11,888-byte audit input, 37-byte Responses instruction, 587-byte strict schema, and 12,514-byte full request. The 450-token Luna reservation is `$0.0189825`. With two old Rowan background-call costs, Luna-priced frame usage, and the old longer narration cost, the `$0.0523` chapter cap retains `$0.0011215`; the conservative three-agent Elara case retains `$0.00124925`. A separate three-agent 900-word service request reserved `$0.01773125` for audit and committed under the release cap. The shorter narration target reduces both narration output and audit prose bytes beyond the old-output bounds.
 - 2026-07-19 prompt `1.4.7` non-live gate: `npm run check` and `npm audit` exited 0. Vitest passed 102 tests. Offline eval passed 14 invariant cases, 12 POV attacks, 1,000 simulations, 35 checkpoints, and the 350/no-351 horizon. Production build, 17 E2E tests with one intentional desktop skip, both security scans across 140 working files and the client bundle, 526 package licenses, and zero-vulnerability audit passed. A follow-up lint, typecheck, and 36-test targeted run also exited 0 with no lint warnings.
+- 2026-07-19 prompt `1.4.7` full run command `npm run evals:live:full -- --prior-spend-usd 2.371789175 --chapter-cap-usd 0.0523` exited 1 with zero commits. One Nyra background intent cost `$0.00321`. Two invalid Luna frame attempts cost `$0.0029875` and `$0.00086`; the accepted frame cost `$0.000872`. Terra returned 848 words for `$0.019690625`. The remaining `$0.024679875` could not reserve a `$0.037591` full Terra retry. Run exposure was `$0.027620125`; cumulative conservative exposure is `$2.3994093`, leaving `$0.6005907`. Archived report: `evals/reports/live-full-sequential-prompt-1.4.7.json`.
+- 2026-07-19 prompt `1.4.8` baseline fix: application code enumerates legal choices and owns every final frame field except Luna's title and option ranking. Terra targets 975 to 1,000 words. A sole 840-to-899-word failure may use one tail-only Luna continuation with a 1,200-byte request cap and no retry. Underlength validation still runs hidden-fact and every other deterministic check before recovery. Merged prose reruns full validation and independent audit, then alone is hashed, stored, and exactly replayed.
+- 2026-07-19 prompt `1.4.8` cost and review proof: the live-shaped three-agent regression includes two cache-realistic rejected frame candidates, an 848-word Terra draft, 52-word Luna recovery, full audit, exact trace accounting, hash equality, and replay equality. It committed at `$0.0332095` under `$0.05`. Every maximum request preflight stayed below the cap; the tightest was Terra narration at `$0.049653875`. Recovery is bounded at `$0.00298`. Two independent read-only reviews found no remaining defect. Targeted Vitest passed 54 tests, strict typecheck passed, and `git diff --check` passed.
+- 2026-07-19 prompt `1.4.8` non-live gate: `npm run check` and `npm audit` exited 0. Vitest passed 108 tests. Offline eval passed 14 invariant cases, 12 POV attacks, 1,000 simulations, 35 checkpoints, and the 350/no-351 horizon. Production build, 17 E2E tests with one intentional desktop skip, secret scan across 142 working files, client-bundle scan, 526 package licenses, and zero-vulnerability audit passed.
 
 Add exact command, date, exit code, cost, and report path after every future milestone gate.

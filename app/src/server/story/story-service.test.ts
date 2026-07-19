@@ -173,7 +173,7 @@ describe("StoryService", () => {
     const store = new StoryStore();
     const hiddenClaim = "Malachar contained the Void beneath his throne.";
     const hiddenFactId = "malachar-contained-the-void";
-    const hiddenProse = `${hiddenClaim} ${Array.from({ length: 893 }, (_, index) => `ember${index}`).join(" ")}`;
+    const hiddenProse = `${hiddenClaim} ${Array.from({ length: 841 }, (_, index) => `ember${index}`).join(" ")}`;
     const auditedProse = Array.from({ length: 900 }, (_, index) => `cinder${index}`).join(" ");
     const finalProse = Array.from({ length: 900 }, (_, index) => `ash${index}`).join(" ");
     const frame = {
@@ -274,9 +274,11 @@ describe("StoryService", () => {
     store.close();
   });
 
-  it("reaches audit with three background agents under the release cap", async () => {
+  it("repairs an 848-word draft with three background agents under the release cap", async () => {
     const store = new StoryStore();
-    const prose = Array.from({ length: 900 }, () => "ember").join(" ");
+    const rawProse = Array.from({ length: 848 }, () => "ember").join(" ");
+    const continuation = Array.from({ length: 52 }, () => "cinder").join(" ");
+    const prose = `${rawProse} ${continuation}`;
     const proseHash = createHash("sha256").update(prose).digest("hex");
     const actorIds = ["lucan-aurelis", "maelin-rook", "nyra-vale"] as const;
     const meteredUsage = usage(1_000, 200);
@@ -297,6 +299,10 @@ describe("StoryService", () => {
       ],
       terminal: false,
       title: "The Capital Road",
+    } as const;
+    const unsafeFrame = {
+      ...frame,
+      title: "Malachar contained the Void beneath his throne.",
     } as const;
     const audit: NarrativeAudit = {
       approved: true,
@@ -324,29 +330,44 @@ describe("StoryService", () => {
         parsedResponse(waitIntent(actorIds[1], 1), "resp_maelin", meteredUsage),
       )
       .mockResolvedValueOnce(parsedResponse(waitIntent(actorIds[2], 2), "resp_nyra", meteredUsage))
-      .mockResolvedValueOnce(parsedResponse(frame, "resp_frame_three", meteredUsage))
+      .mockResolvedValueOnce(
+        parsedResponse(unsafeFrame, "resp_frame_hidden_1", usage(1_853, 112, 0, 1_850)),
+      )
+      .mockResolvedValueOnce(
+        parsedResponse(unsafeFrame, "resp_frame_hidden_2", usage(1_853, 112, 1_850)),
+      )
+      .mockResolvedValueOnce(parsedResponse(frame, "resp_frame_three", usage(1_853, 114, 1_850)))
       .mockResolvedValueOnce(parsedResponse(audit, "resp_audit_three", meteredUsage));
     const stream = vi
       .fn()
-      .mockReturnValue(fakeStream(prose, "resp_narration_three", usage(1_943, 1_200)));
+      .mockReturnValueOnce(fakeStream(rawProse, "resp_narration_three", usage(1_252, 1_052)))
+      .mockReturnValueOnce(fakeStream(continuation, "resp_recovery_three", usage(300, 80)));
     const service = new StoryService(store, { responses: { parse, stream } } as unknown as OpenAI, {
       maxBackgroundAgents: 3,
-      maxCostUsdPerChapter: 0.0523,
+      maxCostUsdPerChapter: 0.05,
       nativeMultiAgent: false,
     });
     const selected = service.selectPov("elara-voss");
 
-    const result = await service.takeTurn({
-      choiceId: selected.chapter.choices[0]?.id ?? "missing",
-      expectedWorldVersion: 1,
-      requestId: "00000000-0000-4000-8000-000000000050",
-      type: "take_action",
-    });
+    const replayed: string[] = [];
+    const result = await service.takeTurn(
+      {
+        choiceId: selected.chapter.choices[0]?.id ?? "missing",
+        expectedWorldVersion: 1,
+        requestId: "00000000-0000-4000-8000-000000000050",
+        type: "take_action",
+      },
+      (chunk) => {
+        replayed.push(chunk);
+      },
+    );
 
     expect(result.world).toMatchObject({ chapter: 1, version: 2 });
-    expect(result.estimatedCostUsd).toBeLessThanOrEqual(0.0523);
-    expect(parse).toHaveBeenCalledTimes(5);
-    expect(stream).toHaveBeenCalledTimes(1);
+    expect(result.estimatedCostUsd).toBeLessThanOrEqual(0.05);
+    expect(result.chapter.prose).toBe(prose);
+    expect(parse).toHaveBeenCalledTimes(7);
+    expect(stream).toHaveBeenCalledTimes(2);
+    expect(replayed.join("")).toBe(prose);
     const calls = result.godMode.calls as readonly {
       agentId: string | null;
       model: string;
@@ -356,7 +377,27 @@ describe("StoryService", () => {
       actorIds,
     );
     expect(calls).toEqual(
-      expect.arrayContaining([expect.objectContaining({ model: "gpt-5.6-luna", phase: "audit" })]),
+      expect.arrayContaining([
+        expect.objectContaining({ model: "gpt-5.6-luna", phase: "recovery" }),
+        expect.objectContaining({ model: "gpt-5.6-luna", phase: "audit" }),
+      ]),
+    );
+    const chapter = store.loadChapter("ashen-crown-v1", 1);
+    if (!chapter) throw new Error("Three-agent recovery chapter missing");
+    const trace = store.loadTrace(chapter.traceId);
+    if (!trace) throw new Error("Three-agent recovery trace missing");
+    expect(chapter.proseHash).toBe(proseHash);
+    expect(chapter.narrativeAudit.proseHash).toBe(proseHash);
+    expect(trace.attempts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ model: "gpt-5.6-luna", phase: "recovery" }),
+      ]),
+    );
+    expect(trace.totalEstimatedCostUsd).toBe(
+      trace.attempts.reduce((sum, attempt) => sum + attempt.costUsd, 0),
+    );
+    expect(trace.totalUsage.totalTokens).toBe(
+      trace.attempts.reduce((sum, attempt) => sum + attempt.usage.totalTokens, 0),
     );
     store.close();
   });
@@ -1007,7 +1048,7 @@ function parsedResponse<T>(
   id: string,
   responseUsage: ResponseUsage = usage(),
 ): ParsedResponse<T> {
-  const modelOutput = auditCandidateOutput(output);
+  const modelOutput = structuredCandidateOutput(output);
   return {
     error: null,
     id,
@@ -1020,7 +1061,17 @@ function parsedResponse<T>(
   } as unknown as ParsedResponse<T>;
 }
 
-function auditCandidateOutput(output: unknown): unknown {
+function structuredCandidateOutput(output: unknown): unknown {
+  if (
+    typeof output === "object" &&
+    output !== null &&
+    "choices" in output &&
+    "terminal" in output &&
+    "title" in output &&
+    !("prose" in output)
+  ) {
+    return { optionIds: [], title: (output as { title: unknown }).title };
+  }
   if (
     typeof output !== "object" ||
     output === null ||
@@ -1058,10 +1109,18 @@ function fakeStream(prose: string, id = "resp_narration", responseUsage: Respons
   };
 }
 
-function usage(inputTokens = 100, outputTokens = 20): ResponseUsage {
+function usage(
+  inputTokens = 100,
+  outputTokens = 20,
+  cachedInputTokens = 0,
+  cacheWriteTokens = 0,
+): ResponseUsage {
   return {
     input_tokens: inputTokens,
-    input_tokens_details: { cache_write_tokens: 0, cached_tokens: 0 },
+    input_tokens_details: {
+      cache_write_tokens: cacheWriteTokens,
+      cached_tokens: cachedInputTokens,
+    },
     output_tokens: outputTokens,
     output_tokens_details: { reasoning_tokens: 2 },
     total_tokens: inputTokens + outputTokens,

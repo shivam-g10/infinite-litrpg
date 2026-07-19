@@ -5,12 +5,13 @@ import { resolve } from "node:path";
 
 import {
   CONTRACT_VERSION,
-  ChapterFrameSchema,
+  ChapterFrameCandidateSchema,
   NARRATIVE_AUDIT_DIMENSIONS,
   NarrativeAuditCandidateSchema,
   NarrativeAuditSchema,
   PlayerActionSchema,
   PROMPT_VERSION,
+  type ChapterFrame,
   type ChapterRecord,
   type Choice,
   type ModelCallTrace,
@@ -21,11 +22,11 @@ import {
   type ValidationIssue,
   type WorldState,
   buildPovContext,
+  canonicalizeChapterFrameCandidate,
   getClockPolicy,
   resolveTurn,
   stageWorldDelta,
   validateChapterDraft,
-  validateChapterFrameSafety,
   validateSuggestedChoices,
   validateWorldState,
 } from "@infinite-litrpg/shared";
@@ -53,6 +54,7 @@ import {
   buildLunaAgentInputs,
   buildLunaCoordinatorInstructions,
   buildNarrationPrompt,
+  buildNarrationRecoveryPrompt,
   selectBackgroundActors,
 } from "./prompts";
 
@@ -295,18 +297,17 @@ export class StoryService {
       }
       const prospective = staged.data.state;
 
-      const frameCall = await runStructuredResponse(this.client, {
+      const frameCandidateCall = await runStructuredResponse(this.client, {
         input: buildChapterFramePrompt(prospective),
-        instructions:
-          "Return a strict chapter frame: title, terminal flag, and two legal next choices unless terminal.",
-        maxOutputTokens: 800,
+        instructions: "Return a short title and ranked option IDs. Return schema JSON only.",
+        maxOutputTokens: 400,
         model: "gpt-5.6-luna",
         policy,
         reasoningEffort: "none",
-        schema: ChapterFrameSchema,
+        schema: ChapterFrameCandidateSchema,
         schemaName: "chapter_frame",
-        validate: (frame) => {
-          const frameValidation = validateChapterFrameSafety(prospective, frame);
+        validate: (candidate) => {
+          const frameValidation = canonicalizeChapterFrameCandidate(prospective, candidate);
           if (!frameValidation.ok) {
             throw new OpenAIRuntimeError(
               "INVALID_OUTPUT",
@@ -316,9 +317,24 @@ export class StoryService {
           }
         },
       });
+      const frameValidation = canonicalizeChapterFrameCandidate(
+        prospective,
+        frameCandidateCall.data,
+      );
+      if (!frameValidation.ok) {
+        throw new StoryServiceError(
+          `Canonical frame is invalid: ${formatIssues(frameValidation.issues)}`,
+          502,
+        );
+      }
+      const frameCall: RuntimeCallResult<ChapterFrame> = {
+        ...frameCandidateCall,
+        data: frameValidation.data,
+      };
       calls.push(toModelCall(frameCall, "gpt-5.6-luna", "intent", null));
 
       const auditCalls: RuntimeCallResult<NarrativeAudit>[] = [];
+      const recoveryCalls: Array<Parameters<typeof toModelCall>[0]> = [];
       let approvedAudit: NarrativeAudit | null = null;
       let retryDirective: string | null = null;
       const allowedFactIds = new Set(buildPovContext(prospective, before.lockedPovId).factIds);
@@ -331,20 +347,62 @@ export class StoryService {
       attemptPhase = "narration";
       const narration = await createAuditedNarrationReplay(this.client, {
         audit: async (prose) => {
-          const draft = validateChapterDraft(prospective, {
+          let auditedProse = prose;
+          let draft = validateChapterDraft(prospective, {
             choices: frameCall.data.choices,
             contractVersion: CONTRACT_VERSION,
-            prose,
+            prose: auditedProse,
             terminal: prospective.terminal,
             title: frameCall.data.title,
           });
           if (!draft.ok) {
             this.options.onNarrativeDraftRejected?.(draft.issues);
+            if (canRecoverShortNarration(prose, draft.issues)) {
+              const recoveryPrompt = buildNarrationRecoveryPrompt(prose);
+              attemptPhase = "recovery";
+              try {
+                const recoveryCall = await createAuditedNarrationReplay(this.client, {
+                  audit: (continuation) => {
+                    const continuationWords = countWords(continuation);
+                    const accepted =
+                      continuationWords >= recoveryPrompt.minimumAdditionalWords &&
+                      continuationWords <= recoveryPrompt.maximumAdditionalWords;
+                    return accepted
+                      ? { accepted: true }
+                      : {
+                          accepted: false,
+                          reason: `Continuation must contain ${recoveryPrompt.minimumAdditionalWords} to ${recoveryPrompt.maximumAdditionalWords} words`,
+                        };
+                  },
+                  chunkCharacters: 512,
+                  input: recoveryPrompt.input,
+                  instructions: recoveryPrompt.instructions,
+                  maxOutputTokens: 140,
+                  model: "gpt-5.6-luna",
+                  policy: { ...policy, maxRetries: 0 },
+                  reasoningEffort: "none",
+                });
+                recoveryCalls.push(recoveryCall);
+                auditedProse = `${prose.trim()} ${recoveryCall.prose.trim()}`;
+              } finally {
+                attemptPhase = "narration";
+              }
+              draft = validateChapterDraft(prospective, {
+                choices: frameCall.data.choices,
+                contractVersion: CONTRACT_VERSION,
+                prose: auditedProse,
+                terminal: prospective.terminal,
+                title: frameCall.data.title,
+              });
+              if (!draft.ok) this.options.onNarrativeDraftRejected?.(draft.issues);
+            }
+          }
+          if (!draft.ok) {
             const safeIssueCodes = [...new Set(draft.issues.map(({ code }) => code))].sort();
-            retryDirective = `The prior draft failed deterministic validation with issue codes: ${safeIssueCodes.join(", ")}. Write 900 to 925 words. Remove every unsupported fact or action. Never repeat prior text that is absent from the supplied POV canon.`;
+            retryDirective = `The prior draft failed deterministic validation with issue codes: ${safeIssueCodes.join(", ")}. Write 975 to 1000 words. Remove every unsupported fact or action. Never repeat prior text that is absent from the supplied POV canon.`;
             return { accepted: false, reason: formatIssues(draft.issues) };
           }
-          const proseHash = hashText(prose);
+          const proseHash = hashText(auditedProse);
           attemptPhase = "audit";
           let auditCall: RuntimeCallResult<NarrativeAudit>;
           try {
@@ -355,7 +413,7 @@ export class StoryService {
                 playerAction,
                 resolved.data.delta,
                 frameCall.data,
-                prose,
+                auditedProse,
               ),
               instructions: "Audit canon. Return schema JSON only.",
               maxOutputTokens: 450,
@@ -395,6 +453,7 @@ export class StoryService {
           }
           return {
             accepted: approvedAudit.approved,
+            auditedProse,
             reason: approvedAudit.evidence.map(({ detail }) => detail).join(" "),
           };
         },
@@ -406,12 +465,15 @@ export class StoryService {
           }),
         instructions:
           "Write close-third Ashen Crown prose. Obey the supplied canon whitelist exactly.",
-        maxOutputTokens: 1_300,
+        maxOutputTokens: 1_400,
         model: "gpt-5.6-terra",
         policy,
         reasoningEffort: "none",
       });
       calls.push(toModelCall(narration, "gpt-5.6-terra", "narration", null));
+      calls.push(
+        ...recoveryCalls.map((call) => toModelCall(call, "gpt-5.6-luna", "recovery", null)),
+      );
       if (auditCalls.length === 0 || approvedAudit === null) {
         throw new StoryServiceError("Narrative audit did not complete", 502);
       }
@@ -809,6 +871,22 @@ function formatIssues(
   issues: readonly { readonly code: string; readonly message: string }[],
 ): string {
   return issues.map(({ code, message }) => `${code}: ${message}`).join("; ");
+}
+
+function countWords(value: string): number {
+  return value.trim().split(/\s+/u).filter(Boolean).length;
+}
+
+function canRecoverShortNarration(prose: string, issues: readonly ValidationIssue[]): boolean {
+  const words = countWords(prose);
+  return (
+    words >= 840 &&
+    words <= 899 &&
+    issues.length === 1 &&
+    issues[0]?.code === "INVALID_SCHEMA" &&
+    issues[0].path === "prose" &&
+    issues[0].message.startsWith("Chapter prose must contain 900 to 1300 words")
+  );
 }
 
 function locationNames(state: WorldState): Map<string, string> {

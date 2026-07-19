@@ -96,6 +96,7 @@ export async function runStructuredResponse<T>(
 
 export interface NarrativeAuditVerdict {
   readonly accepted: boolean;
+  readonly auditedProse?: string;
   readonly reason?: string;
 }
 
@@ -163,8 +164,14 @@ export async function createAuditedNarrationReplay(
           { retryable: true },
         );
       }
+      const auditedProse = audit.auditedProse ?? response.output_text;
+      if (auditedProse.trim().length === 0) {
+        throw new OpenAIRuntimeError("INVALID_OUTPUT", "Audited narration had no prose", {
+          retryable: true,
+        });
+      }
       return {
-        data: { audit, prose: response.output_text },
+        data: { audit, prose: auditedProse },
         responseId: response.id,
       };
     },

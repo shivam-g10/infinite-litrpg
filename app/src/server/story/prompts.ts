@@ -1,6 +1,7 @@
 import {
   CONTRACT_VERSION,
   PROMPT_VERSION,
+  buildChapterChoiceOptions,
   buildPovContext,
   getClockPolicy,
   type CharacterState,
@@ -109,24 +110,11 @@ export function buildCustomActionPrompt(state: WorldState, description: string):
 
 export function buildChapterFramePrompt(state: WorldState): string {
   if (state.lockedPovId === null) throw new Error("POV must be locked");
-  const policy = getClockPolicy(state.chapter);
-  const milestone = state.arcClock.milestones.find(({ act }) => act === policy.currentAct);
   return JSON.stringify({
     instruction:
-      "Return a short chapter title and exactly two materially different, legal next attempts. A terminal state returns zero choices. Never reveal hidden facts. During a milestone lock, both choices copy milestone.id into milestoneId and use compatible action types. If completed is false, each action directly targets milestone.id through investigate.subjectId or a supported targetId; return two distinct action objects.",
-    milestone:
-      policy.choicesRequireMilestone && milestone
-        ? {
-            compatibleActionTypes: milestone.compatibleActionTypes,
-            completed: milestone.completed,
-            completionTargetRule:
-              "When incomplete, directly target id through investigate.subjectId or targetId. Move and rally cannot complete a milestone.",
-            description: milestone.description,
-            id: milestone.id,
-          }
-        : null,
+      "Return a short chapter title and rank up to two supplied option IDs. Use only option IDs listed below. Never reveal hidden facts. Application code owns terminal state, actions, choice IDs, descriptions, and milestone targets.",
+    options: buildChapterChoiceOptions(state).map(({ description, id }) => ({ description, id })),
     stateVersion: state.version,
-    legalActionTargets: legalActionTargets(state, state.lockedPovId),
     terminal: state.terminal,
     viewpoint: buildPovContext(state, state.lockedPovId),
     world: publicWorldContext(state),
@@ -153,7 +141,7 @@ export function buildNarrationPrompt(
       "No time beyond calendar. No durable fact beyond the whitelist. Sensory texture adds no canon. Never combine identity, threat, location, plan, belief, goal, history, names, or themes into an unlisted relationship, cause, mechanism, or memory.",
     ],
     instruction:
-      "Write only complete close-third chapter prose, 900 to 925 words; stop before 950. Valid range is 900 to 1300. Dramatize exactly playerAction and currentEffects. currentEffects and visibleEvents happen now; afterCanon includes their results; beforeValues are prior and must be compared for a new change. Show only supplied LitRPG changes. afterCanon, visibleEvents, currentEffects, and world are the exhaustive whitelist. Every world field is public canon and may be restated or paraphrased. Any relationship between people, threats, places, events, or history requires one exact whitelist field. Never infer causes, mechanisms, relationships, consequences, or remembered history from identities, plans, beliefs, goals, shared terms, or facts. Build depth only with immediate sensory texture, supplied beliefs, goals, and facts at face value. Append no choices or notes.",
+      "Write only complete close-third chapter prose, 975 to 1000 words. Never stop before 975; stop before 1050. Valid range is 900 to 1300. Dramatize exactly playerAction and currentEffects. currentEffects and visibleEvents happen now; afterCanon includes their results; beforeValues are prior and must be compared for a new change. Show only supplied LitRPG changes. afterCanon, visibleEvents, currentEffects, and world are the exhaustive whitelist. Every world field is public canon and may be restated or paraphrased. Any relationship between people, threats, places, events, or history requires one exact whitelist field. Never infer causes, mechanisms, relationships, consequences, or remembered history from identities, plans, beliefs, goals, shared terms, or facts. Build depth only with immediate sensory texture, supplied beliefs, goals, and facts at face value. Append no choices or notes.",
     playerAction: compactPlayerAction(playerAction),
     stateTransition: {
       actAfter: prospective.act,
@@ -165,6 +153,55 @@ export function buildNarrationPrompt(
     visibleEvents: visibleEventsForPov(delta, povId),
     world: localWorldContext(before, prospective, povId, delta),
   });
+}
+
+export const MAX_NARRATION_RECOVERY_PROMPT_BYTES = 1_200;
+export const NARRATION_RECOVERY_INSTRUCTIONS = "Return continuation only.";
+
+export interface NarrationRecoveryPrompt {
+  readonly input: string;
+  readonly instructions: string;
+  readonly maximumAdditionalWords: number;
+  readonly minimumAdditionalWords: number;
+}
+
+export function buildNarrationRecoveryPrompt(prose: string): NarrationRecoveryPrompt {
+  const words = prose.trim().split(/\s+/u).filter(Boolean);
+  if (words.length < 840 || words.length > 899) {
+    throw new Error("Narration recovery requires a draft between 840 and 899 words");
+  }
+  const minimumAdditionalWords = 900 - words.length;
+  const maximumAdditionalWords = 915 - words.length;
+  let excerptWords = words.slice(-120);
+  const serialize = () =>
+    JSON.stringify({
+      existingEnding: excerptWords.join(" "),
+      instruction:
+        "Return only a seamless continuation. Add no new action, event, entity, dialogue, mechanic, fact, relationship, cause, discovery, decision, time passage, or state change. Reuse only established details from existingEnding. No title, heading, note, or choices.",
+      maximumAdditionalWords,
+      minimumAdditionalWords,
+    });
+  let input = serialize();
+  while (
+    recoveryPromptBytes(input) > MAX_NARRATION_RECOVERY_PROMPT_BYTES &&
+    excerptWords.length > 1
+  ) {
+    excerptWords = excerptWords.slice(1);
+    input = serialize();
+  }
+  if (recoveryPromptBytes(input) > MAX_NARRATION_RECOVERY_PROMPT_BYTES) {
+    throw new Error("Narration recovery prompt exceeds its byte cap");
+  }
+  return {
+    input,
+    instructions: NARRATION_RECOVERY_INSTRUCTIONS,
+    maximumAdditionalWords,
+    minimumAdditionalWords,
+  };
+}
+
+function recoveryPromptBytes(input: string): number {
+  return new TextEncoder().encode(`${NARRATION_RECOVERY_INSTRUCTIONS}\n${input}\n`).byteLength;
 }
 
 export function buildAuditPrompt(

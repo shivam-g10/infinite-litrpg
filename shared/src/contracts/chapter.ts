@@ -21,7 +21,7 @@ export const ChoiceSchema = z
   })
   .strict();
 
-export const ChapterDraftSchema = z
+export const ChapterDraftCandidateSchema = z
   .object({
     choices: z.array(ChoiceSchema).max(2),
     contractVersion: z.literal(CONTRACT_VERSION),
@@ -29,8 +29,10 @@ export const ChapterDraftSchema = z
     terminal: z.boolean(),
     title: ShortTextSchema,
   })
-  .strict()
-  .superRefine(({ choices, prose, terminal }, context) => {
+  .strict();
+
+export const ChapterDraftSchema = ChapterDraftCandidateSchema.superRefine(
+  ({ choices, prose, terminal }, context) => {
     const wordCount = prose.trim().split(/\s+/u).filter(Boolean).length;
     if (wordCount < 900 || wordCount > 1_300) {
       context.addIssue({
@@ -48,7 +50,8 @@ export const ChapterDraftSchema = z
         path: ["choices"],
       });
     }
-  });
+  },
+);
 
 export const ChapterFrameSchema = z
   .object({
@@ -68,6 +71,13 @@ export const ChapterFrameSchema = z
       });
     }
   });
+
+export const ChapterFrameCandidateSchema = z
+  .object({
+    optionIds: z.array(IdSchema).max(2),
+    title: z.string().trim().min(1).max(120),
+  })
+  .strict();
 
 const NarrativeScoreSchema = z.number().int().min(0).max(2);
 
@@ -217,6 +227,8 @@ export const ChapterRecordSchema = z
   });
 
 export type ChapterDraft = z.infer<typeof ChapterDraftSchema>;
+export type ChapterDraftCandidate = z.infer<typeof ChapterDraftCandidateSchema>;
+export type ChapterFrameCandidate = z.infer<typeof ChapterFrameCandidateSchema>;
 export type ChapterFrame = z.infer<typeof ChapterFrameSchema>;
 export type ChapterRecord = z.infer<typeof ChapterRecordSchema>;
 export type Choice = z.infer<typeof ChoiceSchema>;

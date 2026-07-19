@@ -119,6 +119,8 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 - Prompt `1.4.5` passed both Rowan chapters. Elara then referred to the supplied public `world.threat`, but Luna called that concept forbidden because the audit instruction explicitly permitted POV canon and omitted `world`. Prompt `1.4.6` names `world` as established public canon for both narrator and auditor while retaining the ban on synthesized causes, relationships, mechanisms, and history. Public world fields take precedence over semantically overlapping forbidden facts; only details exclusive to a forbidden fact fail.
 - Prompt `1.4.6` established the next paid baseline before more AI changes. Rowan chapter 1 reached Terra narration, but the nested audit did not start: prior calls and narration spent `$0.031506`, leaving `$0.023394` against a `$0.024960` audit reservation. Zero chapters committed. Cumulative conservative exposure is `$2.371789175`.
 - Prompt `1.4.7` keeps the full maximum-three background-agent live gate. It moves the strictly validated chapter frame from Terra to Luna, targets 900 to 925 words, and deduplicates current events. Compact labeled maps and tuples preserve every value in the deliberate narration whitelist and every forbidden remote-effect value. The whitelist intentionally excludes existing-fact provenance, skill unlock metadata, world version, and non-POV factions; projection regressions lock those safety boundaries. The model returns only seven ordered scores, seven evidence strings, and leak IDs; application code derives dimensions, issue codes, approval, and prose hash before final strict validation. Reconstructing the old 1,057-word Rowan chapter measured a 12,514-byte full audit request and `$0.0189825` reservation. The `$0.0523` cap retains `$0.0011215` for Rowan with its two selected agents and `$0.00124925` for the conservative three-agent Elara case using the old longer narration outputs; the shorter target adds headroom. A separate three-agent 900-word service request reserved `$0.01773125` for audit and committed under the release cap.
+- The prompt `1.4.7` paid baseline committed zero chapters. Two Luna frame attempts exposed a hidden literal claim before a safe candidate succeeded. Terra then stopped at 848 words. Prior calls spent `$0.027620125`; the remaining `$0.024679875` could not reserve a full Terra retry. Cumulative conservative exposure is `$2.3994093`.
+- Prompt `1.4.8` makes final choices application-owned. Luna ranks safe option IDs and supplies the title; deterministic code owns actions, IDs, descriptions, milestone targets, and terminal state. Terra now targets 975 to 1,000 words. An otherwise-valid 840-to-899-word draft may use one tail-only Luna continuation capped at 1,200 request bytes and `$0.00298`, then must pass every deterministic gate and the full independent audit. A three-agent, two-frame-retry, 848-word regression committed at `$0.0332095`; every request preflight stayed below `$0.05`.
 
 ## Decision Log
 
@@ -127,7 +129,8 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 - `World Director` is deterministic application code for MVP. Models emit intents and prose only; no model owns conflict resolution or canonical state.
 - `WorldState.chapter` means last committed chapter. Generation from 349 may create terminal chapter 350. Any request when current chapter is 350 is rejected before model access.
 - Validated narration uses buffer-audit-replay streaming. This trades first-token latency for zero exposure of rejected prose.
-- ADR-008 moves only validated chapter frames to Luna after the prompt `1.4.6` paid cost baseline. Terra remains the custom-action translator and narrator. The full live eval still allows all three relevant background agents.
+- ADR-008 routes title and option ranking to Luna while application code owns the final chapter frame. Terra remains the custom-action translator and narrator. The full live eval still allows all three relevant background agents.
+- ADR-009 permits one bounded Luna continuation only for an otherwise-valid 840-to-899-word Terra draft. It does not weaken the absolute 900-to-1,300-word gate.
 
 ## Outcomes and Retrospective
 
@@ -135,4 +138,4 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 
 ## Current Milestone
 
-Phase 5 release eval: finish the prompt `1.4.7` clean checkpoint, then run twelve complete cycles across all six viewpoints at `$0.0523` per chapter. Conservative prior exposure is `$2.371789175`; projected worst-case cumulative exposure is `$2.999389175`.
+Phase 5 release eval: finish the prompt `1.4.8` clean checkpoint, then run twelve complete cycles across all six viewpoints at `$0.05` per chapter. Conservative prior exposure is `$2.3994093`; projected worst-case cumulative exposure is `$2.9994093`, leaving `$0.0005907` below the POC cap.

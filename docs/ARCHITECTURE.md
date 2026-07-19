@@ -13,10 +13,13 @@ flowchart LR
     D --> V["Deterministic validator"]
     V -->|valid| T["Prospective turn"]
     V -->|invalid| R["Bounded repair or reject"]
-    T --> F["Validated Luna chapter frame"]
+    T --> F["Luna title and option ranking"]
+    F --> G["App-owned legal chapter frame"]
     T --> N["Terra POV narrator"]
     K["POV KnowledgeLedger"] --> N
-    F --> Q["Narrative contract audit"]
+    N -->|840 to 899 words only| L["Bounded Luna continuation"]
+    L --> Q["Narrative contract audit"]
+    G --> Q
     N --> Q["Narrative contract audit"]
     Q --> C["Atomic commit vN+1"]
     C --> H["Chapter and safe player state"]
@@ -31,10 +34,11 @@ flowchart LR
 5. Parse strict schema. Refusal or incomplete output causes no mutation.
 6. Recompute canonical intent disposition and require events, state mutations, and knowledge mutations to exactly equal deterministic resolver output.
 7. Stage prospective state in memory. Canon remains at current version.
-8. Generate the title and next-choice frame with Luna, then run deterministic safety and legality checks.
+8. Give Luna only POV-safe option descriptions. Luna returns a title and ranks option IDs. Application code owns terminal state, actions, choice IDs, descriptions, and milestone targets, then reruns deterministic safety and legality checks.
 9. Give Terra only POV-safe context and prospective visible events.
-10. Target 900 to 925 words, reject outside the absolute 900 to 1,300 word range, and run the Luna narrative contract audit.
-11. Atomically commit delta, knowledge, chapter, trace metadata, usage, cost, and next version.
+10. Target 975 to 1,000 words and reject outside the absolute 900 to 1,300 word range. When an otherwise-valid draft is 840 to 899 words, Luna may add one bounded, tail-only continuation. The merged prose reruns every deterministic gate.
+11. Run the independent Luna narrative contract audit over the final prose.
+12. Atomically commit delta, knowledge, chapter, trace metadata, usage, cost, and next version.
 
 Narration failure leaves canon unchanged. Accepted `WorldDelta` is sole source of new canon. Audit can reject prose but cannot add state mutations.
 
@@ -42,12 +46,12 @@ From chapter 48 through 50 of each act, choices stay milestone-compatible. An in
 
 ## Model Routing
 
-| Work                                      | Model           | Baseline effort |
-| ----------------------------------------- | --------------- | --------------- |
-| World blueprint and seven-act constraints | `gpt-5.6-sol`   | medium          |
-| Hard recovery and finale                  | `gpt-5.6-sol`   | medium          |
-| Custom-action translation and narration   | `gpt-5.6-terra` | none            |
-| Character intents, frame, and fact audit  | `gpt-5.6-luna`  | none or low     |
+| Work                                                   | Model           | Baseline effort |
+| ------------------------------------------------------ | --------------- | --------------- |
+| World blueprint and seven-act constraints              | `gpt-5.6-sol`   | medium          |
+| Hard recovery and finale                               | `gpt-5.6-sol`   | medium          |
+| Custom-action translation and narration                | `gpt-5.6-terra` | none            |
+| Character intents, option ranking, recovery, and audit | `gpt-5.6-luna`  | none or low     |
 
 Use Responses API. Use strict structured outputs for state-changing calls. Measure before changing effort.
 
