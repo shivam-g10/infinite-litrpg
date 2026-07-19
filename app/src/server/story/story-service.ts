@@ -333,7 +333,8 @@ export class StoryService {
           });
           if (!draft.ok) {
             this.options.onNarrativeDraftRejected?.(draft.issues);
-            retryDirective = `The prior draft failed deterministic validation: ${formatIssues(draft.issues)}. Write 975 to 1025 words. Remove every unsupported fact or action.`;
+            const safeIssueCodes = [...new Set(draft.issues.map(({ code }) => code))].sort();
+            retryDirective = `The prior draft failed deterministic validation with issue codes: ${safeIssueCodes.join(", ")}. Write 975 to 1025 words. Remove every unsupported fact or action. Never repeat prior text that is absent from the supplied POV canon.`;
             return { accepted: false, reason: formatIssues(draft.issues) };
           }
           const proseHash = hashText(prose);
@@ -367,16 +368,15 @@ export class StoryService {
           approvedAudit = auditCall.data;
           this.options.onNarrativeAudit?.(approvedAudit);
           if (!approvedAudit.approved) {
-            const zeroScores = NARRATIVE_AUDIT_DIMENSIONS.flatMap((dimension, index) =>
+            const safeFailures = NARRATIVE_AUDIT_DIMENSIONS.flatMap((dimension, index) =>
               approvedAudit?.scores[dimension] === 0
-                ? [`${dimension}: ${approvedAudit.evidence[index]?.detail ?? "failed"}`]
+                ? [`${dimension}: ${approvedAudit.evidence[index]?.issueCode ?? "failed"}`]
                 : [],
             );
-            retryDirective = `The prior draft failed: ${zeroScores.join(" ") || "quality"}. Remove the cited unsupported claims, durable facts, and extra actions. Keep only supplied viewpoint knowledge and canonical effects.`;
             if (approvedAudit.leakedFactIds.length > 0) {
-              retryDirective +=
-                " Remove every other-character finding and remote investigation result.";
+              safeFailures.push("povSafety: hidden-knowledge");
             }
+            retryDirective = `The prior draft failed fixed rubric checks: ${[...new Set(safeFailures)].join(", ") || "quality"}. Remove unsupported claims, durable facts, and extra actions. Keep only supplied viewpoint canon and canonical effects. Never repeat prior text that is absent from the supplied POV canon.`;
           }
           return {
             accepted: approvedAudit.approved,
@@ -390,7 +390,7 @@ export class StoryService {
             ...(retryDirective === null ? {} : { retryDirective }),
           }),
         instructions:
-          "Write one close-third Ashen Crown LitRPG chapter. Plain prose only. Obey the supplied POV boundary.",
+          "Write one close-third Ashen Crown LitRPG chapter. Plain prose only. Treat supplied POV canon as exhaustive. Never infer historical links.",
         maxOutputTokens: 1_550,
         model: "gpt-5.6-terra",
         policy,

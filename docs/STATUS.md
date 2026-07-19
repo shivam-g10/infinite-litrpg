@@ -2,7 +2,7 @@
 
 - Updated: 2026-07-19
 - Layer: Release evaluation
-- Current phase: Phase 5 prompt `1.4.2` checkpoint before final release run
+- Current phase: Phase 5 prompt `1.4.3` checkpoint before final release run
 - Repository: initialized on `main`
 - Remote: `git@github.com:shivam-g10/infinite-litrpg.git`
 - Initial commit: `39b19a2` (`chore: scaffold agent workflow`)
@@ -21,12 +21,12 @@
 
 ## Current Blockers
 
-- Prompt `1.4.2` needs the final twelve-cycle sequential report.
+- Prompt `1.4.3` needs the final twelve-cycle sequential report.
 - Current native report does not exist yet; native capability already has a green capped smoke on the configured key.
 
 ## Next Action
 
-Commit prompt `1.4.2`. Run the final suite with prior conservative spend `$2.01434585` and chapter cap `$0.075`.
+Commit prompt `1.4.3`. Run the final suite with prior conservative spend `$2.0476066` and chapter cap `$0.075`.
 
 ## Evidence Log
 
@@ -73,5 +73,8 @@ Commit prompt `1.4.2`. Run the final suite with prior conservative spend `$2.014
 - 2026-07-19 prompt `1.4.1` full run command `npm run evals:live:full -- --prior-spend-usd 1.92504285 --chapter-cap-usd 0.0895` exited 1 after one of twelve cycles. Rowan chapter 1 passed at 953 words, `$0.035332375`, 22,816 ms, 11 exact replay chunks, empty leak list, and all audit scores 2. Rowan chapter 2 failed after the custom-action translator changed “Investigate the immediate area for fresh tracks” into `wait`; the audit gave choice fulfillment zero and safe preflight blocked a retry. Run exposure was `$0.089303`; cumulative conservative exposure is `$2.01434585`, leaving `$0.98565415`. Report: `evals/reports/live-full-sequential.json`.
 - 2026-07-19 prompt `1.4.2` baseline fix: the translator prompt now preserves command-led investigation semantics. Deterministic validation rejects changed action types, wrong immediate-area targets, and every otherwise-illegal translation before background calls, resolution, canon, or narration. Cancelled commands such as “Search? No, wait” remain waits. An impossible immediate-area investigation during an incomplete milestone lock returns 422 before any model call. Unit and service-level retry-success regressions cover each path.
 - 2026-07-19 prompt `1.4.2` non-live gate: `npm run check` and `npm audit` exited 0. Vitest passed 86 tests. Offline eval passed 14 invariant cases, 12 POV attacks, 1,000 simulations, 35 checkpoints, and the 350/no-351 horizon. Production build, 17 E2E tests with one intentional desktop skip, both security scans, 526 package licenses, and zero-vulnerability audit passed. The final `$0.075` chapter cap projects cumulative worst-case exposure of `$2.91434585`, preserving `$0.08565415` below the `$3` cap.
+- 2026-07-19 prompt `1.4.2` full run command `npm run evals:live:full -- --prior-spend-usd 2.01434585 --chapter-cap-usd 0.075` exited 1 with zero commits. The audit rejected Rowan prose for revealing `malachar-contained-the-void`: it combined Rowan's known identity with a hidden Void-containment history. Safe preflight blocked regeneration. Run exposure was `$0.03326075`; cumulative conservative exposure is `$2.0476066`, leaving `$0.9523934`. Report: `evals/reports/live-full-sequential.json`.
+- 2026-07-19 prompt `1.4.3` baseline fix: supplied POV canon and current effects are now an explicit exhaustive whitelist. The prompt forbids synthesizing relationships between people, threats, places, events, or history from identities, goals, beliefs, or shared vocabulary, without exposing hidden facts to the narrator. Deterministic and Luna retry feedback now uses fixed issue codes only. A service regression captures both retry requests and proves hidden claims and fact IDs never re-enter narrator context.
+- 2026-07-19 prompt `1.4.3` non-live gate: `npm run check` and `npm audit` exited 0. Vitest passed 87 tests. Offline eval passed 14 invariant cases, 12 POV attacks, 1,000 simulations, 35 checkpoints, and the 350/no-351 horizon. Production build, 17 E2E tests with one intentional desktop skip, both security scans, 526 package licenses, and zero-vulnerability audit passed. Read-only review confirmed safe retry feedback.
 
 Add exact command, date, exit code, cost, and report path after every future milestone gate.

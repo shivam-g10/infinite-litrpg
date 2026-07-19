@@ -152,6 +152,111 @@ describe("StoryService", () => {
     store.close();
   });
 
+  it("never echoes hidden canon into narration retries", async () => {
+    const store = new StoryStore();
+    const hiddenClaim = "Malachar contained the Void beneath his throne.";
+    const hiddenFactId = "malachar-contained-the-void";
+    const hiddenProse = `${hiddenClaim} ${Array.from({ length: 893 }, (_, index) => `ember${index}`).join(" ")}`;
+    const auditedProse = Array.from({ length: 900 }, (_, index) => `cinder${index}`).join(" ");
+    const finalProse = Array.from({ length: 900 }, (_, index) => `ash${index}`).join(" ");
+    const frame = {
+      choices: [
+        {
+          action: { type: "wait" },
+          description: "Wait and watch the road for movement.",
+          id: "choice-1",
+          milestoneId: null,
+        },
+        {
+          action: { subjectId: "ash-road", type: "investigate" },
+          description: "Inspect the ash road for a fresh trail.",
+          id: "choice-2",
+          milestoneId: null,
+        },
+      ],
+      terminal: false,
+      title: "The Ash Road",
+    } as const;
+    const rejectedAudit: NarrativeAudit = {
+      approved: false,
+      evidence: NARRATIVE_AUDIT_DIMENSIONS.map((dimension) => ({
+        detail:
+          dimension === "povSafety"
+            ? `The prose exposes ${hiddenClaim}`
+            : "The chapter passes this dimension.",
+        dimension,
+        issueCode: dimension === "povSafety" ? "hidden-knowledge" : "pass",
+      })),
+      leakedFactIds: [hiddenFactId],
+      proseHash: createHash("sha256").update(auditedProse).digest("hex"),
+      scores: {
+        arcProgress: 2,
+        characterAutonomy: 2,
+        choiceFulfillment: 2,
+        continuity: 2,
+        litrpgMechanics: 2,
+        povSafety: 0,
+        prose: 2,
+      },
+    };
+    const approvedAudit: NarrativeAudit = {
+      approved: true,
+      evidence: NARRATIVE_AUDIT_DIMENSIONS.map((dimension) => ({
+        detail: "The regenerated chapter stays inside supplied viewpoint canon.",
+        dimension,
+        issueCode: "pass",
+      })),
+      leakedFactIds: [],
+      proseHash: createHash("sha256").update(finalProse).digest("hex"),
+      scores: {
+        arcProgress: 2,
+        characterAutonomy: 2,
+        choiceFulfillment: 2,
+        continuity: 2,
+        litrpgMechanics: 2,
+        povSafety: 2,
+        prose: 2,
+      },
+    };
+    const parse = vi
+      .fn()
+      .mockResolvedValueOnce(parsedResponse(frame, "resp_safe_retry_frame"))
+      .mockResolvedValueOnce(parsedResponse(rejectedAudit, "resp_hidden_audit"))
+      .mockResolvedValueOnce(parsedResponse(approvedAudit, "resp_safe_audit"));
+    const stream = vi
+      .fn()
+      .mockReturnValueOnce(fakeStream(hiddenProse, "resp_literal_hidden_draft"))
+      .mockReturnValueOnce(fakeStream(auditedProse, "resp_semantic_hidden_draft"))
+      .mockReturnValueOnce(fakeStream(finalProse, "resp_safe_draft"));
+    const service = new StoryService(
+      store,
+      { responses: { parse, stream } } as unknown as OpenAI,
+      options(),
+    );
+    const selected = service.selectPov("rowan-ashborn");
+
+    const result = await service.takeTurn({
+      choiceId: selected.chapter.choices[0]?.id ?? "missing",
+      expectedWorldVersion: 1,
+      requestId: "00000000-0000-4000-8000-000000000352",
+      type: "take_action",
+    });
+
+    expect(result.chapter.prose).toBe(finalProse);
+    expect(stream).toHaveBeenCalledTimes(3);
+    const deterministicRetryInput = (stream.mock.calls[1]?.[0] as { input?: string } | undefined)
+      ?.input;
+    const auditRetryInput = (stream.mock.calls[2]?.[0] as { input?: string } | undefined)?.input;
+    for (const retryInput of [deterministicRetryInput, auditRetryInput]) {
+      expect(retryInput).toBeTypeOf("string");
+      expect(retryInput).not.toContain(hiddenClaim);
+      expect(retryInput).not.toContain(hiddenFactId);
+    }
+    expect(deterministicRetryInput).toContain("POV_LEAK");
+    expect(auditRetryInput).toContain("povSafety: hidden-knowledge");
+    store.close();
+  });
+
   it("records exhausted audit retries before a regenerated narration succeeds", async () => {
     const store = new StoryStore();
     const firstProse = Array.from({ length: 900 }, (_, index) => `ember${index}`).join(" ");

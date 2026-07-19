@@ -78,6 +78,13 @@ describe("background actor selection", () => {
 
     expect(JSON.stringify(prompt)).toContain("No unlisted skill or item use");
     expect(JSON.stringify(prompt)).toContain("Never narrate what that character found");
+    expect(JSON.stringify(prompt)).toContain("Never combine an identity, threat, location");
+    expect(prompt.instruction).toContain("Knowledge whitelist");
+    expect(prompt.instruction).toContain(
+      "unless one whitelist field states that exact relationship",
+    );
+    expect(JSON.stringify(prompt)).not.toContain("Malachar contained the Void beneath his throne");
+    expect(JSON.stringify(prompt)).not.toContain("malachar-contained-the-void");
     expect(JSON.stringify(prompt)).not.toContain("viewpointCanon.facts");
     expect(JSON.stringify(prompt)).not.toContain("acceptedEvents");
     expect(prompt).toHaveProperty("afterTurnViewpointCanon.povCharacter.experience", 10);
