@@ -72,7 +72,7 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 - [x] Native multi-agent and sequential live smoke paths green.
 - [ ] Six POV review packets generated and agent-reviewed.
 - [x] Secret scan and dependency-license check green.
-- [ ] Clean-clone setup verified.
+- [x] Clean-clone setup verified.
 
 ### Phase 8: Build Week Submission
 
@@ -106,6 +106,7 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 - Stable Next `16.2.10` pins vulnerable PostCSS `8.4.31`. Pinned Next `16.3.0-canary.89` carries PostCSS `8.5.10`; the full build and both dependency audits are green.
 - Contract, prompt, and fixture versions moved to `1.1.0` before new live traces. Investigation now stops emitting new facts at world or ledger capacity, and failed nested audit attempts remain in exact cost and usage totals.
 - Final paid-run review found unknown-cost retries, remote-delta audit leakage, lost failed-turn traces, missing sequential-agent attribution, and retry budget resets. Worst-case reservations, POV-visible audit projections, durable failure traces, exact agent IDs, cumulative world-version exposure, and a serialized local turn queue now have regressions.
+- Maelin prompt `1.1.0` smoke exposed an audit ambiguity: Luna scored choice fulfillment against future chapter choices instead of the selected player action. The first rejected narration then left too little worst-case budget for the duplicated prompt. Prompt `1.2.0` names future choices explicitly, uses one compact after-turn POV canon, and cuts measured narration input from 11,848 to 6,505 bytes and audit input from 17,533 to 12,182 bytes in the deterministic probe.
 
 ## Decision Log
 
@@ -121,4 +122,4 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 
 ## Current Milestone
 
-Phase 5 release eval: checkpoint the green tree, rerun capped Maelin smoke, then run twelve complete live cycles across all six viewpoints.
+Phase 5 release eval: checkpoint prompt `1.2.0`, rerun capped Maelin smoke, then run twelve complete live cycles across all six viewpoints.

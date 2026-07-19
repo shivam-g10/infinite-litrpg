@@ -346,7 +346,7 @@ export class StoryService {
               ),
               instructions:
                 "Audit the chapter against canon and the rubric. Return strict NarrativeAudit JSON only.",
-              maxOutputTokens: 700,
+              maxOutputTokens: 550,
               model: "gpt-5.6-luna",
               policy,
               reasoningEffort: "none",
@@ -381,7 +381,7 @@ export class StoryService {
           }),
         instructions:
           "Write one close-third Ashen Crown LitRPG chapter. Plain prose only. Obey the supplied POV boundary.",
-        maxOutputTokens: 1_650,
+        maxOutputTokens: 1_550,
         model: "gpt-5.6-terra",
         policy,
         reasoningEffort: "none",

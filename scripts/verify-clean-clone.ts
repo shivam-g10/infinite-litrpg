@@ -7,12 +7,13 @@ const source = resolve(".");
 const temporaryRoot = mkdtempSync(join(tmpdir(), "infinite-litrpg-clean-"));
 const clone = join(temporaryRoot, "repo");
 const startedAt = Date.now();
-const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+const npmCli = process.env.npm_execpath;
+if (!npmCli) throw new Error("npm_execpath is unavailable");
 
 try {
-  run("git", ["clone", "--local", source, clone], temporaryRoot);
-  run(npmCommand, ["ci"], clone);
-  run(npmCommand, ["run", "check"], clone);
+  run("git", ["clone", "--no-local", source, clone], temporaryRoot);
+  run(process.execPath, [npmCli, "ci"], clone);
+  run(process.execPath, [npmCli, "run", "check"], clone);
 
   const durationSeconds = (Date.now() - startedAt) / 1_000;
   if (durationSeconds > 300) {

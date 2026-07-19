@@ -71,8 +71,9 @@ describe("background actor selection", () => {
     ) as Record<string, unknown>;
 
     expect(JSON.stringify(prompt)).toContain("No unlisted skill or item use");
-    expect(prompt).toHaveProperty("stateBeforeViewpoint");
-    expect(prompt).toHaveProperty("stateAfterViewpoint");
+    expect(prompt).toHaveProperty("viewpointCanon");
+    expect(prompt).not.toHaveProperty("stateBeforeViewpoint");
+    expect(prompt).not.toHaveProperty("worldBefore");
     expect(prompt).toHaveProperty("canonicalEffects.stateMutations.0.amount", 10);
   });
 
@@ -101,8 +102,9 @@ describe("background actor selection", () => {
     expect(prompt).not.toHaveProperty("stateBefore");
     expect(prompt).not.toHaveProperty("stateProspective");
     expect(JSON.stringify(prompt)).not.toContain("knowledgeLedgers");
-    expect(prompt.instruction).toContain("Every field in stateBeforeViewpoint");
+    expect(prompt.instruction).toContain("Every field in viewpointCanon");
     expect(prompt.instruction).toContain("Referring to an intention");
+    expect(prompt.instruction).toContain("nextChoices are future options");
     expect((prompt.forbiddenFacts as readonly { id: string }[]).map(({ id }) => id)).not.toContain(
       "rowan-is-malachar-reincarnated",
     );

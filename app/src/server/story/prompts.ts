@@ -149,9 +149,8 @@ export function buildNarrationPrompt(
       "Never narrate a background intent as an action performed by the viewpoint character.",
     ],
     instruction:
-      "Write only the complete chapter prose. Use close-third viewpoint. Write 975 to 1025 words and stop before 1100. The absolute valid range is 900 to 1300 words. Dramatize exactly the attempted action and canonical effects, not plausible extra actions. Show only the supplied LitRPG changes. Build depth with immediate sensory texture, existing beliefs and goals, and already-known facts. Use supplied facts at face value only: never extrapolate their causes, mechanisms, history, places, or consequences. These may add prose but never canon. Do not append choices or notes.",
+      "Write only the complete chapter prose. Use close-third viewpoint. Write 975 to 1025 words and stop before 1100. The absolute valid range is 900 to 1300 words. Dramatize exactly the attempted action and canonical effects, not plausible extra actions. viewpointCanon is established after-turn knowledge; playerAction and canonicalEffects define the transition. Show only supplied LitRPG changes. Build depth with immediate sensory texture, existing beliefs and goals, and already-known facts. Use supplied facts at face value only: never extrapolate their causes, mechanisms, history, places, or consequences. These may add prose but never canon. Do not append choices or notes.",
     playerAction,
-    stateBeforeViewpoint: buildPovContext(before, povId),
     stateTransition: {
       actAfter: prospective.act,
       chapterAfter: prospective.chapter,
@@ -159,9 +158,8 @@ export function buildNarrationPrompt(
       convergencePressure: prospective.arcClock.convergencePressure,
       transitionRequired: prospective.arcClock.transitionRequired,
     },
-    stateAfterViewpoint: buildPovContext(prospective, povId),
-    worldAfter: publicWorldContext(prospective),
-    worldBefore: publicWorldContext(before),
+    viewpointCanon: compactPovContext(prospective, povId),
+    world: localWorldContext(before, prospective, povId, delta),
   });
 }
 
@@ -183,7 +181,7 @@ export function buildAuditPrompt(
   const allowedFactIds = new Set(buildPovContext(prospective, povId).factIds);
   return JSON.stringify({
     allowedCanonicalEffects: canonicalEffectsForPov(delta, povId),
-    chapterFrame,
+    chapterFrame: { terminal: chapterFrame.terminal, title: chapterFrame.title },
     forbiddenFacts: prospective.facts
       .filter(({ id }) => !allowedFactIds.has(id))
       .map(({ claim, id }) => ({ claim, id })),
@@ -197,17 +195,16 @@ export function buildAuditPrompt(
       ),
     },
     instruction:
-      "Audit only. Never change canon. Audit the title, choices, and prose as one chapter artifact. forbiddenFacts and forbiddenRemoteEffects exist only for leak detection; never treat them as permitted chapter knowledge. Asserting or paraphrasing any forbidden remote event or mutation gives povSafety zero with issueCode hidden-knowledge, even when it is true canon. Only an item in forbiddenFacts can appear in leakedFactIds. Every field in stateBeforeViewpoint and stateAfterViewpoint is established POV canon, including plan, goals, beliefs, relationships, inventory, and observed events. Referring to an intention from plan or goals does not claim it was completed. Every field in visibleCanonicalEvents and allowedCanonicalEffects is permitted POV knowledge. Event participantIds and observerIds establish who witnessed that event, but not motives or private thoughts. A System notice that exactly restates allowed canonical mutations is permitted. Score every rubric dimension 0 to 2. Return seven evidence objects in rubricDimensions order. Each object copies its dimension, uses one allowed issueCode, and gives detail under 25 words. Use issueCode pass only when that dimension score is above zero. Continuity is zero for a contradiction or unsupported durable canon, not generic sensory texture. Any zero or leaked fact rejects. Copy proseHash exactly.",
+      "Audit only. Never change canon. Audit the title, nextChoices, and prose as one artifact. choiceFulfillment scores whether prose fulfills playerAction. nextChoices are future options and must not occur in this prose; never penalize them for not occurring. forbiddenFacts and forbiddenRemoteEffects exist only for leak detection; never treat them as permitted knowledge. Asserting or paraphrasing any forbidden remote event or mutation gives povSafety zero with issueCode hidden-knowledge, even when true canon. Only an item in forbiddenFacts can appear in leakedFactIds. Every field in viewpointCanon is established POV canon, including plan, goals, beliefs, relationships, inventory, and observed events. Referring to an intention from plan or goals does not claim completion. Every field in visibleCanonicalEvents and allowedCanonicalEffects is permitted POV knowledge. Event participantIds and observerIds establish witnesses, not motives or private thoughts. A System notice that exactly restates allowed canonical mutations is permitted. Score every rubric dimension 0 to 2. Return seven evidence objects in rubricDimensions order. Each object copies its dimension, uses one allowed issueCode, and gives detail under 25 words. Use issueCode pass only when that dimension score is above zero. Continuity is zero for a contradiction or unsupported durable canon, not generic sensory texture. Any zero or leaked fact rejects. Copy proseHash exactly.",
     playerAction,
     prose,
     proseHash,
+    nextChoices: chapterFrame.choices,
     rubricDimensions: NARRATIVE_AUDIT_DIMENSIONS,
     allowedIssueCodes: NARRATIVE_AUDIT_ISSUE_CODES,
-    stateAfterViewpoint: buildPovContext(prospective, povId),
-    stateBeforeViewpoint: buildPovContext(before, povId),
+    viewpointCanon: compactPovContext(prospective, povId),
     visibleCanonicalEvents: visibleEventsForPov(delta, povId),
-    worldAfter: publicWorldContext(prospective),
-    worldBefore: publicWorldContext(before),
+    world: localWorldContext(before, prospective, povId, delta),
   });
 }
 
@@ -260,6 +257,41 @@ function canonicalEffectsForPov(delta: WorldDelta, povId: string) {
     stateMutations: delta.stateMutations.filter(
       (mutation) => !("characterId" in mutation) || mutation.characterId === povId,
     ),
+  };
+}
+
+function compactPovContext(state: WorldState, povId: string) {
+  const context = buildPovContext(state, povId);
+  return {
+    facts: context.facts,
+    observedEvents: context.observedEvents,
+    povCharacter: context.povCharacter,
+    publicCharacters: context.publicCharacters,
+  };
+}
+
+function localWorldContext(
+  before: WorldState,
+  prospective: WorldState,
+  povId: string,
+  delta: WorldDelta,
+) {
+  const beforePov = before.characters.find(({ id }) => id === povId);
+  const afterPov = prospective.characters.find(({ id }) => id === povId);
+  const locationIds = new Set([
+    beforePov?.locationId,
+    afterPov?.locationId,
+    ...visibleEventsForPov(delta, povId).map(({ locationId }) => locationId),
+  ]);
+  locationIds.delete(undefined);
+  return {
+    act: prospective.act,
+    calendar: prospective.calendar,
+    chapter: prospective.chapter,
+    factions: prospective.factions,
+    locations: prospective.locations.filter(({ id }) => locationIds.has(id)),
+    threat: prospective.threat,
+    version: prospective.version,
   };
 }
 

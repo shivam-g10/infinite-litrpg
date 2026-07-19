@@ -21,12 +21,12 @@
 
 ## Current Blockers
 
-- Final Maelin smoke must verify the new structured audit and narration constraints before another full paid run.
+- Final Maelin smoke must verify prompt `1.2.0` before another full paid run.
 - Final twelve-cycle sequential report and current native report do not exist yet.
 
 ## Next Action
 
-Commit the green implementation so live traces identify tested code. Then run capped Maelin smoke.
+Commit prompt `1.2.0` so live traces identify tested code. Then run capped Maelin smoke.
 
 ## Evidence Log
 
@@ -56,5 +56,9 @@ Commit the green implementation so live traces identify tested code. Then run ca
 - 2026-07-19 full gate: first `npm run check` stopped at README formatting, then the retry reached the secret scan and correctly rejected a key-like README placeholder. After removing the placeholder, `npm run check` exited 0. It passed format, lint, strict types, 71 tests, all offline evals, production build, 17 E2E tests with one intentional skip, both security scans, and 526 package licenses.
 - 2026-07-19 release review hardening: unknown-cost requests now reserve maximum exposure; remote effects are forbidden audit-only context; fully failed turns persist strict traces; sequential attempts retain actor IDs; failed exposure carries across retries for the same world version; local turns serialize. Regressions cover cost-cap retry blocking, remote-effect projection, failed trace persistence, post-commit replay failure, actor attribution, and cumulative recovered trace totals.
 - 2026-07-19 post-review full gate: `npm run check` and `npm audit` exited 0. Vitest passed 75 tests. Offline eval passed 14 invariant cases, 12 POV attacks, 1,000 simulations, 35 checkpoints, and the 350 terminal horizon. Production build, 17 E2E tests with one intentional desktop skip, both security scans, 526 package licenses, and zero-vulnerability audit passed.
+- 2026-07-19 clean clone: first run reproduced a Windows improper-hardlink failure from `git clone --local`; second run exposed Node 24 `spawnSync npm.cmd EINVAL`. The script now uses `git clone --no-local` and invokes npm through `process.execPath` plus `npm_execpath`. Clean clone then ran `npm ci` and the full check in 49.3 seconds with 75 tests, all offline evals, build, E2E, security, and licenses green.
+- 2026-07-19 Maelin prompt `1.1.0` smoke: audit correctly rejected the first narration but misread future choices as unfulfilled past actions. The safe retry preflight then blocked a possible `$0.064775` request with `$0.045805` remaining. Zero chapters committed; exposure was `$0.05419475`. Report: `evals/reports/live-smoke-sequential-maelin-rook.json`.
+- 2026-07-19 live spend conservative upper bound after that smoke: `$1.65052775`, leaving `$1.34947225` under the documented `$3` allowance.
+- 2026-07-19 prompt `1.2.0`: audit now defines choice fulfillment against `playerAction` and labels chapter choices as future-only. Narration and audit use one compact after-turn POV projection. Deterministic probe reduced narration input from 11,848 to 6,505 bytes and audit input from 17,533 to 12,182 bytes. `npm run check` exited 0 with 75 tests and every non-live gate green.
 
 Add exact command, date, exit code, cost, and report path after every future milestone gate.
