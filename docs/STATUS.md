@@ -1,8 +1,8 @@
 # Status
 
 - Updated: 2026-07-19
-- Layer: Live narrative evaluation and hardening
-- Current phase: Phase 5 regression hardening before final live eval
+- Layer: Release evaluation
+- Current phase: Phase 5 prompt `1.4.0` checkpoint before final paid gates
 - Repository: initialized on `main`
 - Remote: `git@github.com:shivam-g10/infinite-litrpg.git`
 - Initial commit: `39b19a2` (`chore: scaffold agent workflow`)
@@ -21,12 +21,12 @@
 
 ## Current Blockers
 
-- Final twelve-cycle sequential report must verify prompt `1.3.0` and post-turn observer visibility.
+- Prompt `1.4.0` needs one Rowan smoke and the final twelve-cycle sequential report.
 - Current native report does not exist yet; native capability already has a green capped smoke on the configured key.
 
 ## Next Action
 
-Commit the post-turn observer fix and prompt `1.3.0`. Then run the final twelve-cycle sequential suite.
+Commit prompt `1.4.0`, exact deterministic disposition, milestone, ending, and report-v3 hardening. Run Rowan smoke with prior spend `$1.82804285`. Derive the twelve-cycle per-chapter cap from the exact smoke cost.
 
 ## Evidence Log
 
@@ -65,5 +65,8 @@ Commit the post-turn observer fix and prompt `1.3.0`. Then run the final twelve-
 - 2026-07-19 post-turn visibility fix: event observers now resolve from all accepted actors' final turn locations. A named regression moves Rowan away while Nyra investigates his old location, then proves her event and clue are absent from Rowan's POV context. Prompt `1.3.0` separately forbids narrating another character's investigation result unless the result is established POV canon.
 - 2026-07-19 prompt `1.3.0` full gate: `npm run check` exited 0 with 76 tests, all offline evals, production build, E2E, both security scans, and license inventory green.
 - 2026-07-19 live spend conservative upper bound after the first full retry: `$1.761966`, leaving `$1.238034` under the documented `$3` allowance. One final twelve-chapter run remains inside the cap by `$0.038034` at worst-case chapter ceilings.
+- 2026-07-19 prompt `1.3.0` release baseline: zero chapters committed. One Terra draft failed deterministic validation; a later Luna audit falsely treated the exact current-chapter 10 XP grant as pre-existing because the compressed prompt omitted the pre-turn character value. Safe preflight blocked the next request. Exposure was `$0.06607685`; report: `evals/reports/live-full-sequential.json`.
+- 2026-07-19 cumulative live-spend conservative upper bound is now `$1.82804285`, leaving `$1.17195715`. A deterministic prompt probe measured 8,745 narration bytes with a `$0.052178125` maximum request reservation and 15,240 audit bytes with a `$0.02299` maximum reservation.
+- 2026-07-19 prompt `1.4.0` and release hardening: before-turn character, current-chapter effects, and after-turn POV canon are explicit. Final review defects now have regressions for duplicate matched mutations, dropped player disposition, fake milestone completion, fake ending, milestone choice deadlock, failure-reason persistence, and attempt phases. Targeted tests, strict typecheck, 1,000 simulations, 35 checkpoints, and the 350/no-351 horizon are green. Live report version 3 enforces cumulative prior-spend ceilings.
 
 Add exact command, date, exit code, cost, and report path after every future milestone gate.

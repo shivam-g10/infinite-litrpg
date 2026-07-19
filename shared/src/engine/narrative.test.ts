@@ -28,6 +28,32 @@ describe("narrative gates", () => {
     ).toBe(true);
   });
 
+  it("accepts two distinct direct-target choices during an incomplete milestone lock", () => {
+    const state = seedState();
+    state.arcClock.convergencePressure = true;
+    state.calendar.day = 48;
+    state.calendar.label = "Year 1, Ashfall 48";
+    state.chapter = 47;
+    state.version = 48;
+
+    const result = validateSuggestedChoices(state, [
+      {
+        action: { subjectId: "act-one-survival", type: "investigate" },
+        description: "Trace the first seal fracture directly.",
+        id: "choice-1",
+        milestoneId: "act-one-survival",
+      },
+      {
+        action: { targetId: "act-one-survival", type: "defend" },
+        description: "Defend the survival milestone against collapse.",
+        id: "choice-2",
+        milestoneId: "act-one-survival",
+      },
+    ]);
+
+    expect(result.ok).toBe(true);
+  });
+
   it("rejects duplicate attempts and literal hidden-fact leakage", () => {
     const state = seedState();
     const duplicate = [legalChoices()[0], { ...legalChoices()[0], id: "choice-2" }];

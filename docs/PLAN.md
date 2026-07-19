@@ -108,6 +108,9 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 - Final paid-run review found unknown-cost retries, remote-delta audit leakage, lost failed-turn traces, missing sequential-agent attribution, and retry budget resets. Worst-case reservations, POV-visible audit projections, durable failure traces, exact agent IDs, cumulative world-version exposure, and a serialized local turn queue now have regressions.
 - Maelin prompt `1.1.0` smoke exposed an audit ambiguity: Luna scored choice fulfillment against future chapter choices instead of the selected player action. The first rejected narration then left too little worst-case budget for the duplicated prompt. Prompt `1.2.0` names future choices explicitly, uses one compact after-turn POV canon, and cuts measured narration input from 11,848 to 6,505 bytes and audit input from 17,533 to 12,182 bytes in the deterministic probe.
 - The first prompt `1.2.0` full run exposed same-turn observation ordering. Rowan moved away but the resolver still marked him as observing Nyra at his old location, and narration leaked her generated clue. Observer visibility now uses every accepted actor's post-turn location. Prompt `1.3.0` also forbids extrapolating findings from another character's visible investigation event.
+- The prompt `1.3.0` release run established a new baseline before further AI changes. Zero chapters committed and exposure was `$0.06607685`. Luna saw after-turn XP plus the exact current-chapter grant but no pre-turn value, then incorrectly called the grant pre-existing. Prompt `1.4.0` labels before state, current effects, and after state explicitly.
+- Final engine review found duplicate matched mutations, caller-selected intent disposition, broad milestone self-attestation, and copied early-ending claims. Staging now recomputes deterministic disposition and requires the full event, state-mutation, and knowledge-mutation artifacts to match exactly. Incomplete milestones require one of at least two direct typed target shapes; early endings are resolver-derived.
+- Live report version 3 preserves attempt phase, deterministic rejection issues, audit evidence, prior spend, projected exposure, and exact cumulative spend. Future paid commands pass recorded prior spend so worst-case ceilings stay under `$3`.
 
 ## Decision Log
 
@@ -123,4 +126,4 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 
 ## Current Milestone
 
-Phase 5 release eval: checkpoint the same-turn visibility fix and prompt `1.3.0`, then rerun twelve complete live cycles across all six viewpoints.
+Phase 5 release eval: checkpoint prompt `1.4.0` and deterministic disposition hardening, run one capped Rowan smoke, then run twelve complete cycles across all six viewpoints with a cap derived from the remaining cumulative budget.

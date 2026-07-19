@@ -8,6 +8,13 @@ Evals define completion. Implement runner before live prompt work.
 - `npm run evals:live:smoke`: smallest capped API suite.
 - `npm run evals:live:full`: release-only live suite with explicit cost confirmation.
 
+Live runs accept `--prior-spend-usd` and `--chapter-cap-usd`. The runner rejects a suite when prior spend plus every configured chapter ceiling could exceed the cumulative `$3` POC cap. Report version 3 records prior spend, projected maximum, exact cumulative cost, attempt phase, audit rejections, and deterministic draft rejections.
+
+```powershell
+npm run evals:live:smoke -- --prior-spend-usd 1.25 --chapter-cap-usd 0.10
+npm run evals:live:full -- --prior-spend-usd 1.30 --chapter-cap-usd 0.09
+```
+
 Runner must load root `.env`, redact secrets, write reports under ignored `evals/reports/`, and return nonzero on gate failure.
 
 ## Gates

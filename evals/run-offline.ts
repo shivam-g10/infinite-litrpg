@@ -342,12 +342,14 @@ function runSeededSimulation(seedState: WorldState, seed: number): string | null
 
   const before = JSON.stringify(state);
   const policy = getClockPolicy(state.chapter);
+  const milestone = state.arcClock.milestones.find(({ act }) => act === policy.currentAct);
   const action = policy.choicesRequireMilestone
-    ? { subjectId: "cinder-village", type: "investigate" }
+    ? {
+        subjectId: milestone?.completed ? "cinder-village" : (milestone?.id ?? "missing"),
+        type: "investigate" as const,
+      }
     : seededPlayerAction(seed);
-  const milestoneId = policy.choicesRequireMilestone
-    ? (state.arcClock.milestones.find(({ act }) => act === policy.currentAct)?.id ?? null)
-    : null;
+  const milestoneId = policy.choicesRequireMilestone ? (milestone?.id ?? null) : null;
   const backgroundCount = seed % 4;
   const backgroundActors = ["nyra-vale", "elara-voss", "maelin-rook"] as const;
   const backgroundIntents = backgroundActors.slice(0, backgroundCount).map((actorId, index) => ({
@@ -418,14 +420,16 @@ function runTerminalSimulation(seedState: WorldState): {
   let commits = 0;
   while (state.chapter < 350) {
     const policy = getClockPolicy(state.chapter);
-    const milestoneId = policy.choicesRequireMilestone
-      ? (state.arcClock.milestones.find(({ act }) => act === policy.currentAct)?.id ?? null)
-      : null;
+    const milestone = state.arcClock.milestones.find(({ act }) => act === policy.currentAct);
+    const milestoneId = policy.choicesRequireMilestone ? (milestone?.id ?? null) : null;
     const resolved = resolveTurn(
       state,
       {
         action: policy.choicesRequireMilestone
-          ? { subjectId: "cinder-village", type: "investigate" }
+          ? {
+              subjectId: milestone?.completed ? "cinder-village" : (milestone?.id ?? "missing"),
+              type: "investigate",
+            }
           : { type: "wait" },
         actorId: "rowan-ashborn",
         description: "Advance the deterministic horizon simulation.",

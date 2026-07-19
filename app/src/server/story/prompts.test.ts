@@ -10,7 +10,13 @@ import {
 } from "@infinite-litrpg/shared";
 import { describe, expect, it } from "vitest";
 
-import { buildAuditPrompt, buildNarrationPrompt, selectBackgroundActors } from "./prompts";
+import {
+  buildAuditPrompt,
+  buildChapterFramePrompt,
+  buildCustomActionPrompt,
+  buildNarrationPrompt,
+  selectBackgroundActors,
+} from "./prompts";
 
 describe("background actor selection", () => {
   it("selects relevant actors only and never fills empty slots", () => {
@@ -72,10 +78,13 @@ describe("background actor selection", () => {
 
     expect(JSON.stringify(prompt)).toContain("No unlisted skill or item use");
     expect(JSON.stringify(prompt)).toContain("Never narrate what that character found");
-    expect(prompt).toHaveProperty("viewpointCanon");
-    expect(prompt).not.toHaveProperty("stateBeforeViewpoint");
+    expect(JSON.stringify(prompt)).not.toContain("viewpointCanon.facts");
+    expect(JSON.stringify(prompt)).not.toContain("acceptedEvents");
+    expect(prompt).toHaveProperty("afterTurnViewpointCanon.povCharacter.experience", 10);
+    expect(prompt).toHaveProperty("beforeTurnPovCharacter.experience", 0);
     expect(prompt).not.toHaveProperty("worldBefore");
-    expect(prompt).toHaveProperty("canonicalEffects.stateMutations.0.amount", 10);
+    expect(prompt).toHaveProperty("currentChapterCanonicalEffects.stateMutations.0.amount", 10);
+    expect(prompt.instruction).toContain("happen during this chapter");
   });
 
   it("audits against a minimal projection and treats POV knowledge as allowed", () => {
@@ -103,7 +112,7 @@ describe("background actor selection", () => {
     expect(prompt).not.toHaveProperty("stateBefore");
     expect(prompt).not.toHaveProperty("stateProspective");
     expect(JSON.stringify(prompt)).not.toContain("knowledgeLedgers");
-    expect(prompt.instruction).toContain("Every field in viewpointCanon");
+    expect(prompt.instruction).toContain("Every field in afterTurnViewpointCanon");
     expect(prompt.instruction).toContain("Referring to an intention");
     expect(prompt.instruction).toContain("nextChoices are future options");
     expect((prompt.forbiddenFacts as readonly { id: string }[]).map(({ id }) => id)).not.toContain(
@@ -159,8 +168,75 @@ describe("background actor selection", () => {
       "forbiddenRemoteEffects.stateMutations.0.characterId",
       "varek-thorn",
     );
-    expect(JSON.stringify(prompt.allowedCanonicalEffects)).not.toContain("varek-thorn");
+    expect(JSON.stringify(prompt.currentChapterCanonicalEffects)).not.toContain("varek-thorn");
     expect(prompt.instruction).toContain("paraphrasing any forbidden remote event");
+  });
+
+  it("separates newly applied chapter effects from the after-turn state", () => {
+    const before = seed();
+    before.lockedPovId = "rowan-ashborn";
+    const prospective = structuredClone(before);
+    prospective.chapter = 1;
+    prospective.version += 1;
+    prospective.characters[0]!.experience += 10;
+    const delta = emptyDelta(before);
+    delta.stateMutations.push({
+      amount: 10,
+      characterId: "rowan-ashborn",
+      type: "grant_experience",
+    });
+
+    const prompt = JSON.parse(
+      buildAuditPrompt(
+        before,
+        prospective,
+        {
+          action: { type: "wait" },
+          actorId: "rowan-ashborn",
+          description: "Wait.",
+          milestoneId: null,
+          source: "suggested",
+          stateVersion: before.version,
+        },
+        delta,
+        { choices: [], terminal: false, title: "A safe frame" },
+        "Ash ".repeat(900),
+        "a".repeat(64),
+      ),
+    ) as Record<string, unknown>;
+
+    expect(prompt).toHaveProperty("beforeTurnPovCharacter.experience", 0);
+    expect(prompt).toHaveProperty("afterTurnViewpointCanon.povCharacter.experience", 10);
+    expect(prompt).toHaveProperty("currentChapterCanonicalEffects.stateMutations.0.amount", 10);
+    expect(prompt.instruction).toContain("Never call an exact listed effect pre-existing");
+  });
+
+  it("explains incomplete milestone targets and exposes two grounded action shapes", () => {
+    const state = seed();
+    state.lockedPovId = "rowan-ashborn";
+    state.arcClock.convergencePressure = true;
+    state.calendar.day = 48;
+    state.calendar.label = "Year 1, Ashfall 48";
+    state.chapter = 47;
+    state.version = 48;
+
+    const frame = JSON.parse(buildChapterFramePrompt(state)) as Record<string, unknown>;
+    const custom = JSON.parse(buildCustomActionPrompt(state, "Resolve the fracture.")) as Record<
+      string,
+      unknown
+    >;
+
+    for (const prompt of [frame, custom]) {
+      expect(prompt).toHaveProperty("milestone.id", "act-one-survival");
+      expect(prompt).toHaveProperty("milestone.completed", false);
+      expect(prompt).toHaveProperty(
+        "milestone.description",
+        "Survive reincarnation and identify the first seal fracture.",
+      );
+      expect(prompt).toHaveProperty("legalActionTargets.investigate");
+      expect(prompt).toHaveProperty("legalActionTargets.defend");
+      expect(JSON.stringify(prompt)).toContain("directly target");
+    }
   });
 });
 

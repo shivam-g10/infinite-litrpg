@@ -4,6 +4,8 @@ import {
   CHARACTER_IDS,
   NARRATIVE_AUDIT_DIMENSIONS,
   type NarrativeAudit,
+  type TraceEnvelope,
+  type ValidationIssue,
 } from "@infinite-litrpg/shared";
 import type OpenAI from "openai";
 import type { ParsedResponse, Response, ResponseUsage } from "openai/resources/responses/responses";
@@ -88,7 +90,13 @@ describe("StoryService", () => {
     const client = {
       responses: { parse, stream },
     } as unknown as OpenAI;
-    const service = new StoryService(store, client, options());
+    const draftRejections: (readonly ValidationIssue[])[] = [];
+    const runtimeAttempts: TraceEnvelope["attempts"] = [];
+    const service = new StoryService(store, client, {
+      ...options(),
+      onNarrativeDraftRejected: (issues) => draftRejections.push(issues),
+      onRuntimeAttempt: (attempt) => runtimeAttempts.push(attempt),
+    });
     const selected = service.selectPov("rowan-ashborn");
     const replayed: string[] = [];
     const command = {
@@ -118,6 +126,11 @@ describe("StoryService", () => {
     expect(store.loadFailedTurnTraces("ashen-crown-v1")).toEqual([]);
     expect(parse).toHaveBeenCalledTimes(2);
     expect(stream).toHaveBeenCalledTimes(2);
+    expect(draftRejections).toHaveLength(1);
+    expect(draftRejections[0]?.some(({ code }) => code === "INVALID_SCHEMA")).toBe(true);
+    expect(runtimeAttempts).toContainEqual(
+      expect.objectContaining({ errorCode: "NARRATIVE_AUDIT_REJECTED", phase: "narration" }),
+    );
     expect((result.godMode.calls as readonly { retries: number }[])[1]?.retries).toBe(1);
     const duplicate = await service.takeTurn(command);
     expect(duplicate.world).toMatchObject({ chapter: 1, version: 2 });

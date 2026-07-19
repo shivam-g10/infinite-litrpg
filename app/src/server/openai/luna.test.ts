@@ -1,4 +1,4 @@
-import type { WorldIntent } from "@infinite-litrpg/shared";
+import { PROMPT_VERSION, type WorldIntent } from "@infinite-litrpg/shared";
 import type {
   BetaResponse,
   BetaResponseOutputItem,
@@ -186,7 +186,7 @@ function intent(actorId: string, id: string): WorldIntent {
     goal: "Survive the chapter.",
     id,
     prerequisites: { requiredFactIds: [], requiredItemIds: [], requiredSkillIds: [] },
-    promptVersion: "1.3.0",
+    promptVersion: PROMPT_VERSION,
     stateVersion: 1,
   };
 }

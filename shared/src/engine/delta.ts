@@ -6,7 +6,13 @@ import {
   type WorldState,
 } from "../contracts";
 import { getClockPolicy } from "./clock";
-import { resolveIntentOutcome } from "./resolver";
+import {
+  actionAdvancesMilestone,
+  resolveCanonicalIntentDisposition,
+  resolveIntentOutcome,
+  resolveTurnLevelStateMutations,
+  type CanonicalIntentDisposition,
+} from "./resolver";
 import {
   type ValidationCode,
   type ValidationIssue,
@@ -38,6 +44,8 @@ export function stageWorldDelta(
   const delta = parsed.data;
   const issues: ValidationIssue[] = [];
   const policy = getClockPolicy(state.chapter);
+  const canonicalDisposition = resolveCanonicalIntentDisposition(state, intents);
+  const canonicalAccepted = canonicalDisposition?.accepted ?? [];
 
   if (!policy.modelCallAllowed || state.terminal) {
     issues.push(
@@ -88,7 +96,7 @@ export function stageWorldDelta(
         mutation.type === "end_story" &&
         sameStrings(mutation.resolvedEndingConstraints, state.endingConstraints),
     ) ||
-      !canEndEarly(state, intents, delta))
+      !canEndEarly(state, canonicalAccepted))
   ) {
     issues.push(
       makeIssue(
@@ -99,9 +107,9 @@ export function stageWorldDelta(
     );
   }
 
-  validateIntentDisposition(state, intents, delta, issues);
-  validateMutationEntailment(state, intents, delta, issues);
-  validateKnowledgeEntailment(state, intents, delta, issues);
+  validateIntentDisposition(state, intents, delta, canonicalDisposition, issues);
+  validateMutationEntailment(state, canonicalAccepted, delta, issues);
+  validateKnowledgeEntailment(state, canonicalAccepted, delta, issues);
   if (issues.length > 0) {
     return { issues, ok: false };
   }
@@ -147,8 +155,31 @@ function validateIntentDisposition(
   state: WorldState,
   intents: readonly WorldIntent[],
   delta: WorldDelta,
+  canonical: CanonicalIntentDisposition | null,
   issues: ValidationIssue[],
 ): void {
+  if (canonical === null) {
+    issues.push(makeIssue("INTENT_UNKNOWN", "Turn lacks one canonical player intent", "intents"));
+  } else {
+    if (JSON.stringify(intents) !== JSON.stringify(canonical.intents)) {
+      issues.push(
+        makeIssue("INTENT_UNKNOWN", "Intent order must match deterministic priority", "intents"),
+      );
+    }
+    if (
+      JSON.stringify(delta.acceptedIntentIds) !==
+        JSON.stringify(canonical.accepted.map(({ id }) => id)) ||
+      JSON.stringify(delta.rejectedIntents) !== JSON.stringify(canonical.rejected)
+    ) {
+      issues.push(
+        makeIssue(
+          "INTENT_UNKNOWN",
+          "Accepted and rejected intents must match deterministic disposition",
+          "acceptedIntentIds",
+        ),
+      );
+    }
+  }
   const known = new Map(intents.map((intent) => [intent.id, intent]));
   const seen = new Set<string>();
   const accepted = new Set(delta.acceptedIntentIds);
@@ -476,15 +507,10 @@ function applyKnowledgeMutations(
 
 function validateMutationEntailment(
   state: WorldState,
-  intents: readonly WorldIntent[],
+  accepted: readonly WorldIntent[],
   delta: WorldDelta,
   issues: ValidationIssue[],
 ): void {
-  const intentsById = new Map(intents.map((intent) => [intent.id, intent]));
-  const accepted = delta.acceptedIntentIds.flatMap((id) => {
-    const intent = intentsById.get(id);
-    return intent ? [intent] : [];
-  });
   const acceptedActors = new Set<string>();
   for (const intent of accepted) {
     if (acceptedActors.has(intent.actorId)) {
@@ -577,7 +603,8 @@ function validateMutationEntailment(
       const supportingIntent = accepted.find(
         (intent) =>
           intent.id.startsWith("intent-player-") &&
-          milestone?.compatibleActionTypes.includes(intent.action.type),
+          milestone !== undefined &&
+          actionAdvancesMilestone(intent.action, milestone),
       );
       if (
         !policy.choicesRequireMilestone ||
@@ -656,6 +683,21 @@ function validateMutationEntailment(
     }
   }
 
+  const expectedStateMutations = accepted.flatMap(
+    (intent, index) =>
+      resolveIntentOutcome(state, intent, delta.clock.toChapter, index, accepted).mutations,
+  );
+  expectedStateMutations.push(...resolveTurnLevelStateMutations(state, accepted));
+  if (JSON.stringify(delta.stateMutations) !== JSON.stringify(expectedStateMutations)) {
+    issues.push(
+      makeIssue(
+        "MUTATION_UNSUPPORTED",
+        "State mutations must exactly match deterministic turn resolution",
+        "stateMutations",
+      ),
+    );
+  }
+
   if (delta.events.length !== accepted.length) {
     issues.push(
       makeIssue("EVENT_MISSING", "Resolved event count must equal accepted intent count", "events"),
@@ -711,15 +753,10 @@ function validateMutationEntailment(
 
 function validateKnowledgeEntailment(
   state: WorldState,
-  intents: readonly WorldIntent[],
+  accepted: readonly WorldIntent[],
   delta: WorldDelta,
   issues: ValidationIssue[],
 ): void {
-  const intentsById = new Map(intents.map((intent) => [intent.id, intent]));
-  const accepted = delta.acceptedIntentIds.flatMap((id) => {
-    const intent = intentsById.get(id);
-    return intent ? [intent] : [];
-  });
   const expectedOutcomes = accepted.map((intent, index) =>
     resolveIntentOutcome(state, intent, delta.clock.toChapter, index, accepted),
   );
@@ -806,11 +843,7 @@ function sameStrings(left: readonly string[], right: readonly string[]): boolean
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
-function canEndEarly(
-  state: WorldState,
-  intents: readonly WorldIntent[],
-  delta: WorldDelta,
-): boolean {
+function canEndEarly(state: WorldState, accepted: readonly WorldIntent[]): boolean {
   if (
     state.act !== 7 ||
     state.chapter < 301 ||
@@ -819,11 +852,11 @@ function canEndEarly(
     return false;
   }
   const finaleMilestone = state.arcClock.milestones.find(({ act }) => act === 7);
-  return intents.some(
+  return accepted.some(
     (intent) =>
-      delta.acceptedIntentIds.includes(intent.id) &&
       intent.id.startsWith("intent-player-") &&
-      finaleMilestone?.compatibleActionTypes.includes(intent.action.type),
+      finaleMilestone !== undefined &&
+      actionAdvancesMilestone(intent.action, finaleMilestone),
   );
 }
 

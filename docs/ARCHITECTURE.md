@@ -27,13 +27,15 @@ flowchart LR
 3. Run maximum three Luna background intents from same state version.
 4. Resolve user attempt and intents into proposed `WorldDelta`.
 5. Parse strict schema. Refusal or incomplete output causes no mutation.
-6. Check version, death, location, inventory, progression, knowledge, and clock invariants.
+6. Recompute canonical intent disposition and require events, state mutations, and knowledge mutations to exactly equal deterministic resolver output.
 7. Stage prospective state in memory. Canon remains at current version.
 8. Give Terra only POV-safe context and prospective visible events.
 9. Target 975 to 1,025 words, reject outside the absolute 900 to 1,300 word range, and run the narrative contract audit.
 10. Atomically commit delta, knowledge, chapter, trace metadata, usage, cost, and next version.
 
 Narration failure leaves canon unchanged. Accepted `WorldDelta` is sole source of new canon. Audit can reject prose but cannot add state mutations.
+
+From chapter 48 through 50 of each act, choices stay milestone-compatible. An incomplete milestone requires a direct typed target. The locked POV can target the milestone through `investigate.subjectId` or a supported `targetId`; background agents cannot claim that abstract target.
 
 ## Model Routing
 

@@ -16,6 +16,7 @@ import {
   type NarrativeAudit,
   type PlayerAction,
   type TraceEnvelope,
+  type ValidationIssue,
   type WorldState,
   buildPovContext,
   resolveTurn,
@@ -37,8 +38,8 @@ import {
   runLunaWorldTick,
   runStructuredResponse,
   type LunaCallSummary,
-  type RuntimeCallResult,
   type RuntimeAttempt,
+  type RuntimeCallResult,
   type RuntimeUsage,
 } from "../openai";
 import { StaleWorldVersionError, StoryStore } from "../storage/story-store";
@@ -59,7 +60,8 @@ export interface StoryServiceOptions {
   readonly maxCostUsdPerChapter: number;
   readonly nativeMultiAgent: boolean;
   readonly onNarrativeAudit?: (audit: NarrativeAudit) => void;
-  readonly onRuntimeAttempt?: (attempt: RuntimeAttempt) => void;
+  readonly onNarrativeDraftRejected?: (issues: readonly ValidationIssue[]) => void;
+  readonly onRuntimeAttempt?: (attempt: TraceEnvelope["attempts"][number]) => void;
 }
 
 export interface TakeChoiceCommand {
@@ -193,7 +195,7 @@ export class StoryService {
         const tracedAttempt = { ...attempt, phase: attemptPhase };
         attempts.push(tracedAttempt);
         currentAttempts.push(tracedAttempt);
-        this.options.onRuntimeAttempt?.(attempt);
+        this.options.onRuntimeAttempt?.(tracedAttempt);
       },
       timeoutMs: 60_000,
     } as const;
@@ -327,6 +329,7 @@ export class StoryService {
             title: frameCall.data.title,
           });
           if (!draft.ok) {
+            this.options.onNarrativeDraftRejected?.(draft.issues);
             retryDirective = `The prior draft failed deterministic validation: ${formatIssues(draft.issues)}. Write 975 to 1025 words. Remove every unsupported fact or action.`;
             return { accepted: false, reason: formatIssues(draft.issues) };
           }

@@ -46,6 +46,7 @@ export const VALIDATION_CODES = [
   "LOCATION_MISMATCH",
   "LOCATION_NOT_ADJACENT",
   "MANA_INSUFFICIENT",
+  "MILESTONE_ACTION_DEADLOCK",
   "MILESTONE_DEADLINE",
   "MILESTONE_MISSING",
   "MILESTONE_REQUIRED",
@@ -288,6 +289,20 @@ export function validateWorldState(input: unknown): ValidationResult<WorldState>
     }
     milestoneIds.add(milestone.id);
     milestoneActs.add(milestone.act);
+    const directTargetActionTypes = new Set(
+      milestone.compatibleActionTypes.filter((type) =>
+        ["investigate", "interact", "defend", "use_item", "use_skill"].includes(type),
+      ),
+    );
+    if (directTargetActionTypes.size < 2) {
+      issues.push(
+        issue(
+          "MILESTONE_ACTION_DEADLOCK",
+          `Milestone ${milestone.id} needs two directly targetable action types`,
+          "arcClock.milestones.compatibleActionTypes",
+        ),
+      );
+    }
     if (state.chapter >= milestone.requiredByChapter && !milestone.completed) {
       issues.push(
         issue(
@@ -624,6 +639,14 @@ function validateIntentAction(
   intent: WorldIntent,
   issues: ValidationIssue[],
 ): void {
+  const policy = getClockPolicy(state.chapter);
+  const milestone =
+    policy.choicesRequireMilestone && actor.id === state.lockedPovId
+      ? state.arcClock.milestones.find(({ act }) => act === policy.currentAct)
+      : undefined;
+  const milestoneTargetId = milestone?.compatibleActionTypes.includes(intent.action.type)
+    ? milestone.id
+    : undefined;
   if (intent.action.type !== "move") {
     if (intent.action.type === "investigate") {
       const subjectId = intent.action.subjectId;
@@ -640,15 +663,11 @@ function validateIntentAction(
             event.participantIds.includes(actor.id) ||
             event.observerIds.includes(actor.id)),
       );
-      const policy = getClockPolicy(state.chapter);
-      const milestoneId = policy.choicesRequireMilestone
-        ? state.arcClock.milestones.find(({ act }) => act === policy.currentAct)?.id
-        : undefined;
       const allowed =
         subjectId === actor.locationId ||
         visibleEvent ||
         knownFactIds.has(subjectId) ||
-        subjectId === milestoneId;
+        subjectId === milestoneTargetId;
       if (!allowed) {
         const remoteLocation = state.locations.some(({ id }) => id === subjectId);
         issues.push(
@@ -661,6 +680,7 @@ function validateIntentAction(
       }
     } else if (intent.action.type === "interact") {
       const action = intent.action;
+      if (action.targetId === milestoneTargetId) return;
       const target = state.characters.find(({ id }) => id === action.targetId);
       if (!target || target.id === actor.id) {
         issues.push(
@@ -693,6 +713,7 @@ function validateIntentAction(
       const allowed =
         action.targetId === actor.locationId ||
         action.targetId === actor.factionId ||
+        action.targetId === milestoneTargetId ||
         visibleEvent ||
         target?.locationId === actor.locationId;
       if (!allowed) {
@@ -709,6 +730,7 @@ function validateIntentAction(
       intent.action.targetId !== null
     ) {
       const action = intent.action;
+      if (action.targetId === milestoneTargetId) return;
       const target = state.characters.find(({ id }) => id === action.targetId);
       if (!target) {
         issues.push(

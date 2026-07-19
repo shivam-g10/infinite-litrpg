@@ -27,6 +27,12 @@ export interface ResolvedTurn {
   readonly playerIntent: WorldIntent;
 }
 
+export interface CanonicalIntentDisposition {
+  readonly accepted: readonly WorldIntent[];
+  readonly intents: readonly WorldIntent[];
+  readonly rejected: WorldDelta["rejectedIntents"];
+}
+
 export function resolveTurn(
   stateInput: unknown,
   playerActionInput: unknown,
@@ -64,7 +70,8 @@ export function resolveTurn(
     policy.choicesRequireMilestone &&
     (actMilestone === undefined ||
       playerAction.milestoneId !== actMilestone.id ||
-      !actMilestone.compatibleActionTypes.includes(playerAction.action.type))
+      !actMilestone.compatibleActionTypes.includes(playerAction.action.type) ||
+      (!actMilestone.completed && !actionAdvancesMilestone(playerAction.action, actMilestone)))
   ) {
     return failure(
       "MILESTONE_REQUIRED",
@@ -86,41 +93,14 @@ export function resolveTurn(
     return playerValidation;
   }
 
-  const backgroundIntents = [...batchResult.data.intents].sort(
-    (left, right) => left.actorId.localeCompare(right.actorId) || left.id.localeCompare(right.id),
-  );
-  const intents = [playerIntent, ...backgroundIntents];
-  const accepted: WorldIntent[] = [playerIntent];
-  const rejected: WorldDelta["rejectedIntents"] = [];
-  const claimedConflictKeys = new Set(conflictKeys(playerIntent));
-
-  for (const intent of backgroundIntents) {
-    const validation = validateIntent(state, intent);
-    if (!validation.ok) {
-      const firstIssue = validation.issues[0];
-      rejected.push({
-        code: rejectionCode(firstIssue?.code),
-        intentId: intent.id,
-        reason: firstIssue?.message ?? "Intent precondition failed",
-      });
-      continue;
-    }
-
-    const keys = conflictKeys(intent);
-    if (keys.some((key) => claimedConflictKeys.has(key))) {
-      rejected.push({
-        code: "CONFLICT_LOST",
-        intentId: intent.id,
-        reason: "A higher-priority intent claimed the same actor or target",
-      });
-      continue;
-    }
-
-    accepted.push(intent);
-    for (const key of keys) {
-      claimedConflictKeys.add(key);
-    }
+  const disposition = resolveCanonicalIntentDisposition(state, [
+    playerIntent,
+    ...batchResult.data.intents,
+  ]);
+  if (disposition === null) {
+    return failure("INTENT_UNKNOWN", "Turn lacks one canonical player intent", "intents");
   }
+  const { accepted, intents, rejected } = disposition;
 
   const events: ResolvedEvent[] = [];
   const stateMutations: StateMutation[] = [];
@@ -133,14 +113,8 @@ export function resolveTurn(
     knowledgeMutations.push(...outcome.knowledgeMutations);
     surfacedClueFactIds.push(...outcome.surfacedClueFactIds);
   });
-  stateMutations.push({
-    amount: 10,
-    characterId: playerIntent.actorId,
-    type: "grant_experience",
-  });
-  if (policy.choicesRequireMilestone && actMilestone && !actMilestone.completed) {
-    stateMutations.push({ milestoneId: actMilestone.id, type: "complete_milestone" });
-  }
+  stateMutations.push(...resolveTurnLevelStateMutations(state, accepted));
+  const earlyTerminal = stateMutations.some(({ type }) => type === "end_story");
 
   const delta: WorldDelta = {
     acceptedIntentIds: accepted.map(({ id }) => id),
@@ -148,7 +122,7 @@ export function resolveTurn(
       convergencePressure: policy.convergencePressure,
       fromAct: state.act,
       fromChapter: state.chapter,
-      terminal: policy.terminal,
+      terminal: policy.terminal || earlyTerminal,
       toAct: policy.postCommitAct,
       toChapter: nextChapter,
       transitionRequired: policy.transitionRequired,
@@ -164,6 +138,128 @@ export function resolveTurn(
   };
 
   return { data: { delta, intents, playerIntent }, ok: true };
+}
+
+export function resolveCanonicalIntentDisposition(
+  state: WorldState,
+  inputIntents: readonly WorldIntent[],
+): CanonicalIntentDisposition | null {
+  const policy = getClockPolicy(state.chapter);
+  if (policy.nextChapter === null || state.lockedPovId === null) return null;
+  const expectedPlayerIntentId = `intent-player-${policy.nextChapter}-${state.version}`;
+  const playerMatches = inputIntents.filter(
+    ({ actorId, id }) => id === expectedPlayerIntentId && actorId === state.lockedPovId,
+  );
+  if (
+    playerMatches.length !== 1 ||
+    new Set(inputIntents.map(({ id }) => id)).size !== inputIntents.length
+  ) {
+    return null;
+  }
+  const playerIntent = playerMatches[0];
+  if (!playerIntent || !validateIntent(state, playerIntent).ok) return null;
+  const backgroundIntents = inputIntents
+    .filter((intent) => intent !== playerIntent)
+    .sort(
+      (left, right) => left.actorId.localeCompare(right.actorId) || left.id.localeCompare(right.id),
+    );
+  if (backgroundIntents.length > 3) return null;
+
+  const intents = [playerIntent, ...backgroundIntents];
+  const accepted: WorldIntent[] = [playerIntent];
+  const rejected: WorldDelta["rejectedIntents"] = [];
+  const claimedConflictKeys = new Set(conflictKeys(playerIntent));
+  for (const intent of backgroundIntents) {
+    const validation = validateIntent(state, intent);
+    if (!validation.ok) {
+      const firstIssue = validation.issues[0];
+      rejected.push({
+        code: rejectionCode(firstIssue?.code),
+        intentId: intent.id,
+        reason: firstIssue?.message ?? "Intent precondition failed",
+      });
+      continue;
+    }
+    const keys = conflictKeys(intent);
+    if (keys.some((key) => claimedConflictKeys.has(key))) {
+      rejected.push({
+        code: "CONFLICT_LOST",
+        intentId: intent.id,
+        reason: "A higher-priority intent claimed the same actor or target",
+      });
+      continue;
+    }
+    accepted.push(intent);
+    for (const key of keys) claimedConflictKeys.add(key);
+  }
+  return { accepted, intents, rejected };
+}
+
+export function resolveTurnLevelStateMutations(
+  state: WorldState,
+  accepted: readonly WorldIntent[],
+): StateMutation[] {
+  const policy = getClockPolicy(state.chapter);
+  const playerIntent = accepted.find(
+    (intent) =>
+      intent.id === `intent-player-${String(policy.nextChapter)}-${state.version}` &&
+      intent.actorId === state.lockedPovId,
+  );
+  if (!playerIntent) return [];
+
+  const mutations: StateMutation[] = [
+    { amount: 10, characterId: playerIntent.actorId, type: "grant_experience" },
+  ];
+  const milestone = state.arcClock.milestones.find(({ act }) => act === policy.currentAct);
+  if (
+    policy.choicesRequireMilestone &&
+    milestone &&
+    !milestone.completed &&
+    actionAdvancesMilestone(playerIntent.action, milestone)
+  ) {
+    mutations.push({ milestoneId: milestone.id, type: "complete_milestone" });
+  }
+  if (!policy.terminal && canEndStoryEarly(state, playerIntent)) {
+    mutations.push({
+      reason: "The final Ashen Crown choice resolved the Void, Crown, and chosen life.",
+      resolvedEndingConstraints: [...state.endingConstraints],
+      type: "end_story",
+    });
+  }
+  return mutations;
+}
+
+export function actionAdvancesMilestone(
+  action: IntentAction,
+  milestone: WorldState["arcClock"]["milestones"][number],
+): boolean {
+  if (!milestone.compatibleActionTypes.includes(action.type)) return false;
+  switch (action.type) {
+    case "investigate":
+      return action.subjectId === milestone.id;
+    case "interact":
+    case "defend":
+      return action.targetId === milestone.id;
+    case "use_item":
+    case "use_skill":
+      return action.targetId === milestone.id;
+    default:
+      return false;
+  }
+}
+
+function canEndStoryEarly(state: WorldState, playerIntent: WorldIntent): boolean {
+  if (
+    state.act !== 7 ||
+    state.chapter < 301 ||
+    !state.arcClock.milestones.every(({ completed }) => completed)
+  ) {
+    return false;
+  }
+  const finaleMilestone = state.arcClock.milestones.find(({ act }) => act === 7);
+  return (
+    finaleMilestone !== undefined && actionAdvancesMilestone(playerIntent.action, finaleMilestone)
+  );
 }
 
 function toPlayerIntent(state: WorldState, action: PlayerAction, nextChapter: number): WorldIntent {

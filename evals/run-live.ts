@@ -10,18 +10,18 @@ import {
   type ChapterRecord,
   type CharacterId,
   type TraceEnvelope,
+  type ValidationIssue,
 } from "@infinite-litrpg/shared";
 import OpenAI from "openai";
 
 import { OpenAIRuntimeError } from "../app/src/server/openai/errors";
-import type { RuntimeAttempt } from "../app/src/server/openai/policy";
 import { StoryService } from "../app/src/server/story/story-service";
 import { StoryStore } from "../app/src/server/storage/story-store";
 
 const ROOT = process.cwd();
 const REPORT_DIRECTORY = resolve(ROOT, "evals", "reports");
 const REVIEW_DIRECTORY = resolve(ROOT, "docs", "review-packets");
-const PER_CHAPTER_CAP_USD = 0.1;
+const DEFAULT_PER_CHAPTER_CAP_USD = 0.1;
 const TOTAL_CAP_USD = 3;
 
 interface LiveResult {
@@ -41,26 +41,41 @@ interface LiveResult {
 }
 
 interface LiveReport {
-  attempts: RuntimeAttempt[];
+  attempts: TraceEnvelope["attempts"];
+  auditRejections: { audit: ChapterRecord["narrativeAudit"]; povId: CharacterId }[];
+  chapterCostCapUsd: number;
   completedChapters: number;
+  cumulativeCostUsd: number;
   error: { code: string; message: string } | null;
+  draftRejections: { issues: readonly ValidationIssue[]; povId: CharacterId }[];
   finishedAt: string;
   gates: Record<string, boolean>;
   nativeRequested: boolean;
   povFilter: CharacterId | null;
+  priorSpendUsd: number;
+  projectedMaximumCumulativeCostUsd: number;
   results: Omit<LiveResult, "prose">[];
   startedAt: string;
   suite: "full" | "smoke";
   totalCostCapUsd: number;
   totalCostUsd: number;
-  version: 1;
+  version: 3;
 }
 
 async function main(): Promise<void> {
-  const suite = parseSuite(process.argv.slice(2));
-  const nativeRequested = process.argv.includes("--native");
-  const povFilter = parsePov(process.argv.slice(2));
-  if (suite === "full" && !process.argv.includes("--confirm-cost")) {
+  const args = process.argv.slice(2);
+  const suite = parseSuite(args);
+  const nativeRequested = args.includes("--native");
+  const povFilter = parsePov(args);
+  const perChapterCapUsd = parseUsdFlag(
+    args,
+    "--chapter-cap-usd",
+    DEFAULT_PER_CHAPTER_CAP_USD,
+    false,
+    DEFAULT_PER_CHAPTER_CAP_USD,
+  );
+  const priorSpendUsd = parseUsdFlag(args, "--prior-spend-usd", 0, true, TOTAL_CAP_USD);
+  if (suite === "full" && !args.includes("--confirm-cost")) {
     throw new Error("Full live eval requires --confirm-cost");
   }
 
@@ -72,28 +87,37 @@ async function main(): Promise<void> {
 
   const startedAt = new Date().toISOString();
   const results: LiveResult[] = [];
-  const attempts: RuntimeAttempt[] = [];
+  const attempts: TraceEnvelope["attempts"] = [];
+  const auditRejections: LiveReport["auditRejections"] = [];
+  const draftRejections: LiveReport["draftRejections"] = [];
   let failure: unknown = null;
   try {
     const povs = suite === "smoke" ? [povFilter ?? "rowan-ashborn"] : CHARACTER_IDS;
     const turnsPerPov = suite === "smoke" ? 1 : 2;
     const expectedChapters = povs.length * turnsPerPov;
-    if (expectedChapters * PER_CHAPTER_CAP_USD > TOTAL_CAP_USD) {
-      throw new Error("Configured chapter caps can exceed the live-suite total cap");
+    if (priorSpendUsd + expectedChapters * perChapterCapUsd > TOTAL_CAP_USD) {
+      throw new Error("Prior spend plus configured chapter caps can exceed the $3 total cap");
     }
     for (const povId of povs) {
       const store = new StoryStore();
       try {
         const service = new StoryService(store, client, {
           maxBackgroundAgents: 3,
-          maxCostUsdPerChapter: PER_CHAPTER_CAP_USD,
+          maxCostUsdPerChapter: perChapterCapUsd,
           nativeMultiAgent: nativeRequested,
           onNarrativeAudit: (audit) => {
             if (!audit.approved) {
+              auditRejections.push({ audit, povId });
               console.log(
                 `audit rejected: ${JSON.stringify(audit.scores)}; leaks=${audit.leakedFactIds.join(",") || "none"}; ${audit.evidence.map(({ detail }) => detail).join(" ")}`,
               );
             }
+          },
+          onNarrativeDraftRejected: (issues) => {
+            draftRejections.push({ issues, povId });
+            console.log(
+              `draft rejected: ${issues.map(({ code, message }) => `${code}: ${message}`).join("; ")}`,
+            );
           },
           onRuntimeAttempt: (attempt) => {
             attempts.push(attempt);
@@ -155,7 +179,7 @@ async function main(): Promise<void> {
             usage: chapter.usage,
             wordCount: wordCount(chapter.prose),
           };
-          assertChapterResult(result, nativeRequested);
+          assertChapterResult(result, nativeRequested, perChapterCapUsd);
           results.push(result);
           const totalCost = sum(attempts.map(({ costUsd }) => costUsd));
           if (totalCost > TOTAL_CAP_USD) throw new Error("Live suite exceeded the $3 total cap");
@@ -181,7 +205,7 @@ async function main(): Promise<void> {
     allAuditsApproved: results.length === expected && results.every(({ audit }) => audit.approved),
     allCommitsCompleted: results.length === expected,
     allCostsWithinChapterCap:
-      results.length === expected && results.every(({ costUsd }) => costUsd <= PER_CHAPTER_CAP_USD),
+      results.length === expected && results.every(({ costUsd }) => costUsd <= perChapterCapUsd),
     allPovLeakListsEmpty:
       results.length === expected && results.every(({ audit }) => audit.leakedFactIds.length === 0),
     allProseWithinWordLimit:
@@ -200,22 +224,28 @@ async function main(): Promise<void> {
       ) <= 60_000,
     traceCostMatchesAttempts:
       Math.abs(sum(results.map(({ costUsd }) => costUsd)) - totalCostUsd) < 0.000_000_1,
-    totalCostWithinCap: totalCostUsd <= TOTAL_CAP_USD,
+    totalCostWithinCap: priorSpendUsd + totalCostUsd <= TOTAL_CAP_USD,
   };
   const report: LiveReport = {
     attempts,
+    auditRejections,
+    chapterCostCapUsd: perChapterCapUsd,
     completedChapters: results.length,
+    cumulativeCostUsd: priorSpendUsd + totalCostUsd,
+    draftRejections,
     error: failure === null ? null : safeError(failure, apiKey),
     finishedAt: new Date().toISOString(),
     gates,
     nativeRequested,
     povFilter,
+    priorSpendUsd,
+    projectedMaximumCumulativeCostUsd: priorSpendUsd + expected * perChapterCapUsd,
     results: results.map(toReportResult),
     startedAt,
     suite,
     totalCostCapUsd: TOTAL_CAP_USD,
     totalCostUsd,
-    version: 1,
+    version: 3,
   };
   const reportPath = resolve(
     REPORT_DIRECTORY,
@@ -244,14 +274,18 @@ async function main(): Promise<void> {
   }
 }
 
-function assertChapterResult(result: LiveResult, nativeRequested: boolean): void {
+function assertChapterResult(
+  result: LiveResult,
+  nativeRequested: boolean,
+  perChapterCapUsd: number,
+): void {
   if (!result.audit.approved || result.audit.leakedFactIds.length > 0) {
     throw new Error(`Narrative audit failed for ${result.povId} chapter ${result.chapter}`);
   }
   if (result.wordCount < 900 || result.wordCount > 1_300) {
     throw new Error(`Chapter word count is invalid: ${result.wordCount}`);
   }
-  if (result.costUsd > PER_CHAPTER_CAP_USD) {
+  if (result.costUsd > perChapterCapUsd) {
     throw new Error(`Chapter cost $${result.costUsd.toFixed(6)} exceeded cap`);
   }
   if (result.streamChunkCount < 1 || !result.streamReconstructed) {
@@ -331,6 +365,24 @@ function parsePov(args: readonly string[]): CharacterId | null {
     throw new Error(`Unknown --pov value ${value ?? "missing"}`);
   }
   return value as CharacterId;
+}
+
+function parseUsdFlag(
+  args: readonly string[],
+  name: string,
+  fallback: number,
+  allowZero: boolean,
+  maximum: number,
+): number {
+  const index = args.indexOf(name);
+  if (index === -1) return fallback;
+  const value = Number(args[index + 1]);
+  if (!Number.isFinite(value) || value > maximum || (allowZero ? value < 0 : value <= 0)) {
+    throw new Error(
+      `${name} must be ${allowZero ? "nonnegative" : "positive"} and at most ${maximum}`,
+    );
+  }
+  return value;
 }
 
 function safeError(error: unknown, apiKey: string): { code: string; message: string } {

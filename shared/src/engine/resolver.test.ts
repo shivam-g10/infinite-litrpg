@@ -145,8 +145,12 @@ describe("deterministic turn resolution", () => {
     expect(forgedResult.ok).toBe(false);
     if (!forgedResult.ok) {
       expect(
-        forgedResult.issues.filter(({ code }) => code === "MUTATION_UNSUPPORTED"),
-      ).toHaveLength(2);
+        forgedResult.issues.some(
+          ({ code, message }) =>
+            code === "MUTATION_UNSUPPORTED" &&
+            message === "State mutations must exactly match deterministic turn resolution",
+        ),
+      ).toBe(true);
     }
 
     const rewritten = structuredClone(resolved.data.delta);
@@ -156,6 +160,72 @@ describe("deterministic turn resolution", () => {
     expect(rewrittenResult.ok).toBe(false);
     if (!rewrittenResult.ok) {
       expect(rewrittenResult.issues.some(({ code }) => code === "EVENT_MISSING")).toBe(true);
+    }
+    expect(state).toEqual(before);
+  });
+
+  it("rejects a duplicate mutation even when each copy matches one accepted intent", () => {
+    const state = seedState();
+    const before = structuredClone(state);
+    const resolved = resolveTurn(
+      state,
+      playerAction(state, {
+        itemId: "copper-coin",
+        quantity: 1,
+        targetId: null,
+        type: "use_item",
+      }),
+      [],
+    );
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    const duplicated = structuredClone(resolved.data.delta);
+    const spend = duplicated.stateMutations.find(({ type }) => type === "adjust_inventory");
+    expect(spend).toBeDefined();
+    if (!spend) return;
+    duplicated.stateMutations.push(structuredClone(spend));
+
+    const staged = stageWorldDelta(state, resolved.data.intents, duplicated);
+    expect(staged.ok).toBe(false);
+    if (!staged.ok) {
+      expect(staged.issues.some(({ code }) => code === "MUTATION_UNSUPPORTED")).toBe(true);
+    }
+    expect(state).toEqual(before);
+  });
+
+  it("rejects caller-selected intent disposition that drops the valid player action", () => {
+    const state = seedState();
+    const before = structuredClone(state);
+    const resolved = resolveTurn(
+      state,
+      playerAction(state, { destinationId: "ash-road", type: "move" }),
+      [],
+    );
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    const forged = structuredClone(resolved.data.delta);
+    forged.acceptedIntentIds = [];
+    forged.rejectedIntents = [
+      {
+        code: "PRECONDITION_FAILED",
+        intentId: resolved.data.playerIntent.id,
+        reason: "Caller tried to erase a valid player action.",
+      },
+    ];
+    forged.events = [];
+    forged.knowledgeMutations = [];
+    forged.stateMutations = [];
+    forged.surfacedClueFactIds = [];
+
+    const staged = stageWorldDelta(state, resolved.data.intents, forged);
+    expect(staged.ok).toBe(false);
+    if (!staged.ok) {
+      expect(
+        staged.issues.some(
+          ({ code, message }) =>
+            code === "INTENT_UNKNOWN" && message.includes("deterministic disposition"),
+        ),
+      ).toBe(true);
     }
     expect(state).toEqual(before);
   });
@@ -371,6 +441,22 @@ describe("deterministic turn resolution", () => {
     state.chapter = 348;
     state.version = 349;
     for (const milestone of state.arcClock.milestones) milestone.completed = true;
+    const unrelated = resolveTurn(
+      state,
+      playerAction(state, { subjectId: "cinder-village", type: "investigate" }),
+      [],
+    );
+    expect(unrelated.ok).toBe(true);
+    if (!unrelated.ok) return;
+    const forgedEnding = structuredClone(unrelated.data.delta);
+    forgedEnding.clock.terminal = true;
+    forgedEnding.stateMutations.push({
+      reason: "A copied claim cannot end the story.",
+      resolvedEndingConstraints: [...state.endingConstraints],
+      type: "end_story",
+    });
+    expect(stageWorldDelta(state, unrelated.data.intents, forgedEnding).ok).toBe(false);
+
     const resolved = resolveTurn(
       state,
       playerAction(state, { subjectId: "act-seven-ending", type: "investigate" }),
@@ -378,15 +464,10 @@ describe("deterministic turn resolution", () => {
     );
     expect(resolved.ok).toBe(true);
     if (!resolved.ok) return;
-    const delta = structuredClone(resolved.data.delta);
-    delta.clock.terminal = true;
-    delta.stateMutations.push({
-      reason: "The Void seal, Ashen Crown, and Rowan's chosen life resolved together.",
-      resolvedEndingConstraints: [...state.endingConstraints],
-      type: "end_story",
-    });
+    expect(resolved.data.delta.clock.terminal).toBe(true);
+    expect(resolved.data.delta.stateMutations.some(({ type }) => type === "end_story")).toBe(true);
 
-    const staged = stageWorldDelta(state, resolved.data.intents, delta);
+    const staged = stageWorldDelta(state, resolved.data.intents, resolved.data.delta);
     expect(staged.ok).toBe(true);
     if (!staged.ok) return;
     expect(staged.data.state).toMatchObject({ chapter: 349, terminal: true });
@@ -437,6 +518,18 @@ describe("deterministic turn resolution", () => {
     }
   });
 
+  it("rejects a milestone that cannot offer two distinct direct-target choices", () => {
+    const state = seedState();
+    const milestone = state.arcClock.milestones[0];
+    if (milestone) milestone.compatibleActionTypes = ["move", "rally", "investigate"];
+
+    const result = validateWorldState(state);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues.some(({ code }) => code === "MILESTONE_ACTION_DEADLOCK")).toBe(true);
+    }
+  });
+
   it("requires a canon-compatible action before completing an act milestone", () => {
     const state = seedState();
     state.arcClock.convergencePressure = true;
@@ -451,6 +544,16 @@ describe("deterministic turn resolution", () => {
       expect(waiting.issues.some(({ code }) => code === "MILESTONE_REQUIRED")).toBe(true);
     }
 
+    const unrelated = resolveTurn(
+      state,
+      playerAction(state, { subjectId: "cinder-village", type: "investigate" }),
+      [],
+    );
+    expect(unrelated.ok).toBe(false);
+    if (!unrelated.ok) {
+      expect(unrelated.issues.some(({ code }) => code === "MILESTONE_REQUIRED")).toBe(true);
+    }
+
     const advancing = resolveTurn(
       state,
       playerAction(state, { subjectId: "act-one-survival", type: "investigate" }),
@@ -462,6 +565,43 @@ describe("deterministic turn resolution", () => {
     expect(staged.ok).toBe(true);
     if (staged.ok) {
       expect(staged.data.state.arcClock.milestones[0]?.completed).toBe(true);
+      expect(
+        resolveTurn(staged.data.state, playerAction(staged.data.state, { type: "wait" }), []).ok,
+      ).toBe(false);
+      expect(
+        resolveTurn(
+          staged.data.state,
+          playerAction(staged.data.state, {
+            subjectId: "cinder-village",
+            type: "investigate",
+          }),
+          [],
+        ).ok,
+      ).toBe(true);
+    }
+
+    const defending = resolveTurn(
+      state,
+      playerAction(state, { targetId: "act-one-survival", type: "defend" }),
+      [],
+    );
+    expect(defending.ok).toBe(true);
+    if (defending.ok) {
+      expect(stageWorldDelta(state, defending.data.intents, defending.data.delta).ok).toBe(true);
+    }
+
+    const background = backgroundIntent(state, "nyra-vale", "intent-background-milestone");
+    background.action = { targetId: "act-one-survival", type: "defend" };
+    const backgroundRejected = resolveTurn(
+      state,
+      playerAction(state, { subjectId: "act-one-survival", type: "investigate" }),
+      [background],
+    );
+    expect(backgroundRejected.ok).toBe(true);
+    if (backgroundRejected.ok) {
+      expect(backgroundRejected.data.delta.rejectedIntents).toContainEqual(
+        expect.objectContaining({ intentId: background.id }),
+      );
     }
   });
 
@@ -471,8 +611,12 @@ describe("deterministic turn resolution", () => {
 
     while (state.chapter < 350) {
       const policy = getClockPolicy(state.chapter);
+      const milestone = state.arcClock.milestones.find(({ act }) => act === policy.currentAct);
       const action = policy.choicesRequireMilestone
-        ? { subjectId: "cinder-village", type: "investigate" }
+        ? {
+            subjectId: milestone?.completed ? "cinder-village" : (milestone?.id ?? "missing"),
+            type: "investigate",
+          }
         : { type: "wait" };
       const resolved = resolveTurn(state, playerAction(state, action), []);
       expect(resolved.ok).toBe(true);
@@ -508,9 +652,8 @@ function seedState(): WorldState {
 
 function playerAction(state: WorldState, action: Readonly<Record<string, unknown>>) {
   const policy = getClockPolicy(state.chapter);
-  const milestoneId = policy.choicesRequireMilestone
-    ? (state.arcClock.milestones.find(({ act }) => act === policy.currentAct)?.id ?? null)
-    : null;
+  const milestone = state.arcClock.milestones.find(({ act }) => act === policy.currentAct);
+  const milestoneId = policy.choicesRequireMilestone ? (milestone?.id ?? null) : null;
   return {
     action,
     actorId: "rowan-ashborn",

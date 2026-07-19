@@ -87,11 +87,15 @@ export function buildCustomActionPrompt(state: WorldState, description: string):
     contractVersion: CONTRACT_VERSION,
     customDescription: description,
     instruction:
-      "Translate the user's attempted action into one strict PlayerAction. Do not make it succeed. Preserve intent honestly. Use only supplied context.",
+      "Translate the user's attempted action into one strict PlayerAction. Do not make it succeed. Preserve intent honestly. Use only supplied context. During a milestone lock, copy milestone.id into milestoneId and use a compatible action. If completed is false, the action must directly target milestone.id through investigate.subjectId or a supported targetId.",
     milestone:
       policy.choicesRequireMilestone && milestone
         ? {
             compatibleActionTypes: milestone.compatibleActionTypes,
+            completed: milestone.completed,
+            completionTargetRule:
+              "When incomplete, directly target id through investigate.subjectId or targetId. Move and rally cannot complete a milestone.",
+            description: milestone.description,
             id: milestone.id,
           }
         : null,
@@ -110,11 +114,15 @@ export function buildChapterFramePrompt(state: WorldState): string {
   const milestone = state.arcClock.milestones.find(({ act }) => act === policy.currentAct);
   return JSON.stringify({
     instruction:
-      "Return a short chapter title and exactly two materially different, legal next attempts. A terminal state returns zero choices. Never reveal hidden facts.",
+      "Return a short chapter title and exactly two materially different, legal next attempts. A terminal state returns zero choices. Never reveal hidden facts. During a milestone lock, both choices copy milestone.id into milestoneId and use compatible action types. If completed is false, each action directly targets milestone.id through investigate.subjectId or a supported targetId; return two distinct action objects.",
     milestone:
       policy.choicesRequireMilestone && milestone
         ? {
             compatibleActionTypes: milestone.compatibleActionTypes,
+            completed: milestone.completed,
+            completionTargetRule:
+              "When incomplete, directly target id through investigate.subjectId or targetId. Move and rally cannot complete a milestone.",
+            description: milestone.description,
             id: milestone.id,
           }
         : null,
@@ -135,22 +143,24 @@ export function buildNarrationPrompt(
   if (prospective.lockedPovId === null) throw new Error("POV must be locked");
   const povId = prospective.lockedPovId;
   return JSON.stringify({
-    acceptedEvents: visibleEventsForPov(delta, povId),
-    canonicalEffects: canonicalEffectsForPov(delta, povId),
+    afterTurnViewpointCanon: compactPovContext(prospective, povId),
+    beforeTurnPovCharacter: compactPovContext(before, povId).povCharacter,
     chapter: prospective.chapter,
+    currentChapterCanonicalEffects: canonicalEffectsForPov(delta, povId),
+    currentChapterVisibleEvents: visibleEventsForPov(delta, povId),
     forbiddenAdditions: [
-      "No extra action by the viewpoint character beyond playerAction and canonicalEffects.",
+      "No extra action by the viewpoint character beyond playerAction and currentChapterCanonicalEffects.",
       "No unlisted skill or item use, mana or health change, inventory change, clue, discovery, reward, injury, relationship change, or new named person, group, object, symbol, quest, or enemy. Existing supplied names may be recalled but not used unless listed as an effect.",
-      "Never claim a remote character knew, saw, heard, awaited, expected, received, noticed, answered, reacted to, or was affected by the viewpoint character unless acceptedEvents explicitly includes that character as a participant or observer.",
+      "Never claim a remote character knew, saw, heard, awaited, expected, received, noticed, answered, reacted to, or was affected by the viewpoint character unless currentChapterVisibleEvents explicitly includes that character as a participant or observer.",
       "A plan or goal to contact someone permits only the viewpoint character's intention. It does not permit contact, delivery, reception, awareness, or response.",
       "A canonical move permits the viewpoint character to arrive at the destination. It does not make anyone else notice the arrival.",
-      "A visible event by another character permits only the supplied event summary. Never narrate what that character found, inferred, confirmed, or discovered unless the result appears in viewpointCanon.facts.",
+      "A visible event by another character permits only the supplied event summary. Never narrate what that character found, inferred, confirmed, or discovered unless the result appears in afterTurnViewpointCanon.facts.",
       "No elapsed time beyond the supplied calendar change.",
-      "No durable world fact beyond acceptedEvents. Generic sensory texture may not assert new canon.",
+      "No durable world fact beyond currentChapterVisibleEvents and currentChapterCanonicalEffects. Generic sensory texture may not assert new canon.",
       "Never narrate a background intent as an action performed by the viewpoint character.",
     ],
     instruction:
-      "Write only the complete chapter prose. Use close-third viewpoint. Write 975 to 1025 words and stop before 1100. The absolute valid range is 900 to 1300 words. Dramatize exactly the attempted action and canonical effects, not plausible extra actions. viewpointCanon is established after-turn knowledge; playerAction and canonicalEffects define the transition. Show only supplied LitRPG changes. Build depth with immediate sensory texture, existing beliefs and goals, and already-known facts. Use supplied facts at face value only: never extrapolate their causes, mechanisms, history, places, or consequences. These may add prose but never canon. Do not append choices or notes.",
+      "Write only the complete chapter prose. Use close-third viewpoint. Write 975 to 1025 words and stop before 1100. The absolute valid range is 900 to 1300 words. Dramatize exactly the attempted action and currentChapterCanonicalEffects, not plausible extra actions. currentChapterCanonicalEffects and currentChapterVisibleEvents happen during this chapter. afterTurnViewpointCanon is the resulting state and already includes those changes. Compare beforeTurnPovCharacter with the after-turn character when describing a listed change as newly happening. Show only supplied LitRPG changes. Build depth with immediate sensory texture, existing beliefs and goals, and already-known facts. Use supplied facts at face value only: never extrapolate their causes, mechanisms, history, places, or consequences. These may add prose but never canon. Do not append choices or notes.",
     playerAction,
     stateTransition: {
       actAfter: prospective.act,
@@ -159,7 +169,6 @@ export function buildNarrationPrompt(
       convergencePressure: prospective.arcClock.convergencePressure,
       transitionRequired: prospective.arcClock.transitionRequired,
     },
-    viewpointCanon: compactPovContext(prospective, povId),
     world: localWorldContext(before, prospective, povId, delta),
   });
 }
@@ -181,8 +190,11 @@ export function buildAuditPrompt(
   const povId = prospective.lockedPovId;
   const allowedFactIds = new Set(buildPovContext(prospective, povId).factIds);
   return JSON.stringify({
-    allowedCanonicalEffects: canonicalEffectsForPov(delta, povId),
+    afterTurnViewpointCanon: compactPovContext(prospective, povId),
+    beforeTurnPovCharacter: compactPovContext(before, povId).povCharacter,
     chapterFrame: { terminal: chapterFrame.terminal, title: chapterFrame.title },
+    currentChapterCanonicalEffects: canonicalEffectsForPov(delta, povId),
+    currentChapterVisibleEvents: visibleEventsForPov(delta, povId),
     forbiddenFacts: prospective.facts
       .filter(({ id }) => !allowedFactIds.has(id))
       .map(({ claim, id }) => ({ claim, id })),
@@ -196,15 +208,13 @@ export function buildAuditPrompt(
       ),
     },
     instruction:
-      "Audit only. Never change canon. Audit the title, nextChoices, and prose as one artifact. choiceFulfillment scores whether prose fulfills playerAction. nextChoices are future options and must not occur in this prose; never penalize them for not occurring. forbiddenFacts and forbiddenRemoteEffects exist only for leak detection; never treat them as permitted knowledge. Asserting or paraphrasing any forbidden remote event or mutation gives povSafety zero with issueCode hidden-knowledge, even when true canon. Only an item in forbiddenFacts can appear in leakedFactIds. Every field in viewpointCanon is established POV canon, including plan, goals, beliefs, relationships, inventory, and observed events. Referring to an intention from plan or goals does not claim completion. Every field in visibleCanonicalEvents and allowedCanonicalEffects is permitted POV knowledge. Event participantIds and observerIds establish witnesses, not motives or private thoughts. A System notice that exactly restates allowed canonical mutations is permitted. Score every rubric dimension 0 to 2. Return seven evidence objects in rubricDimensions order. Each object copies its dimension, uses one allowed issueCode, and gives detail under 25 words. Use issueCode pass only when that dimension score is above zero. Continuity is zero for a contradiction or unsupported durable canon, not generic sensory texture. Any zero or leaked fact rejects. Copy proseHash exactly.",
+      "Audit only. Never change canon. Audit the title, nextChoices, and prose as one artifact. choiceFulfillment scores whether prose fulfills playerAction. nextChoices are future options and must not occur in this prose; never penalize them for not occurring. currentChapterCanonicalEffects and currentChapterVisibleEvents happen during this chapter. afterTurnViewpointCanon is the resulting state and already includes those changes. Never call an exact listed effect pre-existing merely because its after-turn value appears there; compare beforeTurnPovCharacter. forbiddenFacts and forbiddenRemoteEffects exist only for leak detection; never treat them as permitted knowledge. Asserting or paraphrasing any forbidden remote event or mutation gives povSafety zero with issueCode hidden-knowledge, even when true canon. Only an item in forbiddenFacts can appear in leakedFactIds. Every field in afterTurnViewpointCanon is established POV canon, including plan, goals, beliefs, relationships, inventory, and observed events. Referring to an intention from plan or goals does not claim completion. Every field in currentChapterVisibleEvents and currentChapterCanonicalEffects is permitted POV knowledge. Event participantIds and observerIds establish witnesses, not motives or private thoughts. A System notice that exactly restates a current chapter canonical mutation is permitted. Score every rubric dimension 0 to 2. Return seven evidence objects in rubricDimensions order. Each object copies its dimension, uses one allowed issueCode, and gives detail under 25 words. Use issueCode pass only when that dimension score is above zero. Continuity is zero for a contradiction or unsupported durable canon, not generic sensory texture. Any zero or leaked fact rejects. Copy proseHash exactly.",
     playerAction,
     prose,
     proseHash,
     nextChoices: chapterFrame.choices,
     rubricDimensions: NARRATIVE_AUDIT_DIMENSIONS,
     allowedIssueCodes: NARRATIVE_AUDIT_ISSUE_CODES,
-    viewpointCanon: compactPovContext(prospective, povId),
-    visibleCanonicalEvents: visibleEventsForPov(delta, povId),
     world: localWorldContext(before, prospective, povId, delta),
   });
 }
@@ -219,12 +229,20 @@ function legalActionTargets(state: WorldState, actorId: string) {
     .filter(({ locationId }) => locationId === actor.locationId)
     .map(({ id }) => id);
   const policy = getClockPolicy(state.chapter);
-  const milestoneId = policy.choicesRequireMilestone
-    ? (state.arcClock.milestones.find(({ act }) => act === policy.currentAct)?.id ?? null)
-    : null;
+  const milestoneId =
+    policy.choicesRequireMilestone && actorId === state.lockedPovId
+      ? (state.arcClock.milestones.find(({ act }) => act === policy.currentAct)?.id ?? null)
+      : null;
+  const milestoneTargets = milestoneId ? [milestoneId] : [];
   return {
-    defend: [...localCharacterIds, actor.locationId, actor.factionId, ...visibleEventIds],
-    interact: localCharacterIds.filter((id) => id !== actor.id),
+    defend: [
+      ...localCharacterIds,
+      actor.locationId,
+      actor.factionId,
+      ...visibleEventIds,
+      ...milestoneTargets,
+    ],
+    interact: [...localCharacterIds.filter((id) => id !== actor.id), ...milestoneTargets],
     investigate: [
       actor.locationId,
       ...visibleEventIds,
@@ -234,6 +252,8 @@ function legalActionTargets(state: WorldState, actorId: string) {
     move: state.locations.find(({ id }) => id === actor.locationId)?.adjacentLocationIds ?? [],
     rally: [{ factionId: actor.factionId, locationId: actor.locationId }],
     targetableCharacters: localCharacterIds,
+    use_item: [...localCharacterIds, ...milestoneTargets],
+    use_skill: [...localCharacterIds, ...milestoneTargets],
   };
 }
 
