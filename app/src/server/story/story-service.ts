@@ -300,7 +300,7 @@ export class StoryService {
         instructions:
           "Return a strict chapter frame: title, terminal flag, and two legal next choices unless terminal.",
         maxOutputTokens: 800,
-        model: "gpt-5.6-terra",
+        model: "gpt-5.6-luna",
         policy,
         reasoningEffort: "none",
         schema: ChapterFrameSchema,
@@ -316,7 +316,7 @@ export class StoryService {
           }
         },
       });
-      calls.push(toModelCall(frameCall, "gpt-5.6-terra", "intent", null));
+      calls.push(toModelCall(frameCall, "gpt-5.6-luna", "intent", null));
 
       const auditCalls: RuntimeCallResult<NarrativeAudit>[] = [];
       let approvedAudit: NarrativeAudit | null = null;
@@ -341,7 +341,7 @@ export class StoryService {
           if (!draft.ok) {
             this.options.onNarrativeDraftRejected?.(draft.issues);
             const safeIssueCodes = [...new Set(draft.issues.map(({ code }) => code))].sort();
-            retryDirective = `The prior draft failed deterministic validation with issue codes: ${safeIssueCodes.join(", ")}. Write 925 to 975 words. Remove every unsupported fact or action. Never repeat prior text that is absent from the supplied POV canon.`;
+            retryDirective = `The prior draft failed deterministic validation with issue codes: ${safeIssueCodes.join(", ")}. Write 900 to 925 words. Remove every unsupported fact or action. Never repeat prior text that is absent from the supplied POV canon.`;
             return { accepted: false, reason: formatIssues(draft.issues) };
           }
           const proseHash = hashText(prose);
@@ -356,11 +356,9 @@ export class StoryService {
                 resolved.data.delta,
                 frameCall.data,
                 prose,
-                proseHash,
               ),
-              instructions:
-                "Audit the chapter against canon and the rubric. Return strict NarrativeAudit JSON only.",
-              maxOutputTokens: 550,
+              instructions: "Audit canon. Return schema JSON only.",
+              maxOutputTokens: 450,
               model: "gpt-5.6-luna",
               policy,
               reasoningEffort: "none",
@@ -407,8 +405,8 @@ export class StoryService {
             ...(retryDirective === null ? {} : { retryDirective }),
           }),
         instructions:
-          "Write one close-third Ashen Crown LitRPG chapter. Plain prose only. Treat supplied POV canon as exhaustive. Never infer historical links.",
-        maxOutputTokens: 1_400,
+          "Write close-third Ashen Crown prose. Obey the supplied canon whitelist exactly.",
+        maxOutputTokens: 1_300,
         model: "gpt-5.6-terra",
         policy,
         reasoningEffort: "none",
@@ -865,12 +863,37 @@ export function canonicalizeNarrativeAuditOutput(
   proseHash: string,
   forbiddenFactIds: ReadonlySet<string>,
 ): NarrativeAudit {
+  const scores: NarrativeAudit["scores"] = {
+    arcProgress: audit.scores[5]!,
+    characterAutonomy: audit.scores[1]!,
+    choiceFulfillment: audit.scores[0]!,
+    continuity: audit.scores[4]!,
+    litrpgMechanics: audit.scores[3]!,
+    povSafety: audit.scores[2]!,
+    prose: audit.scores[6]!,
+  };
+  const zeroIssueCodes = {
+    arcProgress: "arc-stalled",
+    characterAutonomy: "autonomy-violation",
+    choiceFulfillment: "choice-not-fulfilled",
+    continuity: "unsupported-canon",
+    litrpgMechanics: "mechanics-mismatch",
+    povSafety: "hidden-knowledge",
+    prose: "prose-quality",
+  } as const;
+  const evidence = NARRATIVE_AUDIT_DIMENSIONS.map((dimension, index) => ({
+    detail: audit.evidence[index],
+    dimension,
+    issueCode: scores[dimension] > 0 ? ("pass" as const) : zeroIssueCodes[dimension],
+  }));
   const canonical = NarrativeAuditSchema.parse({
-    ...audit,
+    evidence,
+    leakedFactIds: audit.leakedFactIds,
     approved:
-      NARRATIVE_AUDIT_DIMENSIONS.every((dimension) => audit.scores[dimension] >= 1) &&
+      NARRATIVE_AUDIT_DIMENSIONS.every((dimension) => scores[dimension] >= 1) &&
       audit.leakedFactIds.length === 0,
     proseHash,
+    scores,
   });
   validateNarrativeAuditOutput(canonical, proseHash, forbiddenFactIds);
   return canonical;

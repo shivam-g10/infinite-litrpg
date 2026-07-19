@@ -77,24 +77,22 @@ describe("background actor selection", () => {
     ) as Record<string, unknown>;
 
     expect(JSON.stringify(prompt)).toContain("No unlisted skill or item use");
-    expect(JSON.stringify(prompt)).toContain(
-      "beyond afterTurnViewpointCanon, world, currentChapterVisibleEvents",
-    );
-    expect(JSON.stringify(prompt)).toContain("Never narrate what that character found");
-    expect(JSON.stringify(prompt)).toContain("Never combine an identity, threat, location");
-    expect(prompt.instruction).toContain("Knowledge whitelist");
-    expect(prompt.instruction).toContain(
-      "unless one whitelist field states that exact relationship",
-    );
+    expect(JSON.stringify(prompt)).toContain("Another character event permits only its summary");
+    expect(JSON.stringify(prompt)).toContain("No durable fact beyond the whitelist");
+    expect(JSON.stringify(prompt)).toContain("a background intent is never a viewpoint action");
+    expect(prompt.instruction).toContain("the exhaustive whitelist");
+    expect(prompt.instruction).toContain("requires one exact whitelist field");
     expect(JSON.stringify(prompt)).not.toContain("Malachar contained the Void beneath his throne");
     expect(JSON.stringify(prompt)).not.toContain("malachar-contained-the-void");
     expect(JSON.stringify(prompt)).not.toContain("viewpointCanon.facts");
     expect(JSON.stringify(prompt)).not.toContain("acceptedEvents");
-    expect(prompt).toHaveProperty("afterTurnViewpointCanon.povCharacter.experience", 10);
-    expect(prompt).toHaveProperty("beforeTurnEffectValues.experience", 0);
+    expect(prompt).toHaveProperty("afterCanon.povCharacter.experience", 10);
+    expect(prompt).toHaveProperty("beforeValues.experience", 0);
     expect(prompt).not.toHaveProperty("worldBefore");
-    expect(prompt).toHaveProperty("currentChapterCanonicalEffects.stateMutations.0.amount", 10);
-    expect(prompt.instruction).toContain("happen during this chapter");
+    expect(prompt).toHaveProperty("currentEffects.stateMutations.0.amount", 10);
+    expect(prompt).not.toHaveProperty("playerAction.source");
+    expect(prompt).not.toHaveProperty("playerAction.stateVersion");
+    expect(prompt.instruction).toContain("happen now");
   });
 
   it("audits against a minimal projection and treats POV knowledge as allowed", () => {
@@ -117,7 +115,6 @@ describe("background actor selection", () => {
         delta,
         { choices: [], terminal: false, title: "A safe frame" },
         "Ash ".repeat(900),
-        "a".repeat(64),
       ),
     ) as Record<string, unknown>;
     const narration = JSON.parse(buildNarrationPrompt(before, before, action, delta)) as Record<
@@ -128,24 +125,52 @@ describe("background actor selection", () => {
     expect(prompt).not.toHaveProperty("stateBefore");
     expect(prompt).not.toHaveProperty("stateProspective");
     expect(JSON.stringify(prompt)).not.toContain("knowledgeLedgers");
-    expect(prompt.instruction).toContain("Every field in afterTurnViewpointCanon");
-    expect(prompt.instruction).toContain("Every field in afterTurnViewpointCanon and world");
-    expect(prompt.instruction).toContain("world fields are not leaks");
-    expect(prompt.instruction).toContain(
-      "do not reject it solely because it overlaps a forbidden fact",
-    );
-    expect(prompt.instruction).toContain("reject only details exclusive to forbiddenFacts");
-    expect(prompt.instruction).toContain("Referring to an intention");
-    expect(prompt.instruction).toContain("nextChoices are future options");
-    expect((prompt.forbiddenFacts as readonly { id: string }[]).map(({ id }) => id)).not.toContain(
-      "rowan-is-malachar-reincarnated",
-    );
-    expect(prompt.afterTurnViewpointCanon).toEqual(narration.afterTurnViewpointCanon);
+    expect(prompt.instruction).toContain("Allowed canon is exactly afterCanon");
+    expect(prompt.instruction).toContain("World fields may be restated or paraphrased");
+    expect(prompt.instruction).toContain("despite forbiddenFacts overlap");
+    expect(prompt.instruction).toContain("reject only exclusive details");
+    expect(prompt.instruction).toContain("A plan or goal permits intent only");
+    expect(prompt.instruction).toContain("nextChoices are future");
+    expect(prompt.forbiddenFacts).not.toHaveProperty("rowan-is-malachar-reincarnated");
+    expect(prompt.afterCanon).toEqual(narration.afterCanon);
     expect(prompt.world).toEqual(narration.world);
-    expect(narration.instruction).toContain(
-      "afterTurnViewpointCanon, currentChapterVisibleEvents, currentChapterCanonicalEffects, and world",
+    expect(prompt).not.toHaveProperty("proseHash");
+    expect(prompt).not.toHaveProperty("rubricDimensions");
+    expect(prompt).not.toHaveProperty("allowedIssueCodes");
+    expect(prompt).not.toHaveProperty("world.version");
+    expect(prompt).not.toHaveProperty("world.factionsByIdAsNameGoal.solar-church");
+    expect(prompt).not.toHaveProperty("afterCanon.povCharacter.equipmentItemIds");
+    expect(prompt).not.toHaveProperty("afterCanon.povCharacter.secretFactIds");
+    expect(prompt).not.toHaveProperty("afterCanon.facts");
+    expect(prompt).toHaveProperty("afterCanon.povCharacter.classAsIdName.1", "Ashbound");
+    expect(prompt).toHaveProperty(
+      "afterCanon.povCharacter.inventoryAsItemIdNameQuantityEquippedUnique.0.0",
+      "rusted-sword",
     );
-    expect(narration.instruction).toContain("Every field in world is established public canon");
+    expect(prompt).toHaveProperty(
+      "afterCanon.povCharacter.skillsAsIdNameRankManaCost.0.1",
+      "Ember Sense",
+    );
+    expect(prompt).toHaveProperty("afterCanon.povCharacter.skillsAsIdNameRankManaCost.0", [
+      "ember-sense",
+      "Ember Sense",
+      1,
+      2,
+    ]);
+    expect(prompt).toHaveProperty(
+      "afterCanon.factsByIdAsCertaintyClaim.rowan-is-malachar-reincarnated.1",
+      "Rowan is Malachar reincarnated.",
+    );
+    expect(prompt).toHaveProperty(
+      "afterCanon.factsByIdAsCertaintyClaim.rowan-is-malachar-reincarnated",
+      ["certain", "Rowan is Malachar reincarnated."],
+    );
+    expect(prompt).toHaveProperty("world.factionsByIdAsNameGoal.cinder-survivors", [
+      "Cinder Survivors",
+      "Rebuild Cinder Village.",
+    ]);
+    expect(narration.instruction).toContain("afterCanon, visibleEvents, currentEffects, and world");
+    expect(narration.instruction).toContain("Every world field is public canon");
     expect(prompt).toHaveProperty(
       "world.threat",
       "The seal beneath the old Demon Throne is weakening.",
@@ -171,6 +196,26 @@ describe("background actor selection", () => {
       toLocationIds: ["capital"],
       type: "set_location",
     });
+    const remoteFact = {
+      certainty: "likely" as const,
+      claim: "The eastern bell has a hidden counterweight.",
+      discoveredChapter: 1,
+      id: "eastern-bell-counterweight",
+      ownerCharacterId: "varek-thorn",
+      source: "Varek's inspection",
+      visibility: "private" as const,
+    };
+    delta.knowledgeMutations.push(
+      { characterId: "varek-thorn", fact: remoteFact, type: "discover_fact" },
+      {
+        certainty: "uncertain",
+        characterId: "varek-thorn",
+        discoveredChapter: 1,
+        factId: "malachar-publicly-dead",
+        source: "A border rumor",
+        type: "learn_existing_fact",
+      },
+    );
 
     const prompt = JSON.parse(
       buildAuditPrompt(
@@ -187,21 +232,151 @@ describe("background actor selection", () => {
         delta,
         { choices: [], terminal: false, title: "A safe frame" },
         "Across the ash, a distant bell seemed to ring. ".repeat(100),
-        "a".repeat(64),
       ),
     ) as Record<string, unknown>;
 
     expect(prompt).not.toHaveProperty("canonicalDelta");
     expect(prompt).toHaveProperty(
-      "forbiddenRemoteEffects.events.0.summary",
-      "Varek secretly rang the eastern warning bell.",
+      "forbiddenRemote.eventsByIdAsKindLocationObserversParticipantsSummaryVisibility.event-remote-bell",
+      [
+        "interact",
+        "capital",
+        [],
+        ["varek-thorn"],
+        "Varek secretly rang the eastern warning bell.",
+        "participants",
+      ],
     );
     expect(prompt).toHaveProperty(
-      "forbiddenRemoteEffects.stateMutations.0.characterId",
-      "varek-thorn",
+      "forbiddenRemote.discoveredFactsAsActorIdFactIdCertaintyClaimChapterOwnerSourceVisibility.0",
+      [
+        "varek-thorn",
+        remoteFact.id,
+        remoteFact.certainty,
+        remoteFact.claim,
+        remoteFact.discoveredChapter,
+        remoteFact.ownerCharacterId,
+        remoteFact.source,
+        remoteFact.visibility,
+      ],
     );
-    expect(JSON.stringify(prompt.currentChapterCanonicalEffects)).not.toContain("varek-thorn");
-    expect(prompt.instruction).toContain("paraphrasing any forbidden remote event");
+    expect(prompt).toHaveProperty(
+      "forbiddenRemote.learnedFactsAsActorIdFactIdCertaintyChapterSource.0",
+      ["varek-thorn", "malachar-publicly-dead", "uncertain", 1, "A border rumor"],
+    );
+    expect(prompt).toHaveProperty("forbiddenRemote.state.0.actorId", "varek-thorn");
+    expect(JSON.stringify(prompt.currentEffects)).not.toContain("varek-thorn");
+    expect(prompt.instruction).toContain("forbiddenFacts/forbiddenRemote are detection-only");
+    expect(prompt.instruction).toContain("asserting or paraphrasing them makes povSafety 0");
+  });
+
+  it("sends a current visible event once while preserving older observed canon", () => {
+    const before = seed();
+    before.lockedPovId = "rowan-ashborn";
+    const prospective = structuredClone(before);
+    const currentEvent = {
+      id: "event-current-public",
+      kind: "interact" as const,
+      locationId: "ash-road",
+      observerIds: [],
+      participantIds: ["rowan-ashborn"],
+      summary: "Rowan marks the fresh trail through the ash.",
+      visibility: "public" as const,
+    };
+    prospective.activeEvents.push(currentEvent);
+    const delta = emptyDelta(before);
+    delta.events.push(currentEvent);
+    const action = {
+      action: { type: "wait" as const },
+      actorId: "rowan-ashborn",
+      description: "Wait.",
+      milestoneId: null,
+      source: "suggested" as const,
+      stateVersion: before.version,
+    };
+    const narration = JSON.parse(
+      buildNarrationPrompt(before, prospective, action, delta),
+    ) as Record<string, unknown>;
+    const audit = JSON.parse(
+      buildAuditPrompt(
+        before,
+        prospective,
+        action,
+        delta,
+        { choices: [], terminal: false, title: "A safe frame" },
+        "Ash ".repeat(900),
+      ),
+    ) as Record<string, unknown>;
+
+    for (const prompt of [narration, audit]) {
+      expect(prompt).toHaveProperty("visibleEvents.0.id", currentEvent.id);
+      expect(prompt).toHaveProperty("visibleEvents.0.kind", currentEvent.kind);
+      expect(prompt).toHaveProperty("visibleEvents.0.visibility", currentEvent.visibility);
+      expect(JSON.stringify(prompt.afterCanon)).not.toContain(currentEvent.id);
+      expect(JSON.stringify(prompt)).toContain(currentEvent.id);
+    }
+  });
+
+  it("deduplicates a discovered fact while retaining its claim and provenance", () => {
+    const before = seed();
+    before.lockedPovId = "rowan-ashborn";
+    const prospective = structuredClone(before);
+    prospective.chapter = 1;
+    const fact = {
+      certainty: "certain" as const,
+      claim: "Fresh claw marks cross the ash road.",
+      discoveredChapter: 1,
+      id: "fresh-claw-marks",
+      ownerCharacterId: "rowan-ashborn",
+      source: "Rowan's investigation",
+      visibility: "observed" as const,
+    };
+    prospective.facts.push(fact);
+    prospective.knowledgeLedgers
+      .find(({ characterId }) => characterId === "rowan-ashborn")
+      ?.entries.push({
+        certainty: fact.certainty,
+        discoveredChapter: fact.discoveredChapter,
+        factId: fact.id,
+        source: fact.source,
+      });
+    const delta = emptyDelta(before);
+    delta.knowledgeMutations.push({
+      characterId: "rowan-ashborn",
+      fact,
+      type: "discover_fact",
+    });
+
+    const prompt = JSON.parse(
+      buildAuditPrompt(
+        before,
+        prospective,
+        {
+          action: { subjectId: "ash-road", type: "investigate" },
+          actorId: "rowan-ashborn",
+          description: "Inspect the ash road.",
+          milestoneId: null,
+          source: "custom",
+          stateVersion: before.version,
+        },
+        delta,
+        { choices: [], terminal: false, title: "Claws in Ash" },
+        "Ash ".repeat(900),
+      ),
+    ) as Record<string, unknown>;
+
+    expect(prompt).toHaveProperty(`afterCanon.factsByIdAsCertaintyClaim.${fact.id}`, [
+      fact.certainty,
+      fact.claim,
+    ]);
+    expect(prompt).toHaveProperty("currentEffects.knowledgeMutations.0", {
+      discoveredChapter: fact.discoveredChapter,
+      factId: fact.id,
+      ownerCharacterId: fact.ownerCharacterId,
+      source: fact.source,
+      type: "discover_fact",
+      visibility: fact.visibility,
+    });
   });
 
   it("separates newly applied chapter effects from the after-turn state", () => {
@@ -233,14 +408,13 @@ describe("background actor selection", () => {
         delta,
         { choices: [], terminal: false, title: "A safe frame" },
         "Ash ".repeat(900),
-        "a".repeat(64),
       ),
     ) as Record<string, unknown>;
 
-    expect(prompt).toHaveProperty("beforeTurnEffectValues.experience", 0);
-    expect(prompt).toHaveProperty("afterTurnViewpointCanon.povCharacter.experience", 10);
-    expect(prompt).toHaveProperty("currentChapterCanonicalEffects.stateMutations.0.amount", 10);
-    expect(prompt.instruction).toContain("Never call an exact listed effect pre-existing");
+    expect(prompt).toHaveProperty("beforeValues.experience", 0);
+    expect(prompt).toHaveProperty("afterCanon.povCharacter.experience", 10);
+    expect(prompt).toHaveProperty("currentEffects.stateMutations.0.amount", 10);
+    expect(prompt.instruction).toContain("a listed effect is not pre-existing");
   });
 
   it("explains incomplete milestone targets and exposes two grounded action shapes", () => {

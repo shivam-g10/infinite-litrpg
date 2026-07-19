@@ -117,6 +117,8 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 - Prompt `1.4.3` passed Rowan chapter 1, then Terra translated the same explicit local investigation as another action on all three attempts. Prompt `1.4.4` resolves only simple command-led local investigations deterministically to the POV location. Compound, conditional, negated, and multi-sentence actions still route to the bounded Terra translator.
 - Prompt `1.4.4` passed both Rowan chapters, then one structurally invalid Luna audit exhausted Elara's retry reservation. Prompt `1.4.5` parses Luna through a permissive candidate schema, then deterministically derives approval, locks the prose hash, and validates the final stored audit. Positive scores require `pass`; zero scores require dimension-specific failure codes. Narrator and auditor receive identical POV and world canon. The 400-token experiment lacked safe headroom, so the audited cap remains 550.
 - Prompt `1.4.5` passed both Rowan chapters. Elara then referred to the supplied public `world.threat`, but Luna called that concept forbidden because the audit instruction explicitly permitted POV canon and omitted `world`. Prompt `1.4.6` names `world` as established public canon for both narrator and auditor while retaining the ban on synthesized causes, relationships, mechanisms, and history. Public world fields take precedence over semantically overlapping forbidden facts; only details exclusive to a forbidden fact fail.
+- Prompt `1.4.6` established the next paid baseline before more AI changes. Rowan chapter 1 reached Terra narration, but the nested audit did not start: prior calls and narration spent `$0.031506`, leaving `$0.023394` against a `$0.024960` audit reservation. Zero chapters committed. Cumulative conservative exposure is `$2.371789175`.
+- Prompt `1.4.7` keeps the full maximum-three background-agent live gate. It moves the strictly validated chapter frame from Terra to Luna, targets 900 to 925 words, and deduplicates current events. Compact labeled maps and tuples preserve every value in the deliberate narration whitelist and every forbidden remote-effect value. The whitelist intentionally excludes existing-fact provenance, skill unlock metadata, world version, and non-POV factions; projection regressions lock those safety boundaries. The model returns only seven ordered scores, seven evidence strings, and leak IDs; application code derives dimensions, issue codes, approval, and prose hash before final strict validation. Reconstructing the old 1,057-word Rowan chapter measured a 12,514-byte full audit request and `$0.0189825` reservation. The `$0.0523` cap retains `$0.0011215` for Rowan with its two selected agents and `$0.00124925` for the conservative three-agent Elara case using the old longer narration outputs; the shorter target adds headroom. A separate three-agent 900-word service request reserved `$0.01773125` for audit and committed under the release cap.
 
 ## Decision Log
 
@@ -125,6 +127,7 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 - `World Director` is deterministic application code for MVP. Models emit intents and prose only; no model owns conflict resolution or canonical state.
 - `WorldState.chapter` means last committed chapter. Generation from 349 may create terminal chapter 350. Any request when current chapter is 350 is rejected before model access.
 - Validated narration uses buffer-audit-replay streaming. This trades first-token latency for zero exposure of rejected prose.
+- ADR-008 moves only validated chapter frames to Luna after the prompt `1.4.6` paid cost baseline. Terra remains the custom-action translator and narrator. The full live eval still allows all three relevant background agents.
 
 ## Outcomes and Retrospective
 
@@ -132,4 +135,4 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 
 ## Current Milestone
 
-Phase 5 release eval: run twelve complete cycles across all six viewpoints on checkpoint prompt `1.4.6` at `$0.0549` per chapter. Conservative prior exposure is `$2.340283175`; worst-case cumulative exposure is `$2.999083175`.
+Phase 5 release eval: finish the prompt `1.4.7` clean checkpoint, then run twelve complete cycles across all six viewpoints at `$0.0523` per chapter. Conservative prior exposure is `$2.371789175`; projected worst-case cumulative exposure is `$2.999389175`.

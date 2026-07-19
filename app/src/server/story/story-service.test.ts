@@ -2,10 +2,14 @@ import { createHash } from "node:crypto";
 
 import {
   CHARACTER_IDS,
+  CONTRACT_VERSION,
   NARRATIVE_AUDIT_DIMENSIONS,
+  PROMPT_VERSION,
   type NarrativeAudit,
+  type NarrativeAuditCandidate,
   type TraceEnvelope,
   type ValidationIssue,
+  type WorldIntent,
 } from "@infinite-litrpg/shared";
 import type OpenAI from "openai";
 import type { ParsedResponse, Response, ResponseUsage } from "openai/resources/responses/responses";
@@ -137,7 +141,19 @@ describe("StoryService", () => {
     expect(runtimeAttempts).toContainEqual(
       expect.objectContaining({ errorCode: "NARRATIVE_AUDIT_REJECTED", phase: "narration" }),
     );
-    expect((result.godMode.calls as readonly { retries: number }[])[1]?.retries).toBe(1);
+    const calls = result.godMode.calls as readonly {
+      model: string;
+      phase: string;
+      retries: number;
+    }[];
+    expect(calls).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ model: "gpt-5.6-luna", phase: "intent" }),
+        expect.objectContaining({ model: "gpt-5.6-terra", phase: "narration" }),
+        expect.objectContaining({ model: "gpt-5.6-luna", phase: "audit" }),
+      ]),
+    );
+    expect(calls[1]?.retries).toBe(1);
     const duplicate = await service.takeTurn(command);
     expect(duplicate.world).toMatchObject({ chapter: 1, version: 2 });
     expect(parse).toHaveBeenCalledTimes(2);
@@ -255,6 +271,93 @@ describe("StoryService", () => {
     }
     expect(deterministicRetryInput).toContain("POV_LEAK");
     expect(auditRetryInput).toContain("povSafety: hidden-knowledge");
+    store.close();
+  });
+
+  it("reaches audit with three background agents under the release cap", async () => {
+    const store = new StoryStore();
+    const prose = Array.from({ length: 900 }, () => "ember").join(" ");
+    const proseHash = createHash("sha256").update(prose).digest("hex");
+    const actorIds = ["lucan-aurelis", "maelin-rook", "nyra-vale"] as const;
+    const meteredUsage = usage(1_000, 200);
+    const frame = {
+      choices: [
+        {
+          action: { type: "wait" },
+          description: "Wait and study the road before committing.",
+          id: "choice-1",
+          milestoneId: null,
+        },
+        {
+          action: { subjectId: "capital-road", type: "investigate" },
+          description: "Inspect Capital Road for immediate danger.",
+          id: "choice-2",
+          milestoneId: null,
+        },
+      ],
+      terminal: false,
+      title: "The Capital Road",
+    } as const;
+    const audit: NarrativeAudit = {
+      approved: true,
+      evidence: NARRATIVE_AUDIT_DIMENSIONS.map((dimension) => ({
+        detail: "The chapter stays inside supplied canon.",
+        dimension,
+        issueCode: "pass",
+      })),
+      leakedFactIds: [],
+      proseHash,
+      scores: {
+        arcProgress: 2,
+        characterAutonomy: 2,
+        choiceFulfillment: 2,
+        continuity: 2,
+        litrpgMechanics: 2,
+        povSafety: 2,
+        prose: 2,
+      },
+    };
+    const parse = vi
+      .fn()
+      .mockResolvedValueOnce(parsedResponse(waitIntent(actorIds[0], 0), "resp_lucan", meteredUsage))
+      .mockResolvedValueOnce(
+        parsedResponse(waitIntent(actorIds[1], 1), "resp_maelin", meteredUsage),
+      )
+      .mockResolvedValueOnce(parsedResponse(waitIntent(actorIds[2], 2), "resp_nyra", meteredUsage))
+      .mockResolvedValueOnce(parsedResponse(frame, "resp_frame_three", meteredUsage))
+      .mockResolvedValueOnce(parsedResponse(audit, "resp_audit_three", meteredUsage));
+    const stream = vi
+      .fn()
+      .mockReturnValue(fakeStream(prose, "resp_narration_three", usage(1_943, 1_200)));
+    const service = new StoryService(store, { responses: { parse, stream } } as unknown as OpenAI, {
+      maxBackgroundAgents: 3,
+      maxCostUsdPerChapter: 0.0523,
+      nativeMultiAgent: false,
+    });
+    const selected = service.selectPov("elara-voss");
+
+    const result = await service.takeTurn({
+      choiceId: selected.chapter.choices[0]?.id ?? "missing",
+      expectedWorldVersion: 1,
+      requestId: "00000000-0000-4000-8000-000000000050",
+      type: "take_action",
+    });
+
+    expect(result.world).toMatchObject({ chapter: 1, version: 2 });
+    expect(result.estimatedCostUsd).toBeLessThanOrEqual(0.0523);
+    expect(parse).toHaveBeenCalledTimes(5);
+    expect(stream).toHaveBeenCalledTimes(1);
+    const calls = result.godMode.calls as readonly {
+      agentId: string | null;
+      model: string;
+      phase: string;
+    }[];
+    expect(calls.filter(({ agentId }) => agentId !== null).map(({ agentId }) => agentId)).toEqual(
+      actorIds,
+    );
+    expect(calls).toEqual(
+      expect.arrayContaining([expect.objectContaining({ model: "gpt-5.6-luna", phase: "audit" })]),
+    );
     store.close();
   });
 
@@ -450,7 +553,9 @@ describe("StoryService", () => {
 
     expect(parse).toHaveBeenCalledTimes(3);
     for (const [request] of parse.mock.calls) {
-      const structuredRequest = request as { text?: { format?: { name?: string } } } | undefined;
+      const structuredRequest = request as
+        { model?: string; text?: { format?: { name?: string } } } | undefined;
+      expect(structuredRequest?.model).toBe("gpt-5.6-luna");
       expect(structuredRequest?.text?.format?.name).toBe("chapter_frame");
     }
     expect(stream).not.toHaveBeenCalled();
@@ -759,15 +864,15 @@ describe("StoryService", () => {
 
   it("derives audit approval and locks the prose hash deterministically", () => {
     const expectedHash = "a".repeat(64);
-    const candidate: NarrativeAudit = {
-      approved: false,
-      evidence: NARRATIVE_AUDIT_DIMENSIONS.map((dimension) => ({
-        detail: "The chapter stays inside supplied canon for this dimension.",
-        dimension,
-        issueCode: "pass",
-      })),
+    const candidate: NarrativeAuditCandidate = {
+      evidence: NARRATIVE_AUDIT_DIMENSIONS.map(() => "The chapter stays inside supplied canon."),
       leakedFactIds: [],
-      proseHash: "b".repeat(64),
+      scores: [2, 2, 2, 2, 2, 1, 1],
+    };
+
+    expect(canonicalizeNarrativeAuditOutput(candidate, expectedHash, new Set())).toMatchObject({
+      approved: true,
+      proseHash: expectedHash,
       scores: {
         arcProgress: 1,
         characterAutonomy: 2,
@@ -777,24 +882,19 @@ describe("StoryService", () => {
         povSafety: 2,
         prose: 1,
       },
-    };
-
-    expect(canonicalizeNarrativeAuditOutput(candidate, expectedHash, new Set())).toMatchObject({
-      approved: true,
-      proseHash: expectedHash,
     });
 
-    const falseFailure = {
+    const rejected = {
       ...candidate,
-      evidence: candidate.evidence.map((entry) =>
-        entry.dimension === "povSafety"
-          ? { ...entry, issueCode: "hidden-knowledge" as const }
-          : entry,
-      ),
+      scores: [2, 2, 0, 2, 0, 1, 1] as NarrativeAuditCandidate["scores"],
     };
-    expect(() => canonicalizeNarrativeAuditOutput(falseFailure, expectedHash, new Set())).toThrow(
-      "requires issue code pass",
-    );
+    expect(canonicalizeNarrativeAuditOutput(rejected, expectedHash, new Set())).toMatchObject({
+      approved: false,
+      evidence: expect.arrayContaining([
+        expect.objectContaining({ dimension: "povSafety", issueCode: "hidden-knowledge" }),
+        expect.objectContaining({ dimension: "continuity", issueCode: "unsupported-canon" }),
+      ]),
+    });
   });
 
   it("rejects a custom investigation translated as waiting", () => {
@@ -902,20 +1002,45 @@ function unusedClient(): OpenAI {
   } as unknown as OpenAI;
 }
 
-function parsedResponse<T>(output: T, id: string): ParsedResponse<T> {
+function parsedResponse<T>(
+  output: T,
+  id: string,
+  responseUsage: ResponseUsage = usage(),
+): ParsedResponse<T> {
+  const modelOutput = auditCandidateOutput(output);
   return {
     error: null,
     id,
     incomplete_details: null,
     output: [],
-    output_parsed: output,
-    output_text: JSON.stringify(output),
+    output_parsed: modelOutput,
+    output_text: JSON.stringify(modelOutput),
     status: "completed",
-    usage: usage(),
+    usage: responseUsage,
   } as unknown as ParsedResponse<T>;
 }
 
-function fakeStream(prose: string, id = "resp_narration") {
+function auditCandidateOutput(output: unknown): unknown {
+  if (
+    typeof output !== "object" ||
+    output === null ||
+    !("approved" in output) ||
+    !("proseHash" in output) ||
+    !("scores" in output) ||
+    !("evidence" in output) ||
+    !("leakedFactIds" in output)
+  ) {
+    return output;
+  }
+  const audit = output as NarrativeAudit;
+  return {
+    evidence: audit.evidence.map(({ detail }) => detail),
+    leakedFactIds: audit.leakedFactIds,
+    scores: NARRATIVE_AUDIT_DIMENSIONS.map((dimension) => audit.scores[dimension]),
+  };
+}
+
+function fakeStream(prose: string, id = "resp_narration", responseUsage: ResponseUsage = usage()) {
   const response = {
     error: null,
     id,
@@ -923,7 +1048,7 @@ function fakeStream(prose: string, id = "resp_narration") {
     output: [],
     output_text: prose,
     status: "completed",
-    usage: usage(),
+    usage: responseUsage,
   } as unknown as Response;
   return {
     async *[Symbol.asyncIterator]() {
@@ -933,12 +1058,26 @@ function fakeStream(prose: string, id = "resp_narration") {
   };
 }
 
-function usage(): ResponseUsage {
+function usage(inputTokens = 100, outputTokens = 20): ResponseUsage {
   return {
-    input_tokens: 100,
-    input_tokens_details: { cache_write_tokens: 0, cached_tokens: 10 },
-    output_tokens: 20,
+    input_tokens: inputTokens,
+    input_tokens_details: { cache_write_tokens: 0, cached_tokens: 0 },
+    output_tokens: outputTokens,
     output_tokens_details: { reasoning_tokens: 2 },
-    total_tokens: 120,
+    total_tokens: inputTokens + outputTokens,
+  };
+}
+
+function waitIntent(actorId: (typeof CHARACTER_IDS)[number], index: number): WorldIntent {
+  return {
+    action: { type: "wait" },
+    actorId,
+    contractVersion: CONTRACT_VERSION,
+    expectedEffect: "Observe the current situation.",
+    goal: "Survive the chapter.",
+    id: `intent-background-${index}`,
+    prerequisites: { requiredFactIds: [], requiredItemIds: [], requiredSkillIds: [] },
+    promptVersion: PROMPT_VERSION,
+    stateVersion: 1,
   };
 }

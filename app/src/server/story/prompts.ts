@@ -1,11 +1,10 @@
 import {
   CONTRACT_VERSION,
-  NARRATIVE_AUDIT_DIMENSIONS,
-  NARRATIVE_AUDIT_ISSUE_CODES,
   PROMPT_VERSION,
   buildPovContext,
   getClockPolicy,
   type CharacterState,
+  type Choice,
   type PlayerAction,
   type WorldDelta,
   type WorldState,
@@ -143,26 +142,19 @@ export function buildNarrationPrompt(
   if (prospective.lockedPovId === null) throw new Error("POV must be locked");
   const povId = prospective.lockedPovId;
   return JSON.stringify({
-    afterTurnViewpointCanon: compactPovContext(prospective, povId),
-    beforeTurnEffectValues: beforeTurnEffectValues(before, delta, povId),
+    afterCanon: compactPovContext(prospective, povId, currentEventIds(delta)),
+    beforeValues: beforeTurnEffectValues(before, delta, povId),
     chapter: prospective.chapter,
-    currentChapterCanonicalEffects: canonicalEffectsForPov(delta, povId),
-    currentChapterVisibleEvents: visibleEventsForPov(delta, povId),
-    forbiddenAdditions: [
-      "No extra action by the viewpoint character beyond playerAction and currentChapterCanonicalEffects.",
-      "No unlisted skill or item use, mana or health change, inventory change, clue, discovery, reward, injury, relationship change, or new named person, group, object, symbol, quest, or enemy. Existing supplied names may be recalled but not used unless listed as an effect.",
-      "Never claim a remote character knew, saw, heard, awaited, expected, received, noticed, answered, reacted to, or was affected by the viewpoint character unless currentChapterVisibleEvents explicitly includes that character as a participant or observer.",
-      "A plan or goal to contact someone permits only the viewpoint character's intention. It does not permit contact, delivery, reception, awareness, or response.",
-      "A canonical move permits the viewpoint character to arrive at the destination. It does not make anyone else notice the arrival.",
-      "A visible event by another character permits only the supplied event summary. Never narrate what that character found, inferred, confirmed, or discovered unless the result appears in afterTurnViewpointCanon.facts.",
-      "No elapsed time beyond the supplied calendar change.",
-      "No new durable world fact beyond afterTurnViewpointCanon, world, currentChapterVisibleEvents, and currentChapterCanonicalEffects. Generic sensory texture may not assert new canon.",
-      "The supplied canon fields are exhaustive. Never combine an identity, threat, location, plan, belief, goal, or public history into a new relationship. Shared names or themes do not license that relationship.",
-      "Never narrate a background intent as an action performed by the viewpoint character.",
+    currentEffects: canonicalEffectsForPov(delta, povId),
+    rules: [
+      "No viewpoint action beyond playerAction and currentEffects; a background intent is never a viewpoint action.",
+      "No unlisted skill or item use, resource or inventory change, clue, discovery, reward, injury, relationship change, or new named entity. Supplied names may be recalled, not acted on unless an effect.",
+      "Remote characters act only in visibleEvents. Participants and observers witness only. Plans and goals permit intention only, never contact, delivery, awareness, response, or effect. A move permits arrival only, never notice by others. Another character event permits only its summary; any result requires afterCanon.factsByIdAsCertaintyClaim.",
+      "No time beyond calendar. No durable fact beyond the whitelist. Sensory texture adds no canon. Never combine identity, threat, location, plan, belief, goal, history, names, or themes into an unlisted relationship, cause, mechanism, or memory.",
     ],
     instruction:
-      "Write only the complete chapter prose. Use close-third viewpoint. Write 925 to 975 words and stop before 1000. The absolute valid range is 900 to 1300 words. Dramatize exactly the attempted action and currentChapterCanonicalEffects, not plausible extra actions. currentChapterCanonicalEffects and currentChapterVisibleEvents happen during this chapter. afterTurnViewpointCanon is the resulting state and already includes those changes. beforeTurnEffectValues contains only the prior values touched by those effects. Compare them when describing a listed change as newly happening. Show only supplied LitRPG changes. Knowledge whitelist: afterTurnViewpointCanon, currentChapterVisibleEvents, currentChapterCanonicalEffects, and world are exhaustive. Every field in world is established public canon; an exact restatement or faithful paraphrase is permitted. A relationship between any person, threat, place, event, or history is forbidden unless one whitelist field states that exact relationship. Never combine fields to invent a cause, mechanism, relationship, or remembered history. Never turn an identity, plan, goal, belief, or shared vocabulary into remembered history. Build depth with immediate sensory texture, existing beliefs and goals, and already-known facts. Use supplied facts at face value only: never extrapolate their causes, mechanisms, history, places, or consequences. These may add prose but never canon. Do not append choices or notes.",
-    playerAction,
+      "Write only complete close-third chapter prose, 900 to 925 words; stop before 950. Valid range is 900 to 1300. Dramatize exactly playerAction and currentEffects. currentEffects and visibleEvents happen now; afterCanon includes their results; beforeValues are prior and must be compared for a new change. Show only supplied LitRPG changes. afterCanon, visibleEvents, currentEffects, and world are the exhaustive whitelist. Every world field is public canon and may be restated or paraphrased. Any relationship between people, threats, places, events, or history requires one exact whitelist field. Never infer causes, mechanisms, relationships, consequences, or remembered history from identities, plans, beliefs, goals, shared terms, or facts. Build depth only with immediate sensory texture, supplied beliefs, goals, and facts at face value. Append no choices or notes.",
+    playerAction: compactPlayerAction(playerAction),
     stateTransition: {
       actAfter: prospective.act,
       chapterAfter: prospective.chapter,
@@ -170,6 +162,7 @@ export function buildNarrationPrompt(
       convergencePressure: prospective.arcClock.convergencePressure,
       transitionRequired: prospective.arcClock.transitionRequired,
     },
+    visibleEvents: visibleEventsForPov(delta, povId),
     world: localWorldContext(before, prospective, povId, delta),
   });
 }
@@ -180,42 +173,36 @@ export function buildAuditPrompt(
   playerAction: PlayerAction,
   delta: WorldDelta,
   chapterFrame: {
-    readonly choices: readonly unknown[];
+    readonly choices: readonly Choice[];
     readonly terminal: boolean;
     readonly title: string;
   },
   prose: string,
-  proseHash: string,
 ): string {
   if (prospective.lockedPovId === null) throw new Error("POV must be locked");
   const povId = prospective.lockedPovId;
   const allowedFactIds = new Set(buildPovContext(prospective, povId).factIds);
   return JSON.stringify({
-    afterTurnViewpointCanon: compactPovContext(prospective, povId),
-    beforeTurnEffectValues: beforeTurnEffectValues(before, delta, povId),
-    chapterFrame: { terminal: chapterFrame.terminal, title: chapterFrame.title },
-    currentChapterCanonicalEffects: canonicalEffectsForPov(delta, povId),
-    currentChapterVisibleEvents: visibleEventsForPov(delta, povId),
-    forbiddenFacts: prospective.facts
-      .filter(({ id }) => !allowedFactIds.has(id))
-      .map(({ claim, id }) => ({ claim, id })),
-    forbiddenRemoteEffects: {
-      events: delta.events.filter((event) => !eventVisibleToPov(event, povId)),
-      knowledgeMutations: delta.knowledgeMutations.filter(
-        (mutation) => mutation.characterId !== povId,
-      ),
-      stateMutations: delta.stateMutations.filter(
-        (mutation) => "characterId" in mutation && mutation.characterId !== povId,
-      ),
-    },
+    afterCanon: compactPovContext(prospective, povId, currentEventIds(delta)),
+    beforeValues: beforeTurnEffectValues(before, delta, povId),
+    currentEffects: canonicalEffectsForPov(delta, povId),
+    forbiddenFacts: Object.fromEntries(
+      prospective.facts
+        .filter(({ id }) => !allowedFactIds.has(id))
+        .map(({ claim, id }) => [id, claim]),
+    ),
+    forbiddenRemote: compactForbiddenRemoteEffects(delta, povId),
+    frame: { terminal: chapterFrame.terminal, title: chapterFrame.title },
     instruction:
-      "Audit only; never change canon. Audit title, nextChoices, and prose together. Score all seven rubricDimensions 0 to 2 in order. Return one matching evidence item per dimension, using an allowedIssueCode and detail under 18 words. Use pass iff its score is above zero. Any zero or leaked fact rejects; copy proseHash. choiceFulfillment judges only playerAction. nextChoices are future options and must not occur now; never penalize their absence. Current effects and visible events happen this chapter; after-turn canon already includes them and before-turn values are prior. Never call an exact listed effect pre-existing; compare its prior value. Every field in afterTurnViewpointCanon and world is established canon permitted in prose. Exact restatements or faithful paraphrases of world fields are not leaks. If text is fully supported by a world field, do not reject it solely because it overlaps a forbidden fact; reject only details exclusive to forbiddenFacts. Combining fields into an unlisted cause, mechanism, relationship, or history is forbidden. Referring to an intention from plan or goals does not claim completion. Participants and observers are witnesses, not motives or thoughts. Exact current mutations may appear as System notices. forbiddenFacts and forbiddenRemoteEffects are detection-only, never permitted knowledge. Asserting or paraphrasing any forbidden remote event or mutation, or any detail exclusive to forbiddenFacts, gives povSafety zero with hidden-knowledge. leakedFactIds may contain only matching forbiddenFacts IDs. Continuity is zero only for contradiction or unsupported durable canon, not sensory texture.",
-    playerAction,
+      "Audit frame, nextChoices, prose; do not alter canon. scores/evidence order: choiceFulfillment, characterAutonomy, povSafety, litrpgMechanics, continuity, arcProgress, prose. Scores 0-2; evidence seven strings under 12 words. Any 0 or leak rejects. choiceFulfillment judges only playerAction; nextChoices are future and may be absent. currentEffects/visibleEvents happen now; afterCanon is the result; beforeValues are prior; a listed effect is not pre-existing. Allowed canon is exactly afterCanon, visibleEvents, currentEffects, world. World fields may be restated or paraphrased despite forbiddenFacts overlap; reject only exclusive details. Never combine fields to invent cause, mechanism, relationship, motive, thought, or history. A plan or goal permits intent only; participants/observers witness only. Listed mutations may be System notices. forbiddenFacts/forbiddenRemote are detection-only; asserting or paraphrasing them makes povSafety 0 and lists a matching fact ID when present. leakedFactIds only from forbiddenFacts. continuity 0 only for contradiction or unsupported durable canon, not sensory texture.",
+    playerAction: compactPlayerAction(playerAction),
     prose,
-    proseHash,
-    nextChoices: chapterFrame.choices,
-    rubricDimensions: NARRATIVE_AUDIT_DIMENSIONS,
-    allowedIssueCodes: NARRATIVE_AUDIT_ISSUE_CODES,
+    nextChoices: chapterFrame.choices.map(({ action, description, milestoneId }) => ({
+      action,
+      description,
+      milestoneId,
+    })),
+    visibleEvents: visibleEventsForPov(delta, povId),
     world: localWorldContext(before, prospective, povId, delta),
   });
 }
@@ -271,25 +258,233 @@ function eventVisibleToPov(event: WorldDelta["events"][number], povId: string): 
 }
 
 function canonicalEffectsForPov(delta: WorldDelta, povId: string) {
+  const {
+    fromAct,
+    fromChapter,
+    toAct,
+    toChapter,
+    terminal,
+    convergencePressure,
+    transitionRequired,
+  } = delta.clock;
   return {
-    clock: delta.clock,
-    knowledgeMutations: delta.knowledgeMutations.filter(
-      (mutation) => mutation.characterId === povId,
-    ),
+    clockAsFromActFromChapterToActToChapterTerminalConvergenceTransition: [
+      fromAct,
+      fromChapter,
+      toAct,
+      toChapter,
+      terminal,
+      convergencePressure,
+      transitionRequired,
+    ],
+    knowledgeMutations: delta.knowledgeMutations
+      .filter((mutation) => mutation.characterId === povId)
+      .map(compactCurrentKnowledgeMutation),
     stateMutations: delta.stateMutations.filter(
       (mutation) => !("characterId" in mutation) || mutation.characterId === povId,
     ),
   };
 }
 
-function compactPovContext(state: WorldState, povId: string) {
-  const context = buildPovContext(state, povId);
+function compactCurrentKnowledgeMutation(mutation: WorldDelta["knowledgeMutations"][number]) {
+  if (mutation.type === "learn_existing_fact") {
+    return {
+      certainty: mutation.certainty,
+      discoveredChapter: mutation.discoveredChapter,
+      factId: mutation.factId,
+      source: mutation.source,
+      type: mutation.type,
+    };
+  }
   return {
-    facts: context.facts,
-    observedEvents: context.observedEvents,
-    povCharacter: context.povCharacter,
-    publicCharacters: context.publicCharacters,
+    discoveredChapter: mutation.fact.discoveredChapter,
+    factId: mutation.fact.id,
+    ownerCharacterId: mutation.fact.ownerCharacterId,
+    source: mutation.fact.source,
+    type: mutation.type,
+    visibility: mutation.fact.visibility,
   };
+}
+
+function compactPlayerAction({ action, actorId, description, milestoneId }: PlayerAction) {
+  return { action, actorId, description, milestoneId };
+}
+
+function compactPovContext(state: WorldState, povId: string, excludedEventIds = new Set<string>()) {
+  const context = buildPovContext(state, povId);
+  const {
+    beliefs,
+    characterClassId,
+    characterClassName,
+    conditions,
+    experience,
+    factionId,
+    goals,
+    health,
+    id,
+    inventory,
+    level,
+    locationId,
+    mana,
+    name,
+    plan,
+    publicRole,
+    relationships,
+    role,
+    skills,
+    stats,
+    status,
+  } = context.povCharacter;
+  return {
+    factsByIdAsCertaintyClaim: Object.fromEntries(
+      context.facts.map(({ certainty, claim, id: factId }) => [factId, [certainty, claim]]),
+    ),
+    observedEventsByIdAsLocationObserversParticipantsSummary: Object.fromEntries(
+      context.observedEvents
+        .filter(({ id: eventId }) => !excludedEventIds.has(eventId))
+        .map(({ id: eventId, locationId, observerIds, participantIds, summary }) => [
+          eventId,
+          [locationId, observerIds, participantIds, summary],
+        ]),
+    ),
+    povCharacter: {
+      beliefs,
+      classAsIdName: [characterClassId, characterClassName],
+      experience,
+      factionId,
+      goals,
+      healthAsCurrentMaximum: [health.current, health.maximum],
+      identityAsIdNameRolePublicRole: [id, name, role, publicRole],
+      inventoryAsItemIdNameQuantityEquippedUnique: inventory.map(
+        ({ equipped, itemId, name: itemName, quantity, unique }) => [
+          itemId,
+          itemName,
+          quantity,
+          equipped,
+          unique,
+        ],
+      ),
+      level,
+      locationId,
+      manaAsCurrentMaximum: [mana.current, mana.maximum],
+      plan,
+      relationshipsAsCharacterIdLabelScore: relationships.map(({ characterId, label, score }) => [
+        characterId,
+        label,
+        score,
+      ]),
+      skillsAsIdNameRankManaCost: skills.map(({ id: skillId, manaCost, name: skillName, rank }) => [
+        skillId,
+        skillName,
+        rank,
+        manaCost,
+      ]),
+      stats,
+      status,
+      ...(conditions.length > 0 ? { conditions } : {}),
+    },
+    publicCharacterNamesById: Object.fromEntries(
+      context.publicCharacters.map(({ id: characterId, name: characterName }) => [
+        characterId,
+        characterName,
+      ]),
+    ),
+  };
+}
+
+function currentEventIds(delta: WorldDelta): Set<string> {
+  return new Set(delta.events.map(({ id }) => id));
+}
+
+function compactForbiddenRemoteEffects(delta: WorldDelta, povId: string) {
+  const remoteKnowledge = delta.knowledgeMutations.filter(
+    (mutation) => mutation.characterId !== povId,
+  );
+  return {
+    discoveredFactsAsActorIdFactIdCertaintyClaimChapterOwnerSourceVisibility:
+      remoteKnowledge.flatMap((mutation) =>
+        mutation.type === "discover_fact"
+          ? [
+              [
+                mutation.characterId,
+                mutation.fact.id,
+                mutation.fact.certainty,
+                mutation.fact.claim,
+                mutation.fact.discoveredChapter,
+                mutation.fact.ownerCharacterId,
+                mutation.fact.source,
+                mutation.fact.visibility,
+              ],
+            ]
+          : [],
+      ),
+    eventsByIdAsKindLocationObserversParticipantsSummaryVisibility: Object.fromEntries(
+      delta.events
+        .filter((event) => !eventVisibleToPov(event, povId))
+        .map(({ id, kind, locationId, observerIds, participantIds, summary, visibility }) => [
+          id,
+          [kind, locationId, observerIds, participantIds, summary, visibility],
+        ]),
+    ),
+    learnedFactsAsActorIdFactIdCertaintyChapterSource: remoteKnowledge.flatMap((mutation) =>
+      mutation.type === "learn_existing_fact"
+        ? [
+            [
+              mutation.characterId,
+              mutation.factId,
+              mutation.certainty,
+              mutation.discoveredChapter,
+              mutation.source,
+            ],
+          ]
+        : [],
+    ),
+    state: delta.stateMutations.flatMap((mutation) =>
+      "characterId" in mutation && mutation.characterId !== povId
+        ? [compactRemoteStateMutation(mutation)]
+        : [],
+    ),
+  };
+}
+
+function compactRemoteStateMutation(
+  mutation: Extract<WorldDelta["stateMutations"][number], { characterId: string }>,
+) {
+  const actorId = mutation.characterId;
+  switch (mutation.type) {
+    case "adjust_inventory":
+      return {
+        actorId,
+        itemId: mutation.itemId,
+        name: mutation.name,
+        quantityDelta: mutation.quantityDelta,
+        type: mutation.type,
+        unique: mutation.unique,
+      };
+    case "adjust_resource":
+      return { actorId, delta: mutation.delta, resource: mutation.resource, type: mutation.type };
+    case "grant_experience":
+      return { actorId, amount: mutation.amount, type: mutation.type };
+    case "learn_skill":
+      return { actorId, skill: mutation.skill, type: mutation.type };
+    case "set_location":
+      return {
+        actorId,
+        from: mutation.fromLocationId,
+        to: mutation.toLocationIds,
+        type: mutation.type,
+      };
+    case "set_relationship":
+      return {
+        actorId,
+        label: mutation.label,
+        score: mutation.score,
+        targetId: mutation.targetCharacterId,
+        type: mutation.type,
+      };
+    case "set_status":
+      return { actorId, status: mutation.status, type: mutation.type };
+  }
 }
 
 function beforeTurnEffectValues(state: WorldState, delta: WorldDelta, povId: string) {
@@ -342,6 +537,8 @@ function localWorldContext(
 ) {
   const beforePov = before.characters.find(({ id }) => id === povId);
   const afterPov = prospective.characters.find(({ id }) => id === povId);
+  const factionIds = new Set([beforePov?.factionId, afterPov?.factionId]);
+  factionIds.delete(undefined);
   const locationIds = new Set([
     beforePov?.locationId,
     afterPov?.locationId,
@@ -349,13 +546,21 @@ function localWorldContext(
   ]);
   locationIds.delete(undefined);
   return {
-    act: prospective.act,
-    calendar: prospective.calendar,
-    chapter: prospective.chapter,
-    factions: prospective.factions,
-    locations: prospective.locations.filter(({ id }) => locationIds.has(id)),
+    calendarAsDayLabel: [prospective.calendar.day, prospective.calendar.label],
+    factionsByIdAsNameGoal: Object.fromEntries(
+      prospective.factions
+        .filter(({ id }) => factionIds.has(id))
+        .map(({ id, name, publicGoal }) => [id, [name, publicGoal]]),
+    ),
+    locationsByIdAsNameDescriptionAdjacentIds: Object.fromEntries(
+      prospective.locations
+        .filter(({ id }) => locationIds.has(id))
+        .map(({ adjacentLocationIds, id, name, publicDescription }) => [
+          id,
+          [name, publicDescription, adjacentLocationIds],
+        ]),
+    ),
     threat: prospective.threat,
-    version: prospective.version,
   };
 }
 

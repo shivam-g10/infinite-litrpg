@@ -1,12 +1,12 @@
 # ADR-003 GPT-5.6 Routing
 
-- Status: Accepted
+- Status: Superseded in part by ADR-008
 - Date: 2026-07-19
 
 ## Decision
 
 - Sol: world genesis, act recovery, finale.
-- Terra: choice planning and chapter narration.
+- Terra: choice planning and chapter narration. ADR-008 moves validated chapter frames to Luna.
 - Luna: character intents and chapter fact audit.
 - Responses API only. Reject every non-GPT-5.6 model ID.
 

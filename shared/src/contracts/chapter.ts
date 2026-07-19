@@ -101,28 +101,36 @@ const NarrativeAuditEvidenceSchema = z
   })
   .strict();
 
+const NarrativeAuditScoresSchema = z
+  .object({
+    arcProgress: NarrativeScoreSchema,
+    characterAutonomy: NarrativeScoreSchema,
+    choiceFulfillment: NarrativeScoreSchema,
+    continuity: NarrativeScoreSchema,
+    litrpgMechanics: NarrativeScoreSchema,
+    povSafety: NarrativeScoreSchema,
+    prose: NarrativeScoreSchema,
+  })
+  .strict();
+
 export const NarrativeAuditCandidateSchema = z
+  .object({
+    evidence: z.array(z.string().trim().min(1).max(120)).length(NARRATIVE_AUDIT_DIMENSIONS.length),
+    leakedFactIds: z.array(IdSchema).max(20),
+    scores: z.array(NarrativeScoreSchema).length(NARRATIVE_AUDIT_DIMENSIONS.length),
+  })
+  .strict();
+
+export const NarrativeAuditSchema = z
   .object({
     approved: z.boolean(),
     evidence: z.array(NarrativeAuditEvidenceSchema).length(NARRATIVE_AUDIT_DIMENSIONS.length),
     leakedFactIds: z.array(IdSchema).max(20),
     proseHash: HashSchema,
-    scores: z
-      .object({
-        arcProgress: NarrativeScoreSchema,
-        characterAutonomy: NarrativeScoreSchema,
-        choiceFulfillment: NarrativeScoreSchema,
-        continuity: NarrativeScoreSchema,
-        litrpgMechanics: NarrativeScoreSchema,
-        povSafety: NarrativeScoreSchema,
-        prose: NarrativeScoreSchema,
-      })
-      .strict(),
+    scores: NarrativeAuditScoresSchema,
   })
-  .strict();
-
-export const NarrativeAuditSchema = NarrativeAuditCandidateSchema.superRefine(
-  ({ approved, evidence, leakedFactIds, scores }, context) => {
+  .strict()
+  .superRefine(({ approved, evidence, leakedFactIds, scores }, context) => {
     const hardZero =
       scores.continuity === 0 ||
       scores.litrpgMechanics === 0 ||
@@ -159,8 +167,7 @@ export const NarrativeAuditSchema = NarrativeAuditCandidateSchema.superRefine(
         });
       }
     });
-  },
-);
+  });
 
 export const ChapterRecordSchema = z
   .object({

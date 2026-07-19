@@ -84,7 +84,6 @@ describe("narrative gates", () => {
 
   it("rejects an approving audit with a hard-zero score", () => {
     const candidate = {
-      approved: true,
       evidence: [
         "choiceFulfillment",
         "characterAutonomy",
@@ -93,50 +92,77 @@ describe("narrative gates", () => {
         "continuity",
         "arcProgress",
         "prose",
-      ].map((dimension) => ({
-        detail: "The chapter contradicts the committed location.",
-        dimension,
-        issueCode: dimension === "continuity" ? "contradiction" : "pass",
-      })),
+      ].map(() => "The chapter contradicts the committed location."),
       leakedFactIds: [],
-      proseHash: "a".repeat(64),
-      scores: {
-        arcProgress: 2,
-        characterAutonomy: 2,
-        choiceFulfillment: 2,
-        continuity: 0,
-        litrpgMechanics: 2,
-        povSafety: 2,
-        prose: 2,
-      },
+      scores: [2, 2, 2, 2, 0, 2, 2],
     };
     expect(NarrativeAuditCandidateSchema.safeParse(candidate).success).toBe(true);
-    expect(NarrativeAuditSchema.safeParse(candidate).success).toBe(false);
+    expect(
+      NarrativeAuditSchema.safeParse({
+        approved: true,
+        evidence: NARRATIVE_AUDIT_DIMENSIONS.map((dimension) => ({
+          detail: "The chapter contradicts the committed location.",
+          dimension,
+          issueCode: dimension === "continuity" ? "contradiction" : "pass",
+        })),
+        leakedFactIds: candidate.leakedFactIds,
+        proseHash: "a".repeat(64),
+        scores: {
+          arcProgress: candidate.scores[5],
+          characterAutonomy: candidate.scores[1],
+          choiceFulfillment: candidate.scores[0],
+          continuity: candidate.scores[4],
+          litrpgMechanics: candidate.scores[3],
+          povSafety: candidate.scores[2],
+          prose: candidate.scores[6],
+        },
+      }).success,
+    ).toBe(false);
   });
 
   it("rejects failure evidence attached to a positive audit score", () => {
     const candidate = {
-      approved: true,
-      evidence: NARRATIVE_AUDIT_DIMENSIONS.map((dimension) => ({
-        detail: "Checked against supplied canon.",
-        dimension,
-        issueCode: dimension === "povSafety" ? "hidden-knowledge" : "pass",
-      })),
+      evidence: NARRATIVE_AUDIT_DIMENSIONS.map(() => "Checked against supplied canon."),
       leakedFactIds: [],
-      proseHash: "a".repeat(64),
-      scores: {
-        arcProgress: 2,
-        characterAutonomy: 2,
-        choiceFulfillment: 2,
-        continuity: 2,
-        litrpgMechanics: 2,
-        povSafety: 2,
-        prose: 2,
-      },
+      scores: [2, 2, 2, 2, 2, 2, 2],
     };
 
     expect(NarrativeAuditCandidateSchema.safeParse(candidate).success).toBe(true);
-    expect(NarrativeAuditSchema.safeParse(candidate).success).toBe(false);
+    expect(
+      NarrativeAuditSchema.safeParse({
+        approved: true,
+        evidence: NARRATIVE_AUDIT_DIMENSIONS.map((dimension) => ({
+          detail: "Checked against supplied canon.",
+          dimension,
+          issueCode: dimension === "povSafety" ? "hidden-knowledge" : "pass",
+        })),
+        leakedFactIds: candidate.leakedFactIds,
+        proseHash: "a".repeat(64),
+        scores: {
+          arcProgress: candidate.scores[5],
+          characterAutonomy: candidate.scores[1],
+          choiceFulfillment: candidate.scores[0],
+          continuity: candidate.scores[4],
+          litrpgMechanics: candidate.scores[3],
+          povSafety: candidate.scores[2],
+          prose: candidate.scores[6],
+        },
+      }).success,
+    ).toBe(false);
+
+    expect(
+      NarrativeAuditCandidateSchema.safeParse({
+        ...candidate,
+        approved: true,
+        proseHash: "a".repeat(64),
+      }).success,
+    ).toBe(false);
+    expect(
+      NarrativeAuditCandidateSchema.safeParse({
+        ...candidate,
+        scores: candidate.scores.slice(0, -1),
+      }).success,
+    ).toBe(false);
   });
 
   it("rejects hidden facts in generated titles and choice descriptions", () => {
