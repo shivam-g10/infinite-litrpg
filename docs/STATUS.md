@@ -2,7 +2,7 @@
 
 - Updated: 2026-07-19
 - Layer: Release evaluation
-- Current phase: Phase 5 prompt `1.4.1` checkpoint before final release run
+- Current phase: Phase 5 prompt `1.4.2` checkpoint before final release run
 - Repository: initialized on `main`
 - Remote: `git@github.com:shivam-g10/infinite-litrpg.git`
 - Initial commit: `39b19a2` (`chore: scaffold agent workflow`)
@@ -21,12 +21,12 @@
 
 ## Current Blockers
 
-- Prompt `1.4.1` needs the final twelve-cycle sequential report. Its first Rowan cycle is the remaining smoke gate.
+- Prompt `1.4.2` needs the final twelve-cycle sequential report.
 - Current native report does not exist yet; native capability already has a green capped smoke on the configured key.
 
 ## Next Action
 
-Commit the effect-only pre-turn snapshot. Run the final suite with prior conservative spend `$1.92504285` and chapter cap `$0.0895`.
+Commit prompt `1.4.2`. Run the final suite with prior conservative spend `$2.01434585` and chapter cap `$0.075`.
 
 ## Evidence Log
 
@@ -70,5 +70,8 @@ Commit the effect-only pre-turn snapshot. Run the final suite with prior conserv
 - 2026-07-19 prompt `1.4.0` and release hardening: before-turn character, current-chapter effects, and after-turn POV canon are explicit. Final review defects now have regressions for duplicate matched mutations, dropped player disposition, fake milestone completion, fake ending, milestone choice deadlock, failure-reason persistence, and attempt phases. Targeted tests, strict typecheck, 1,000 simulations, 35 checkpoints, and the 350/no-351 horizon are green. Live report version 3 enforces cumulative prior-spend ceilings.
 - 2026-07-19 prompt `1.4.0` Rowan smoke was killed by the local shell timeout before a report was written. No live result is claimed. The full `$0.097` chapter ceiling is conservatively reserved as unknown exposure, raising prior spend to `$1.92504285` and leaving `$1.07495715`.
 - 2026-07-19 prompt `1.4.1` keeps the explicit before/current/after timing but limits pre-turn input to values touched by current canonical effects. Probe size fell to 7,416 narration bytes with a `$0.048025` maximum reservation and 13,957 audit bytes with a `$0.02138625` maximum. `npm run check` and `npm audit` exited 0 with 82 tests and all non-live gates green. The final `$0.0895` chapter cap projects cumulative worst-case exposure of `$2.99904285` across twelve cycles.
+- 2026-07-19 prompt `1.4.1` full run command `npm run evals:live:full -- --prior-spend-usd 1.92504285 --chapter-cap-usd 0.0895` exited 1 after one of twelve cycles. Rowan chapter 1 passed at 953 words, `$0.035332375`, 22,816 ms, 11 exact replay chunks, empty leak list, and all audit scores 2. Rowan chapter 2 failed after the custom-action translator changed “Investigate the immediate area for fresh tracks” into `wait`; the audit gave choice fulfillment zero and safe preflight blocked a retry. Run exposure was `$0.089303`; cumulative conservative exposure is `$2.01434585`, leaving `$0.98565415`. Report: `evals/reports/live-full-sequential.json`.
+- 2026-07-19 prompt `1.4.2` baseline fix: the translator prompt now preserves command-led investigation semantics. Deterministic validation rejects changed action types, wrong immediate-area targets, and every otherwise-illegal translation before background calls, resolution, canon, or narration. Cancelled commands such as “Search? No, wait” remain waits. An impossible immediate-area investigation during an incomplete milestone lock returns 422 before any model call. Unit and service-level retry-success regressions cover each path.
+- 2026-07-19 prompt `1.4.2` non-live gate: `npm run check` and `npm audit` exited 0. Vitest passed 86 tests. Offline eval passed 14 invariant cases, 12 POV attacks, 1,000 simulations, 35 checkpoints, and the 350/no-351 horizon. Production build, 17 E2E tests with one intentional desktop skip, both security scans, 526 package licenses, and zero-vulnerability audit passed. The final `$0.075` chapter cap projects cumulative worst-case exposure of `$2.91434585`, preserving `$0.08565415` below the `$3` cap.
 
 Add exact command, date, exit code, cost, and report path after every future milestone gate.

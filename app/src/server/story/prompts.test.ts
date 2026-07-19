@@ -237,6 +237,8 @@ describe("background actor selection", () => {
       expect(prompt).toHaveProperty("legalActionTargets.defend");
       expect(JSON.stringify(prompt)).toContain("directly target");
     }
+    expect(custom.instruction).toContain("Never replace an explicit investigation with wait");
+    expect(custom.instruction).toContain("first legalActionTargets.investigate ID");
   });
 });
 

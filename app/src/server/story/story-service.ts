@@ -19,6 +19,7 @@ import {
   type ValidationIssue,
   type WorldState,
   buildPovContext,
+  getClockPolicy,
   resolveTurn,
   stageWorldDelta,
   validateChapterDraft,
@@ -220,10 +221,11 @@ export class StoryService {
         if (description.length < 1 || description.length > 240) {
           throw new StoryServiceError("Custom action must contain 1 to 240 characters");
         }
+        validateCustomActionRequest(before, description);
         const customCall = await runStructuredResponse(this.client, {
           input: buildCustomActionPrompt(before, description),
           instructions:
-            "Convert one player attempt into the strict PlayerAction schema. Output no extra fields.",
+            "Convert one player attempt into the strict PlayerAction schema. Preserve explicit action semantics. Output no extra fields.",
           maxOutputTokens: 500,
           model: "gpt-5.6-terra",
           policy,
@@ -243,6 +245,7 @@ export class StoryService {
                 { retryable: true },
               );
             }
+            validateCustomActionTranslation(before, description, action);
           },
         });
         playerAction = customCall.data;
@@ -837,6 +840,77 @@ export function validateNarrativeAuditOutput(
       throw invalidAudit(`Audit zero for ${dimension} has an invalid issue code`);
     }
   }
+}
+
+export function validateCustomActionTranslation(
+  state: WorldState,
+  description: string,
+  action: PlayerAction,
+): void {
+  const explicitlyInvestigates = explicitlyRequestsInvestigation(description);
+  if (explicitlyInvestigates && action.action.type !== "investigate") {
+    throw new OpenAIRuntimeError(
+      "INVALID_OUTPUT",
+      "Custom action translation replaced an explicit investigation",
+      { retryable: true },
+    );
+  }
+  const requestsImmediateArea = requestsImmediateAreaInvestigation(description);
+  const pov = state.characters.find(({ id }) => id === state.lockedPovId);
+  if (
+    explicitlyInvestigates &&
+    requestsImmediateArea &&
+    action.action.type === "investigate" &&
+    action.action.subjectId !== pov?.locationId
+  ) {
+    throw new OpenAIRuntimeError(
+      "INVALID_OUTPUT",
+      "Custom immediate-area investigation did not target the POV location",
+      { retryable: true },
+    );
+  }
+  const translated = resolveTurn(state, action, []);
+  if (!translated.ok) {
+    throw new OpenAIRuntimeError(
+      "INVALID_OUTPUT",
+      `Custom action translation is illegal: ${formatIssues(translated.issues)}`,
+      { retryable: true },
+    );
+  }
+}
+
+function validateCustomActionRequest(state: WorldState, description: string): void {
+  if (!explicitlyRequestsInvestigation(description)) return;
+  const policy = getClockPolicy(state.chapter);
+  const milestone = state.arcClock.milestones.find(({ act }) => act === policy.currentAct);
+  if (
+    policy.choicesRequireMilestone &&
+    milestone &&
+    !milestone.completed &&
+    (requestsImmediateAreaInvestigation(description) ||
+      !milestone.compatibleActionTypes.includes("investigate"))
+  ) {
+    throw new StoryServiceError(
+      "This investigation cannot advance the required act milestone",
+      422,
+    );
+  }
+}
+
+function explicitlyRequestsInvestigation(description: string): boolean {
+  const startsWithInvestigation =
+    /^\s*(?:please\s+)?(?:investigat(?:e|es|ed|ing)|inspect(?:s|ed|ing)?|examin(?:e|es|ed|ing)|search(?:es|ed|ing)?|scan(?:s|ned|ning)?|look(?:s|ed|ing)?\s+(?:around|for|into|over))\b/iu.test(
+      description,
+    );
+  const cancelsForWait =
+    /\bno\s*,?\s*(?:just\s+)?wait\b|\b(?:instead|rather)\b[^.?!;]*\bwait\b/iu.test(description);
+  return startsWithInvestigation && !cancelsForWait;
+}
+
+function requestsImmediateAreaInvestigation(description: string): boolean {
+  return /\b(?:immediate|nearby|local)\s+area\b|\bsurroundings\b|\blocal\s+tracks\b/iu.test(
+    description,
+  );
 }
 
 function invalidAudit(message: string): OpenAIRuntimeError {

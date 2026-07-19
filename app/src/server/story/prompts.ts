@@ -87,7 +87,7 @@ export function buildCustomActionPrompt(state: WorldState, description: string):
     contractVersion: CONTRACT_VERSION,
     customDescription: description,
     instruction:
-      "Translate the user's attempted action into one strict PlayerAction. Do not make it succeed. Preserve intent honestly. Use only supplied context. During a milestone lock, copy milestone.id into milestoneId and use a compatible action. If completed is false, the action must directly target milestone.id through investigate.subjectId or a supported targetId.",
+      "Translate the user's attempted action into one strict PlayerAction. Do not make it succeed. Preserve intent honestly. Never replace an explicit investigation with wait: investigate, inspect, examine, search, scan, and look for require action.type investigate. For an unnamed immediate area or local tracks, use the first legalActionTargets.investigate ID, which is the POV character's current location. Use only supplied context. During a milestone lock, copy milestone.id into milestoneId and use a compatible action. If completed is false, the action must directly target milestone.id through investigate.subjectId or a supported targetId.",
     milestone:
       policy.choicesRequireMilestone && milestone
         ? {

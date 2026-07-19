@@ -12,7 +12,12 @@ import type { ParsedResponse, Response, ResponseUsage } from "openai/resources/r
 import { describe, expect, it, vi } from "vitest";
 
 import { StoryStore } from "../storage/story-store";
-import { StoryService, StoryServiceError, validateNarrativeAuditOutput } from "./story-service";
+import {
+  StoryService,
+  StoryServiceError,
+  validateCustomActionTranslation,
+  validateNarrativeAuditOutput,
+} from "./story-service";
 
 describe("StoryService", () => {
   it.each(CHARACTER_IDS)("locks %s and exposes two valid opening choices", (characterId) => {
@@ -276,6 +281,148 @@ describe("StoryService", () => {
     store.close();
   });
 
+  it.each([
+    "Investigate the immediate area for fresh tracks.",
+    "Inspect local tracks for signs of passage.",
+  ])(
+    "rejects impossible local milestone investigation %s before any model call",
+    async (description) => {
+      const store = new StoryStore();
+      const locked = milestoneLockedWorld();
+      const parse = vi.fn();
+      const stream = vi.fn();
+      const service = new StoryService(
+        store,
+        { responses: { parse, stream } } as unknown as OpenAI,
+        options(),
+        () => locked,
+      );
+      service.selectPov("rowan-ashborn");
+
+      await expect(
+        service.takeTurn({
+          description,
+          expectedWorldVersion: locked.version,
+          requestId: "00000000-0000-4000-8000-000000000047",
+          type: "custom_action",
+        }),
+      ).rejects.toMatchObject({ status: 422 });
+
+      expect(parse).not.toHaveBeenCalled();
+      expect(stream).not.toHaveBeenCalled();
+      expect(store.loadWorldState("ashen-crown-v1")).toMatchObject({
+        chapter: 47,
+        version: 48,
+      });
+      store.close();
+    },
+  );
+
+  it("retries invalid custom investigation translations before resolution", async () => {
+    const store = new StoryStore();
+    const description = "Investigate the immediate area for fresh tracks.";
+    const actionFields = {
+      actorId: "rowan-ashborn",
+      description,
+      milestoneId: null,
+      source: "custom",
+      stateVersion: 1,
+    } as const;
+    const translatedWait = { ...actionFields, action: { type: "wait" } } as const;
+    const translatedWrongTarget = {
+      ...actionFields,
+      action: { subjectId: "rowan-is-malachar-reincarnated", type: "investigate" },
+    } as const;
+    const translatedLocalInvestigation = {
+      ...actionFields,
+      action: { subjectId: "cinder-village", type: "investigate" },
+    } as const;
+    const prose = Array.from({ length: 900 }, (_, index) => `track${index}`).join(" ");
+    const frame = {
+      choices: [
+        {
+          action: { type: "wait" },
+          description: "Wait and watch the village edge.",
+          id: "choice-1",
+          milestoneId: null,
+        },
+        {
+          action: { subjectId: "cinder-village", type: "investigate" },
+          description: "Search the village edge for another trail.",
+          id: "choice-2",
+          milestoneId: null,
+        },
+      ],
+      terminal: false,
+      title: "Tracks in Cinder",
+    } as const;
+    const audit: NarrativeAudit = {
+      approved: true,
+      evidence: NARRATIVE_AUDIT_DIMENSIONS.map((dimension) => ({
+        detail: "The chapter fulfills the local investigation inside visible canon.",
+        dimension,
+        issueCode: "pass",
+      })),
+      leakedFactIds: [],
+      proseHash: createHash("sha256").update(prose).digest("hex"),
+      scores: {
+        arcProgress: 2,
+        characterAutonomy: 2,
+        choiceFulfillment: 2,
+        continuity: 2,
+        litrpgMechanics: 2,
+        povSafety: 2,
+        prose: 2,
+      },
+    };
+    const parse = vi
+      .fn()
+      .mockResolvedValueOnce(parsedResponse(translatedWait, "resp_custom_wait_1"))
+      .mockResolvedValueOnce(parsedResponse(translatedWrongTarget, "resp_custom_target_2"))
+      .mockResolvedValueOnce(parsedResponse(translatedLocalInvestigation, "resp_custom_valid_3"))
+      .mockResolvedValueOnce(parsedResponse(frame, "resp_custom_frame"))
+      .mockResolvedValueOnce(parsedResponse(audit, "resp_custom_audit"));
+    const stream = vi.fn().mockReturnValueOnce(fakeStream(prose, "resp_custom_narration"));
+    const service = new StoryService(
+      store,
+      { responses: { parse, stream } } as unknown as OpenAI,
+      options(),
+    );
+    service.selectPov("rowan-ashborn");
+
+    const result = await service.takeTurn({
+      description,
+      expectedWorldVersion: 1,
+      requestId: "00000000-0000-4000-8000-000000000351",
+      type: "custom_action",
+    });
+
+    expect(parse).toHaveBeenCalledTimes(5);
+    expect(stream).toHaveBeenCalledTimes(1);
+    expect(result.world).toMatchObject({ chapter: 1, version: 2 });
+    const chapter = store.loadChapter("ashen-crown-v1", 1);
+    if (!chapter) throw new Error("Custom chapter missing");
+    const trace = store.loadTrace(chapter.traceId);
+    if (!trace) throw new Error("Custom trace missing");
+    expect(trace.attempts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          errorCode: "INVALID_OUTPUT",
+          phase: "intent",
+          responseId: "resp_custom_wait_1",
+        }),
+        expect.objectContaining({
+          errorCode: "INVALID_OUTPUT",
+          phase: "intent",
+          responseId: "resp_custom_target_2",
+        }),
+      ]),
+    );
+    expect(trace.calls[0]).toMatchObject({ phase: "intent", retries: 2 });
+    expect(store.loadFailedTurnTraces("ashen-crown-v1")).toEqual([]);
+    store.close();
+  });
+
   it("persists every model attempt when a turn fails before commit", async () => {
     const store = new StoryStore();
     const unsafeFrame = {
@@ -440,6 +587,56 @@ describe("StoryService", () => {
       validateNarrativeAuditOutput(inventedLeak, inventedLeak.proseHash, new Set(["real-fact"])),
     ).toThrow("invented leaked fact ID");
   });
+
+  it("rejects a custom investigation translated as waiting", () => {
+    const store = new StoryStore();
+    const service = new StoryService(store, unusedClient(), options());
+    service.selectPov("rowan-ashborn");
+    const state = store.loadWorldState("ashen-crown-v1");
+    if (!state) throw new Error("Seed world missing");
+    const baseAction = {
+      actorId: "rowan-ashborn",
+      description: "Investigate the immediate area for fresh tracks.",
+      milestoneId: null,
+      source: "custom",
+      stateVersion: 1,
+    } as const;
+
+    expect(() =>
+      validateCustomActionTranslation(state, baseAction.description, {
+        ...baseAction,
+        action: { type: "wait" },
+      }),
+    ).toThrow("replaced an explicit investigation");
+    expect(() =>
+      validateCustomActionTranslation(state, baseAction.description, {
+        ...baseAction,
+        action: { subjectId: "cinder-village", type: "investigate" },
+      }),
+    ).not.toThrow();
+    expect(() =>
+      validateCustomActionTranslation(state, "Searching the immediate area.", {
+        ...baseAction,
+        action: { type: "wait" },
+        description: "Searching the immediate area.",
+      }),
+    ).toThrow("replaced an explicit investigation");
+    expect(() =>
+      validateCustomActionTranslation(state, "Do not search; wait.", {
+        ...baseAction,
+        action: { type: "wait" },
+        description: "Do not search; wait.",
+      }),
+    ).not.toThrow();
+    expect(() =>
+      validateCustomActionTranslation(state, "Search? No, wait.", {
+        ...baseAction,
+        action: { type: "wait" },
+        description: "Search? No, wait.",
+      }),
+    ).not.toThrow();
+    store.close();
+  });
 });
 
 function options() {
@@ -465,6 +662,21 @@ function terminalWorld() {
   state.terminalReason = "Chapter 350 terminal resolution";
   state.version = 351;
   for (const milestone of state.arcClock.milestones) milestone.completed = true;
+  return state;
+}
+
+function milestoneLockedWorld() {
+  const store = new StoryStore();
+  const service = new StoryService(store, unusedClient(), options());
+  service.selectPov("rowan-ashborn");
+  const state = store.loadWorldState("ashen-crown-v1");
+  store.close();
+  if (!state) throw new Error("Seed world missing");
+  state.arcClock.convergencePressure = true;
+  state.calendar.day = 48;
+  state.calendar.label = "Year 1, Ashfall 48";
+  state.chapter = 47;
+  state.version = 48;
   return state;
 }
 
