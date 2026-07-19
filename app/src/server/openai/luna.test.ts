@@ -186,7 +186,7 @@ function intent(actorId: string, id: string): WorldIntent {
     goal: "Survive the chapter.",
     id,
     prerequisites: { requiredFactIds: [], requiredItemIds: [], requiredSkillIds: [] },
-    promptVersion: "1.2.0",
+    promptVersion: "1.3.0",
     stateVersion: 1,
   };
 }

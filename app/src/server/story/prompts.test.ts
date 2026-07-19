@@ -71,6 +71,7 @@ describe("background actor selection", () => {
     ) as Record<string, unknown>;
 
     expect(JSON.stringify(prompt)).toContain("No unlisted skill or item use");
+    expect(JSON.stringify(prompt)).toContain("Never narrate what that character found");
     expect(prompt).toHaveProperty("viewpointCanon");
     expect(prompt).not.toHaveProperty("stateBeforeViewpoint");
     expect(prompt).not.toHaveProperty("worldBefore");

@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { CONTRACT_VERSION, PROMPT_VERSION, type WorldIntent, type WorldState } from "../contracts";
 import { stageWorldDelta } from "./delta";
 import { getClockPolicy } from "./clock";
+import { buildPovContext } from "./knowledge";
 import { resolveTurn } from "./resolver";
 import { validateWorldState } from "./validation";
 
@@ -248,6 +249,36 @@ describe("deterministic turn resolution", () => {
     });
     forged.surfacedClueFactIds.push("malachar-contained-the-void");
     expect(stageWorldDelta(state, waited.data.intents, forged).ok).toBe(false);
+  });
+
+  it("does not let a moving character observe a same-turn event at the old location", () => {
+    const state = seedState();
+    const nyra = backgroundIntent(state, "nyra-vale", "intent-nyra-investigates");
+    nyra.action = { subjectId: "cinder-village", type: "investigate" };
+
+    const resolved = resolveTurn(
+      state,
+      playerAction(state, { destinationId: "ash-road", type: "move" }),
+      [nyra],
+    );
+
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    const nyraEvent = resolved.data.delta.events.find(({ participantIds }) =>
+      participantIds.includes("nyra-vale"),
+    );
+    expect(nyraEvent?.observerIds).not.toContain("rowan-ashborn");
+    const staged = stageWorldDelta(state, resolved.data.intents, resolved.data.delta);
+    expect(staged.ok).toBe(true);
+    if (!staged.ok) return;
+    expect(
+      staged.data.state.activeEvents
+        .filter(({ participantIds }) => participantIds.includes("nyra-vale"))
+        .some(({ observerIds }) => observerIds.includes("rowan-ashborn")),
+    ).toBe(false);
+    const rowanContext = buildPovContext(staged.data.state, "rowan-ashborn");
+    expect(rowanContext.observedEvents.some(({ id }) => id === nyraEvent?.id)).toBe(false);
+    expect(rowanContext.factIds).not.toContain("clue-1-1-nyra-vale");
   });
 
   it("keeps investigation turns valid when fact or knowledge capacity is exhausted", () => {

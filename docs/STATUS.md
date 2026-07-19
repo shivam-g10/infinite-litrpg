@@ -21,12 +21,12 @@
 
 ## Current Blockers
 
-- Final Maelin smoke must verify prompt `1.2.0` before another full paid run.
-- Final twelve-cycle sequential report and current native report do not exist yet.
+- Final twelve-cycle sequential report must verify prompt `1.3.0` and post-turn observer visibility.
+- Current native report does not exist yet; native capability already has a green capped smoke on the configured key.
 
 ## Next Action
 
-Commit prompt `1.2.0` so live traces identify tested code. Then run capped Maelin smoke.
+Commit the post-turn observer fix and prompt `1.3.0`. Then run the final twelve-cycle sequential suite.
 
 ## Evidence Log
 
@@ -60,5 +60,10 @@ Commit prompt `1.2.0` so live traces identify tested code. Then run capped Maeli
 - 2026-07-19 Maelin prompt `1.1.0` smoke: audit correctly rejected the first narration but misread future choices as unfulfilled past actions. The safe retry preflight then blocked a possible `$0.064775` request with `$0.045805` remaining. Zero chapters committed; exposure was `$0.05419475`. Report: `evals/reports/live-smoke-sequential-maelin-rook.json`.
 - 2026-07-19 live spend conservative upper bound after that smoke: `$1.65052775`, leaving `$1.34947225` under the documented `$3` allowance.
 - 2026-07-19 prompt `1.2.0`: audit now defines choice fulfillment against `playerAction` and labels chapter choices as future-only. Narration and audit use one compact after-turn POV projection. Deterministic probe reduced narration input from 11,848 to 6,505 bytes and audit input from 17,533 to 12,182 bytes. `npm run check` exited 0 with 75 tests and every non-live gate green.
+- 2026-07-19 Maelin prompt `1.2.0` smoke: one chapter committed at 913 words, `$0.039196125`, and 26,037 ms. All nine live gates passed, including exact 11-chunk replay, empty leak list, trace cost equality, and prompt `1.2.0` Git SHA `d420410ce80daeca3a1c78f290c0cac960e1c3f5`.
+- 2026-07-19 first prompt `1.2.0` full run: zero chapters committed. Audit twice rejected Rowan prose for exposing Nyra's generated clue after the deterministic resolver incorrectly treated Rowan as observing her same-turn investigation at the location he had left. Safe preflight stopped a third narration with `$0.027758` remaining; exposure was `$0.072242125`. Report: `evals/reports/live-full-sequential.json`.
+- 2026-07-19 post-turn visibility fix: event observers now resolve from all accepted actors' final turn locations. A named regression moves Rowan away while Nyra investigates his old location, then proves her event and clue are absent from Rowan's POV context. Prompt `1.3.0` separately forbids narrating another character's investigation result unless the result is established POV canon.
+- 2026-07-19 prompt `1.3.0` full gate: `npm run check` exited 0 with 76 tests, all offline evals, production build, E2E, both security scans, and license inventory green.
+- 2026-07-19 live spend conservative upper bound after the first full retry: `$1.761966`, leaving `$1.238034` under the documented `$3` allowance. One final twelve-chapter run remains inside the cap by `$0.038034` at worst-case chapter ceilings.
 
 Add exact command, date, exit code, cost, and report path after every future milestone gate.

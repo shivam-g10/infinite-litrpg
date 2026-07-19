@@ -627,7 +627,7 @@ function validateMutationEntailment(
     }
     if (mutation.type === "set_relationship") {
       const supported = accepted.some((intent, index) =>
-        resolveIntentOutcome(state, intent, delta.clock.toChapter, index).mutations.some(
+        resolveIntentOutcome(state, intent, delta.clock.toChapter, index, accepted).mutations.some(
           (expected) => JSON.stringify(expected) === JSON.stringify(mutation),
         ),
       );
@@ -662,7 +662,13 @@ function validateMutationEntailment(
     );
   }
   accepted.forEach((intent, index) => {
-    const expectedEvent = resolveIntentOutcome(state, intent, delta.clock.toChapter, index).event;
+    const expectedEvent = resolveIntentOutcome(
+      state,
+      intent,
+      delta.clock.toChapter,
+      index,
+      accepted,
+    ).event;
     const actualEvent = delta.events[index];
     if (!actualEvent || JSON.stringify(actualEvent) !== JSON.stringify(expectedEvent)) {
       issues.push(
@@ -674,7 +680,7 @@ function validateMutationEntailment(
       );
     }
 
-    if (!hasRequiredMutation(state, intent, delta, index)) {
+    if (!hasRequiredMutation(state, intent, delta, index, accepted)) {
       issues.push(
         makeIssue(
           "MUTATION_MISSING",
@@ -715,7 +721,7 @@ function validateKnowledgeEntailment(
     return intent ? [intent] : [];
   });
   const expectedOutcomes = accepted.map((intent, index) =>
-    resolveIntentOutcome(state, intent, delta.clock.toChapter, index),
+    resolveIntentOutcome(state, intent, delta.clock.toChapter, index, accepted),
   );
   const expectedMutations = expectedOutcomes.flatMap(
     ({ knowledgeMutations }) => knowledgeMutations,
@@ -780,8 +786,15 @@ function hasRequiredMutation(
   intent: WorldIntent,
   delta: WorldDelta,
   ordinal: number,
+  accepted: readonly WorldIntent[],
 ): boolean {
-  const expected = resolveIntentOutcome(state, intent, delta.clock.toChapter, ordinal).mutations;
+  const expected = resolveIntentOutcome(
+    state,
+    intent,
+    delta.clock.toChapter,
+    ordinal,
+    accepted,
+  ).mutations;
   return expected.every(
     (wanted) =>
       delta.stateMutations.filter((actual) => JSON.stringify(actual) === JSON.stringify(wanted))

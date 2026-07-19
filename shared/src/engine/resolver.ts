@@ -127,7 +127,7 @@ export function resolveTurn(
   const knowledgeMutations: KnowledgeMutation[] = [];
   const surfacedClueFactIds: string[] = [];
   accepted.forEach((intent, index) => {
-    const outcome = resolveIntentOutcome(state, intent, nextChapter, index);
+    const outcome = resolveIntentOutcome(state, intent, nextChapter, index, accepted);
     events.push(outcome.event);
     stateMutations.push(...outcome.mutations);
     knowledgeMutations.push(...outcome.knowledgeMutations);
@@ -201,6 +201,7 @@ export function resolveIntentOutcome(
   intent: WorldIntent,
   chapter: number,
   ordinal: number,
+  turnIntents: readonly WorldIntent[] = [intent],
 ): {
   readonly event: ResolvedEvent;
   readonly knowledgeMutations: KnowledgeMutation[];
@@ -276,10 +277,9 @@ export function resolveIntentOutcome(
     }
   }
 
+  const locationsAfterTurn = resolvedCharacterLocations(state, turnIntents);
   const observerIds = state.characters
-    .filter(
-      ({ id, locationId: witnessLocation }) => id !== actor.id && witnessLocation === locationId,
-    )
+    .filter(({ id }) => id !== actor.id && locationsAfterTurn.get(id) === locationId)
     .map(({ id }) => id);
   return {
     event: {
@@ -295,6 +295,19 @@ export function resolveIntentOutcome(
     mutations,
     surfacedClueFactIds,
   };
+}
+
+function resolvedCharacterLocations(
+  state: WorldState,
+  intents: readonly WorldIntent[],
+): ReadonlyMap<string, string> {
+  const locations = new Map(state.characters.map(({ id, locationId }) => [id, locationId]));
+  for (const intent of intents) {
+    if (intent.action.type === "move") {
+      locations.set(intent.actorId, intent.action.destinationId);
+    }
+  }
+  return locations;
 }
 
 function investigationFact(

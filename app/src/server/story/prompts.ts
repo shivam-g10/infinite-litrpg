@@ -144,6 +144,7 @@ export function buildNarrationPrompt(
       "Never claim a remote character knew, saw, heard, awaited, expected, received, noticed, answered, reacted to, or was affected by the viewpoint character unless acceptedEvents explicitly includes that character as a participant or observer.",
       "A plan or goal to contact someone permits only the viewpoint character's intention. It does not permit contact, delivery, reception, awareness, or response.",
       "A canonical move permits the viewpoint character to arrive at the destination. It does not make anyone else notice the arrival.",
+      "A visible event by another character permits only the supplied event summary. Never narrate what that character found, inferred, confirmed, or discovered unless the result appears in viewpointCanon.facts.",
       "No elapsed time beyond the supplied calendar change.",
       "No durable world fact beyond acceptedEvents. Generic sensory texture may not assert new canon.",
       "Never narrate a background intent as an action performed by the viewpoint character.",

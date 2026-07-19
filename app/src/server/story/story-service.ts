@@ -367,6 +367,10 @@ export class StoryService {
                 : [],
             );
             retryDirective = `The prior draft failed: ${zeroScores.join(" ") || "quality"}. Remove the cited unsupported claims, durable facts, and extra actions. Keep only supplied viewpoint knowledge and canonical effects.`;
+            if (approvedAudit.leakedFactIds.length > 0) {
+              retryDirective +=
+                " Remove every other-character finding and remote investigation result.";
+            }
           }
           return {
             accepted: approvedAudit.approved,
