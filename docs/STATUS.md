@@ -2,7 +2,7 @@
 
 - Updated: 2026-07-19
 - Layer: Release evaluation
-- Current phase: Phase 5 prompt `1.4.3` checkpoint before final release run
+- Current phase: Phase 5 prompt `1.4.4` checkpoint before final release run
 - Repository: initialized on `main`
 - Remote: `git@github.com:shivam-g10/infinite-litrpg.git`
 - Initial commit: `39b19a2` (`chore: scaffold agent workflow`)
@@ -21,12 +21,12 @@
 
 ## Current Blockers
 
-- Prompt `1.4.3` needs the final twelve-cycle sequential report.
+- Prompt `1.4.4` needs the final twelve-cycle sequential report.
 - Current native report does not exist yet; native capability already has a green capped smoke on the configured key.
 
 ## Next Action
 
-Commit prompt `1.4.3`. Run the final suite with prior conservative spend `$2.0476066` and chapter cap `$0.075`.
+Commit prompt `1.4.4`. Run the final suite with prior conservative spend `$2.09344135` and chapter cap `$0.07`.
 
 ## Evidence Log
 
@@ -76,5 +76,8 @@ Commit prompt `1.4.3`. Run the final suite with prior conservative spend `$2.047
 - 2026-07-19 prompt `1.4.2` full run command `npm run evals:live:full -- --prior-spend-usd 2.01434585 --chapter-cap-usd 0.075` exited 1 with zero commits. The audit rejected Rowan prose for revealing `malachar-contained-the-void`: it combined Rowan's known identity with a hidden Void-containment history. Safe preflight blocked regeneration. Run exposure was `$0.03326075`; cumulative conservative exposure is `$2.0476066`, leaving `$0.9523934`. Report: `evals/reports/live-full-sequential.json`.
 - 2026-07-19 prompt `1.4.3` baseline fix: supplied POV canon and current effects are now an explicit exhaustive whitelist. The prompt forbids synthesizing relationships between people, threats, places, events, or history from identities, goals, beliefs, or shared vocabulary, without exposing hidden facts to the narrator. Deterministic and Luna retry feedback now uses fixed issue codes only. A service regression captures both retry requests and proves hidden claims and fact IDs never re-enter narrator context.
 - 2026-07-19 prompt `1.4.3` non-live gate: `npm run check` and `npm audit` exited 0. Vitest passed 87 tests. Offline eval passed 14 invariant cases, 12 POV attacks, 1,000 simulations, 35 checkpoints, and the 350/no-351 horizon. Production build, 17 E2E tests with one intentional desktop skip, both security scans, 526 package licenses, and zero-vulnerability audit passed. Read-only review confirmed safe retry feedback.
+- 2026-07-19 prompt `1.4.3` full run command `npm run evals:live:full -- --prior-spend-usd 2.0476066 --chapter-cap-usd 0.075` exited 1 after one of twelve cycles. Rowan chapter 1 passed at 1,017 words, `$0.036452125`, 25,936 ms, 12 exact replay chunks, and empty leak list. Rowan chapter 2 stopped before background calls after Terra translated the explicit local investigation to another action on all three attempts. Run exposure was `$0.04583475`; cumulative conservative exposure is `$2.09344135`, leaving `$0.90655865`. Report: `evals/reports/live-full-sequential.json`.
+- 2026-07-19 prompt `1.4.4` baseline fix: simple command-led local investigation now translates deterministically to the POV character's current location, with the same legality and milestone checks. Compound, conditional, negated, and multi-sentence actions remain on the strict Terra path. Service regressions prove the release action's first model call is `chapter_frame` while a compound action's first model call is `player_action`.
+- 2026-07-19 prompt `1.4.4` non-live gate: `npm run check` and `npm audit` exited 0. Vitest passed 89 tests. Offline eval passed 14 invariant cases, 12 POV attacks, 1,000 simulations, 35 checkpoints, and the 350/no-351 horizon. Production build, 17 E2E tests with one intentional desktop skip, both security scans, 526 package licenses, and zero-vulnerability audit passed. Read-only review found no remaining fast-path blocker. The final `$0.07` chapter cap projects cumulative worst-case exposure of `$2.93344135`.
 
 Add exact command, date, exit code, cost, and report path after every future milestone gate.

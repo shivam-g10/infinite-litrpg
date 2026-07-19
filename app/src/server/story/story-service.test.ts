@@ -423,9 +423,68 @@ describe("StoryService", () => {
     },
   );
 
+  it("translates a clear local investigation without a translator model call", async () => {
+    const store = new StoryStore();
+    const parse = vi.fn().mockRejectedValue(new Error("Stop after deterministic translation"));
+    const stream = vi.fn();
+    const service = new StoryService(
+      store,
+      { responses: { parse, stream } } as unknown as OpenAI,
+      options(),
+    );
+    service.selectPov("rowan-ashborn");
+
+    await expect(
+      service.takeTurn({
+        description: "Investigate the immediate area for fresh tracks.",
+        expectedWorldVersion: 1,
+        requestId: "00000000-0000-4000-8000-000000000048",
+        type: "custom_action",
+      }),
+    ).rejects.toThrow("Stop after deterministic translation");
+
+    expect(parse).toHaveBeenCalledTimes(3);
+    for (const [request] of parse.mock.calls) {
+      const structuredRequest = request as { text?: { format?: { name?: string } } } | undefined;
+      expect(structuredRequest?.text?.format?.name).toBe("chapter_frame");
+    }
+    expect(stream).not.toHaveBeenCalled();
+    expect(store.loadWorldState("ashen-crown-v1")).toMatchObject({ chapter: 0, version: 1 });
+    store.close();
+  });
+
+  it("routes a compound local investigation through the translator model", async () => {
+    const store = new StoryStore();
+    const parse = vi.fn().mockRejectedValue(new Error("Stop inside translator"));
+    const stream = vi.fn();
+    const service = new StoryService(
+      store,
+      { responses: { parse, stream } } as unknown as OpenAI,
+      options(),
+    );
+    service.selectPov("rowan-ashborn");
+
+    await expect(
+      service.takeTurn({
+        description: "Investigate the immediate area, then defend Nyra.",
+        expectedWorldVersion: 1,
+        requestId: "00000000-0000-4000-8000-000000000049",
+        type: "custom_action",
+      }),
+    ).rejects.toThrow("Stop inside translator");
+
+    expect(parse).toHaveBeenCalledTimes(3);
+    for (const [request] of parse.mock.calls) {
+      const structuredRequest = request as { text?: { format?: { name?: string } } } | undefined;
+      expect(structuredRequest?.text?.format?.name).toBe("player_action");
+    }
+    expect(stream).not.toHaveBeenCalled();
+    store.close();
+  });
+
   it("retries invalid custom investigation translations before resolution", async () => {
     const store = new StoryStore();
-    const description = "Investigate the immediate area for fresh tracks.";
+    const description = "Investigate the known reincarnation memory.";
     const actionFields = {
       actorId: "rowan-ashborn",
       description,
@@ -436,11 +495,11 @@ describe("StoryService", () => {
     const translatedWait = { ...actionFields, action: { type: "wait" } } as const;
     const translatedWrongTarget = {
       ...actionFields,
-      action: { subjectId: "rowan-is-malachar-reincarnated", type: "investigate" },
+      action: { subjectId: "capital", type: "investigate" },
     } as const;
-    const translatedLocalInvestigation = {
+    const translatedKnownInvestigation = {
       ...actionFields,
-      action: { subjectId: "cinder-village", type: "investigate" },
+      action: { subjectId: "rowan-is-malachar-reincarnated", type: "investigate" },
     } as const;
     const prose = Array.from({ length: 900 }, (_, index) => `track${index}`).join(" ");
     const frame = {
@@ -484,7 +543,7 @@ describe("StoryService", () => {
       .fn()
       .mockResolvedValueOnce(parsedResponse(translatedWait, "resp_custom_wait_1"))
       .mockResolvedValueOnce(parsedResponse(translatedWrongTarget, "resp_custom_target_2"))
-      .mockResolvedValueOnce(parsedResponse(translatedLocalInvestigation, "resp_custom_valid_3"))
+      .mockResolvedValueOnce(parsedResponse(translatedKnownInvestigation, "resp_custom_valid_3"))
       .mockResolvedValueOnce(parsedResponse(frame, "resp_custom_frame"))
       .mockResolvedValueOnce(parsedResponse(audit, "resp_custom_audit"));
     const stream = vi.fn().mockReturnValueOnce(fakeStream(prose, "resp_custom_narration"));

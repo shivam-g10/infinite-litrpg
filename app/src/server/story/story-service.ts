@@ -222,34 +222,39 @@ export class StoryService {
           throw new StoryServiceError("Custom action must contain 1 to 240 characters");
         }
         validateCustomActionRequest(before, description);
-        const customCall = await runStructuredResponse(this.client, {
-          input: buildCustomActionPrompt(before, description),
-          instructions:
-            "Convert one player attempt into the strict PlayerAction schema. Preserve explicit action semantics. Output no extra fields.",
-          maxOutputTokens: 500,
-          model: "gpt-5.6-terra",
-          policy,
-          reasoningEffort: "none",
-          schema: PlayerActionSchema,
-          schemaName: "player_action",
-          validate: (action) => {
-            if (
-              action.actorId !== before.lockedPovId ||
-              action.stateVersion !== before.version ||
-              action.source !== "custom" ||
-              action.description !== description
-            ) {
-              throw new OpenAIRuntimeError(
-                "INVALID_OUTPUT",
-                "Custom action translation changed locked input fields",
-                { retryable: true },
-              );
-            }
-            validateCustomActionTranslation(before, description, action);
-          },
-        });
-        playerAction = customCall.data;
-        calls.push(toModelCall(customCall, "gpt-5.6-terra", "intent", null));
+        const deterministicAction = buildDeterministicCustomAction(before, description);
+        if (deterministicAction) {
+          playerAction = deterministicAction;
+        } else {
+          const customCall = await runStructuredResponse(this.client, {
+            input: buildCustomActionPrompt(before, description),
+            instructions:
+              "Convert one player attempt into the strict PlayerAction schema. Preserve explicit action semantics. Output no extra fields.",
+            maxOutputTokens: 500,
+            model: "gpt-5.6-terra",
+            policy,
+            reasoningEffort: "none",
+            schema: PlayerActionSchema,
+            schemaName: "player_action",
+            validate: (action) => {
+              if (
+                action.actorId !== before.lockedPovId ||
+                action.stateVersion !== before.version ||
+                action.source !== "custom" ||
+                action.description !== description
+              ) {
+                throw new OpenAIRuntimeError(
+                  "INVALID_OUTPUT",
+                  "Custom action translation changed locked input fields",
+                  { retryable: true },
+                );
+              }
+              validateCustomActionTranslation(before, description, action);
+            },
+          });
+          playerAction = customCall.data;
+          calls.push(toModelCall(customCall, "gpt-5.6-terra", "intent", null));
+        }
       }
 
       const actors = selectBackgroundActors(before).slice(0, this.options.maxBackgroundAgents);
@@ -886,15 +891,53 @@ function validateCustomActionRequest(state: WorldState, description: string): vo
   if (
     policy.choicesRequireMilestone &&
     milestone &&
-    !milestone.completed &&
-    (requestsImmediateAreaInvestigation(description) ||
-      !milestone.compatibleActionTypes.includes("investigate"))
+    (!milestone.compatibleActionTypes.includes("investigate") ||
+      (!milestone.completed && requestsImmediateAreaInvestigation(description)))
   ) {
     throw new StoryServiceError(
       "This investigation cannot advance the required act milestone",
       422,
     );
   }
+}
+
+function buildDeterministicCustomAction(
+  state: WorldState,
+  description: string,
+): PlayerAction | null {
+  if (!isSimpleLocalInvestigation(description)) {
+    return null;
+  }
+  const pov = state.characters.find(({ id }) => id === state.lockedPovId);
+  if (!pov || state.lockedPovId === null) return null;
+  const policy = getClockPolicy(state.chapter);
+  const milestone = state.arcClock.milestones.find(({ act }) => act === policy.currentAct);
+  const action = PlayerActionSchema.parse({
+    action: { subjectId: pov.locationId, type: "investigate" },
+    actorId: state.lockedPovId,
+    description,
+    milestoneId: policy.choicesRequireMilestone ? (milestone?.id ?? null) : null,
+    source: "custom",
+    stateVersion: state.version,
+  });
+  validateCustomActionTranslation(state, description, action);
+  return action;
+}
+
+function isSimpleLocalInvestigation(description: string): boolean {
+  if (
+    !explicitlyRequestsInvestigation(description) ||
+    !requestsImmediateAreaInvestigation(description)
+  ) {
+    return false;
+  }
+  const command = description.trim().replace(/[.!?]+$/u, "");
+  return !(
+    /[,.:;!?]/u.test(command) ||
+    /\b(?:and|or|then|before|after|while|if|unless|but|instead|rather|otherwise|not|never|cannot)\b|\b(?:do|does|did)\s+not\b|\b(?:don't|doesn't|didn't|can't)\b/iu.test(
+      command,
+    )
+  );
 }
 
 function explicitlyRequestsInvestigation(description: string): boolean {

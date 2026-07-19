@@ -114,6 +114,7 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 - The first prompt `1.4.0` smoke process was killed by the shell timeout before a report existed. Its full `$0.097` ceiling is reserved as unknown exposure. Prompt `1.4.1` keeps the timing fix but sends only pre-turn values touched by current effects, lowering request reservation.
 - Prompt `1.4.1` passed Rowan chapter 1, then exposed a custom-action translation defect: Terra changed “Investigate the immediate area for fresh tracks” into `wait`, and the audit correctly rejected the prose. Prompt `1.4.2` states the mapping explicitly. Deterministic validation now rejects changed semantics, wrong targets, and every otherwise-illegal translation before background model calls. An impossible local investigation during an incomplete milestone lock returns 422 before any model call.
 - Prompt `1.4.2` then exposed a semantic knowledge leak before any commit: Rowan connected his known old identity to a hidden Void-containment history. Prompt `1.4.3` makes supplied POV canon and current effects an exhaustive whitelist and forbids synthesizing new relationships from identities, threats, places, or shared vocabulary. Retry feedback now uses fixed issue codes only; it never echoes audit prose, hidden claims, or fact IDs into narrator context.
+- Prompt `1.4.3` passed Rowan chapter 1, then Terra translated the same explicit local investigation as another action on all three attempts. Prompt `1.4.4` resolves only simple command-led local investigations deterministically to the POV location. Compound, conditional, negated, and multi-sentence actions still route to the bounded Terra translator.
 
 ## Decision Log
 
@@ -129,4 +130,4 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 
 ## Current Milestone
 
-Phase 5 release eval: checkpoint prompt `1.4.3`, then run twelve complete cycles across all six viewpoints at `$0.075` per chapter. Conservative prior exposure is `$2.0476066`; worst-case cumulative exposure is `$2.9476066`, preserving `$0.0523934` below the `$3` cap.
+Phase 5 release eval: checkpoint prompt `1.4.4`, then run twelve complete cycles across all six viewpoints at `$0.07` per chapter. Conservative prior exposure is `$2.09344135`; worst-case cumulative exposure is `$2.93344135`, preserving `$0.06655865` below the `$3` cap.
