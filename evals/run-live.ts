@@ -54,12 +54,12 @@ interface LiveReport {
   povFilter: CharacterId | null;
   priorSpendUsd: number;
   projectedMaximumCumulativeCostUsd: number;
-  results: Omit<LiveResult, "prose">[];
+  results: LiveResult[];
   startedAt: string;
   suite: "full" | "smoke";
   totalCostCapUsd: number;
   totalCostUsd: number;
-  version: 3;
+  version: 4;
 }
 
 async function main(): Promise<void> {
@@ -240,12 +240,12 @@ async function main(): Promise<void> {
     povFilter,
     priorSpendUsd,
     projectedMaximumCumulativeCostUsd: priorSpendUsd + expected * perChapterCapUsd,
-    results: results.map(toReportResult),
+    results,
     startedAt,
     suite,
     totalCostCapUsd: TOTAL_CAP_USD,
     totalCostUsd,
-    version: 3,
+    version: 4,
   };
   const reportPath = resolve(
     REPORT_DIRECTORY,
@@ -329,23 +329,6 @@ function writeReviewPackets(results: readonly LiveResult[]): void {
     ].join("\n");
     writeFileSync(resolve(REVIEW_DIRECTORY, `${povId}.md`), `${body}\n`, "utf8");
   }
-}
-
-function toReportResult(result: LiveResult): Omit<LiveResult, "prose"> {
-  return {
-    adapterMode: result.adapterMode,
-    audit: result.audit,
-    chapter: result.chapter,
-    costUsd: result.costUsd,
-    latencyMs: result.latencyMs,
-    povId: result.povId,
-    streamChunkCount: result.streamChunkCount,
-    streamingLatencyMs: result.streamingLatencyMs,
-    streamReconstructed: result.streamReconstructed,
-    trace: result.trace,
-    usage: result.usage,
-    wordCount: result.wordCount,
-  };
 }
 
 function parseSuite(args: readonly string[]): "full" | "smoke" {

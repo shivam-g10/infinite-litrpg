@@ -2,7 +2,7 @@
 
 - Updated: 2026-07-19
 - Layer: Release evaluation
-- Current phase: Phase 5 prompt `1.4.4` checkpoint before final release run
+- Current phase: Phase 5 prompt `1.4.5` non-live checkpoint green before final release run
 - Repository: initialized on `main`
 - Remote: `git@github.com:shivam-g10/infinite-litrpg.git`
 - Initial commit: `39b19a2` (`chore: scaffold agent workflow`)
@@ -21,12 +21,11 @@
 
 ## Current Blockers
 
-- Prompt `1.4.4` needs the final twelve-cycle sequential report.
-- Current native report does not exist yet; native capability already has a green capped smoke on the configured key.
+- Prompt `1.4.5` needs the final twelve-cycle sequential report.
 
 ## Next Action
 
-Commit prompt `1.4.4`. Run the final suite with prior conservative spend `$2.09344135` and chapter cap `$0.07`.
+Commit prompt `1.4.5`. Run the final suite with prior conservative spend `$2.222336225` and chapter cap `$0.0648`.
 
 ## Evidence Log
 
@@ -79,5 +78,8 @@ Commit prompt `1.4.4`. Run the final suite with prior conservative spend `$2.093
 - 2026-07-19 prompt `1.4.3` full run command `npm run evals:live:full -- --prior-spend-usd 2.0476066 --chapter-cap-usd 0.075` exited 1 after one of twelve cycles. Rowan chapter 1 passed at 1,017 words, `$0.036452125`, 25,936 ms, 12 exact replay chunks, and empty leak list. Rowan chapter 2 stopped before background calls after Terra translated the explicit local investigation to another action on all three attempts. Run exposure was `$0.04583475`; cumulative conservative exposure is `$2.09344135`, leaving `$0.90655865`. Report: `evals/reports/live-full-sequential.json`.
 - 2026-07-19 prompt `1.4.4` baseline fix: simple command-led local investigation now translates deterministically to the POV character's current location, with the same legality and milestone checks. Compound, conditional, negated, and multi-sentence actions remain on the strict Terra path. Service regressions prove the release action's first model call is `chapter_frame` while a compound action's first model call is `player_action`.
 - 2026-07-19 prompt `1.4.4` non-live gate: `npm run check` and `npm audit` exited 0. Vitest passed 89 tests. Offline eval passed 14 invariant cases, 12 POV attacks, 1,000 simulations, 35 checkpoints, and the 350/no-351 horizon. Production build, 17 E2E tests with one intentional desktop skip, both security scans, 526 package licenses, and zero-vulnerability audit passed. Read-only review found no remaining fast-path blocker. The final `$0.07` chapter cap projects cumulative worst-case exposure of `$2.93344135`.
+- 2026-07-19 prompt `1.4.4` full run command `npm run evals:live:full -- --prior-spend-usd 2.09344135 --chapter-cap-usd 0.07` exited 1 after two of twelve cycles. Rowan chapters 1 and 2 passed at 1,059 and 1,083 words, `$0.03187375` and `$0.0471935`, 24,633 and 27,351 ms, exact replay, all audit scores 2, and empty leak lists. One structurally invalid Luna audit on Elara exhausted the chapter's safe retry reservation. Run exposure was `$0.128894875`; cumulative conservative exposure is `$2.222336225`, leaving `$0.777663775`. Report: `evals/reports/live-full-sequential.json`.
+- 2026-07-19 prompt `1.4.5` baseline fix: Luna output first parses through a permissive candidate schema. Application code then derives approval from all seven scores and leak IDs, locks `proseHash`, and validates the final stored audit. Positive scores require `pass`; zero scores require dimension-specific failure codes. Narrator and auditor receive identical POV and world canon, including factions, class, equipment, fact provenance, and version. Evidence detail is capped at 120 characters. The 400-token experiment lacked safe headroom, so the cap remains 550. Narration targets 925 to 975 words. A six-POV 975-word empty-delta probe measured 10,174 to 10,365 serialized audit-prompt bytes and `$0.01882625` to `$0.019065` full structured-request reservation. Live report version 4 retains approved prose for recovery and human review.
+- 2026-07-19 prompt `1.4.5` non-live gate: `npm run check` and `npm audit` exited 0. Vitest passed 91 tests. Offline eval passed 14 invariant cases, 12 POV attacks, 1,000 simulations, 35 checkpoints, and the 350/no-351 horizon. Production build, 17 E2E tests with one intentional desktop skip, both security scans, 526 package licenses, and zero-vulnerability audit passed. Read-only audit review found no remaining blocker.
 
 Add exact command, date, exit code, cost, and report path after every future milestone gate.

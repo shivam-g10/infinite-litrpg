@@ -13,6 +13,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { StoryStore } from "../storage/story-store";
 import {
+  canonicalizeNarrativeAuditOutput,
   StoryService,
   StoryServiceError,
   validateCustomActionTranslation,
@@ -299,13 +300,17 @@ describe("StoryService", () => {
         prose: 2,
       },
     };
-    const mismatchedAudit = { ...audit, proseHash: "b".repeat(64) };
+    const invalidAudit = {
+      ...audit,
+      approved: false,
+      leakedFactIds: ["invented-audit-fact"],
+    } as const;
     const parse = vi
       .fn()
       .mockResolvedValueOnce(parsedResponse(frame, "resp_frame_retry"))
-      .mockResolvedValueOnce(parsedResponse(mismatchedAudit, "resp_audit_bad_1"))
-      .mockResolvedValueOnce(parsedResponse(mismatchedAudit, "resp_audit_bad_2"))
-      .mockResolvedValueOnce(parsedResponse(mismatchedAudit, "resp_audit_bad_3"))
+      .mockResolvedValueOnce(parsedResponse(invalidAudit, "resp_audit_bad_1"))
+      .mockResolvedValueOnce(parsedResponse(invalidAudit, "resp_audit_bad_2"))
+      .mockResolvedValueOnce(parsedResponse(invalidAudit, "resp_audit_bad_3"))
       .mockResolvedValueOnce(parsedResponse(audit, "resp_audit_recovered"));
     const stream = vi
       .fn()
@@ -750,6 +755,46 @@ describe("StoryService", () => {
     expect(() =>
       validateNarrativeAuditOutput(inventedLeak, inventedLeak.proseHash, new Set(["real-fact"])),
     ).toThrow("invented leaked fact ID");
+  });
+
+  it("derives audit approval and locks the prose hash deterministically", () => {
+    const expectedHash = "a".repeat(64);
+    const candidate: NarrativeAudit = {
+      approved: false,
+      evidence: NARRATIVE_AUDIT_DIMENSIONS.map((dimension) => ({
+        detail: "The chapter stays inside supplied canon for this dimension.",
+        dimension,
+        issueCode: "pass",
+      })),
+      leakedFactIds: [],
+      proseHash: "b".repeat(64),
+      scores: {
+        arcProgress: 1,
+        characterAutonomy: 2,
+        choiceFulfillment: 2,
+        continuity: 2,
+        litrpgMechanics: 2,
+        povSafety: 2,
+        prose: 1,
+      },
+    };
+
+    expect(canonicalizeNarrativeAuditOutput(candidate, expectedHash, new Set())).toMatchObject({
+      approved: true,
+      proseHash: expectedHash,
+    });
+
+    const falseFailure = {
+      ...candidate,
+      evidence: candidate.evidence.map((entry) =>
+        entry.dimension === "povSafety"
+          ? { ...entry, issueCode: "hidden-knowledge" as const }
+          : entry,
+      ),
+    };
+    expect(() => canonicalizeNarrativeAuditOutput(falseFailure, expectedHash, new Set())).toThrow(
+      "requires issue code pass",
+    );
   });
 
   it("rejects a custom investigation translated as waiting", () => {

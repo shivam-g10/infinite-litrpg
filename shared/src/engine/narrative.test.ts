@@ -3,7 +3,13 @@ import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { CONTRACT_VERSION, NarrativeAuditSchema, type WorldState } from "../contracts";
+import {
+  CONTRACT_VERSION,
+  NARRATIVE_AUDIT_DIMENSIONS,
+  NarrativeAuditCandidateSchema,
+  NarrativeAuditSchema,
+  type WorldState,
+} from "../contracts";
 import {
   validateChapterDraft,
   validateChapterFrameSafety,
@@ -77,7 +83,7 @@ describe("narrative gates", () => {
   });
 
   it("rejects an approving audit with a hard-zero score", () => {
-    const result = NarrativeAuditSchema.safeParse({
+    const candidate = {
       approved: true,
       evidence: [
         "choiceFulfillment",
@@ -103,8 +109,34 @@ describe("narrative gates", () => {
         povSafety: 2,
         prose: 2,
       },
-    });
-    expect(result.success).toBe(false);
+    };
+    expect(NarrativeAuditCandidateSchema.safeParse(candidate).success).toBe(true);
+    expect(NarrativeAuditSchema.safeParse(candidate).success).toBe(false);
+  });
+
+  it("rejects failure evidence attached to a positive audit score", () => {
+    const candidate = {
+      approved: true,
+      evidence: NARRATIVE_AUDIT_DIMENSIONS.map((dimension) => ({
+        detail: "Checked against supplied canon.",
+        dimension,
+        issueCode: dimension === "povSafety" ? "hidden-knowledge" : "pass",
+      })),
+      leakedFactIds: [],
+      proseHash: "a".repeat(64),
+      scores: {
+        arcProgress: 2,
+        characterAutonomy: 2,
+        choiceFulfillment: 2,
+        continuity: 2,
+        litrpgMechanics: 2,
+        povSafety: 2,
+        prose: 2,
+      },
+    };
+
+    expect(NarrativeAuditCandidateSchema.safeParse(candidate).success).toBe(true);
+    expect(NarrativeAuditSchema.safeParse(candidate).success).toBe(false);
   });
 
   it("rejects hidden facts in generated titles and choice descriptions", () => {

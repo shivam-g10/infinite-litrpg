@@ -95,13 +95,13 @@ export const NARRATIVE_AUDIT_ISSUE_CODES = [
 
 const NarrativeAuditEvidenceSchema = z
   .object({
-    detail: ShortTextSchema,
+    detail: z.string().trim().min(1).max(120),
     dimension: z.enum(NARRATIVE_AUDIT_DIMENSIONS),
     issueCode: z.enum(NARRATIVE_AUDIT_ISSUE_CODES),
   })
   .strict();
 
-export const NarrativeAuditSchema = z
+export const NarrativeAuditCandidateSchema = z
   .object({
     approved: z.boolean(),
     evidence: z.array(NarrativeAuditEvidenceSchema).length(NARRATIVE_AUDIT_DIMENSIONS.length),
@@ -119,8 +119,10 @@ export const NarrativeAuditSchema = z
       })
       .strict(),
   })
-  .strict()
-  .superRefine(({ approved, evidence, leakedFactIds, scores }, context) => {
+  .strict();
+
+export const NarrativeAuditSchema = NarrativeAuditCandidateSchema.superRefine(
+  ({ approved, evidence, leakedFactIds, scores }, context) => {
     const hardZero =
       scores.continuity === 0 ||
       scores.litrpgMechanics === 0 ||
@@ -149,8 +151,16 @@ export const NarrativeAuditSchema = z
           path: ["evidence", index, "issueCode"],
         });
       }
+      if (scores[dimension] > 0 && item?.issueCode !== "pass") {
+        context.addIssue({
+          code: "custom",
+          message: `Audit positive score for ${dimension} requires issue code pass`,
+          path: ["evidence", index, "issueCode"],
+        });
+      }
     });
-  });
+  },
+);
 
 export const ChapterRecordSchema = z
   .object({
@@ -204,3 +214,4 @@ export type ChapterFrame = z.infer<typeof ChapterFrameSchema>;
 export type ChapterRecord = z.infer<typeof ChapterRecordSchema>;
 export type Choice = z.infer<typeof ChoiceSchema>;
 export type NarrativeAudit = z.infer<typeof NarrativeAuditSchema>;
+export type NarrativeAuditCandidate = z.infer<typeof NarrativeAuditCandidateSchema>;

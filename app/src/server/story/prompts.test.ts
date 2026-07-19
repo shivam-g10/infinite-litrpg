@@ -97,24 +97,30 @@ describe("background actor selection", () => {
   it("audits against a minimal projection and treats POV knowledge as allowed", () => {
     const before = seed();
     before.lockedPovId = "rowan-ashborn";
+    const action = {
+      action: { type: "wait" as const },
+      actorId: "rowan-ashborn",
+      description: "Wait.",
+      milestoneId: null,
+      source: "suggested" as const,
+      stateVersion: before.version,
+    };
+    const delta = emptyDelta(before);
     const prompt = JSON.parse(
       buildAuditPrompt(
         before,
         before,
-        {
-          action: { type: "wait" },
-          actorId: "rowan-ashborn",
-          description: "Wait.",
-          milestoneId: null,
-          source: "suggested",
-          stateVersion: before.version,
-        },
-        emptyDelta(before),
+        action,
+        delta,
         { choices: [], terminal: false, title: "A safe frame" },
         "Ash ".repeat(900),
         "a".repeat(64),
       ),
     ) as Record<string, unknown>;
+    const narration = JSON.parse(buildNarrationPrompt(before, before, action, delta)) as Record<
+      string,
+      unknown
+    >;
 
     expect(prompt).not.toHaveProperty("stateBefore");
     expect(prompt).not.toHaveProperty("stateProspective");
@@ -125,6 +131,8 @@ describe("background actor selection", () => {
     expect((prompt.forbiddenFacts as readonly { id: string }[]).map(({ id }) => id)).not.toContain(
       "rowan-is-malachar-reincarnated",
     );
+    expect(prompt.afterTurnViewpointCanon).toEqual(narration.afterTurnViewpointCanon);
+    expect(prompt.world).toEqual(narration.world);
   });
 
   it("marks remote canon as forbidden audit context, not narratable canon", () => {
