@@ -111,6 +111,7 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 - The prompt `1.3.0` release run established a new baseline before further AI changes. Zero chapters committed and exposure was `$0.06607685`. Luna saw after-turn XP plus the exact current-chapter grant but no pre-turn value, then incorrectly called the grant pre-existing. Prompt `1.4.0` labels before state, current effects, and after state explicitly.
 - Final engine review found duplicate matched mutations, caller-selected intent disposition, broad milestone self-attestation, and copied early-ending claims. Staging now recomputes deterministic disposition and requires the full event, state-mutation, and knowledge-mutation artifacts to match exactly. Incomplete milestones require one of at least two direct typed target shapes; early endings are resolver-derived.
 - Live report version 3 preserves attempt phase, deterministic rejection issues, audit evidence, prior spend, projected exposure, and exact cumulative spend. Future paid commands pass recorded prior spend so worst-case ceilings stay under `$3`.
+- The first prompt `1.4.0` smoke process was killed by the shell timeout before a report existed. Its full `$0.097` ceiling is reserved as unknown exposure. Prompt `1.4.1` keeps the timing fix but sends only pre-turn values touched by current effects, lowering request reservation. The first Rowan cycle of the final full run is the remaining smoke gate.
 
 ## Decision Log
 
@@ -126,4 +127,4 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 
 ## Current Milestone
 
-Phase 5 release eval: checkpoint prompt `1.4.0` and deterministic disposition hardening, run one capped Rowan smoke, then run twelve complete cycles across all six viewpoints with a cap derived from the remaining cumulative budget.
+Phase 5 release eval: checkpoint prompt `1.4.1`, then run twelve complete cycles across all six viewpoints at `$0.0895` per chapter. The first Rowan cycle is the smoke gate. Worst-case cumulative exposure is `$2.99904285`.

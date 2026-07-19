@@ -81,7 +81,7 @@ describe("background actor selection", () => {
     expect(JSON.stringify(prompt)).not.toContain("viewpointCanon.facts");
     expect(JSON.stringify(prompt)).not.toContain("acceptedEvents");
     expect(prompt).toHaveProperty("afterTurnViewpointCanon.povCharacter.experience", 10);
-    expect(prompt).toHaveProperty("beforeTurnPovCharacter.experience", 0);
+    expect(prompt).toHaveProperty("beforeTurnEffectValues.experience", 0);
     expect(prompt).not.toHaveProperty("worldBefore");
     expect(prompt).toHaveProperty("currentChapterCanonicalEffects.stateMutations.0.amount", 10);
     expect(prompt.instruction).toContain("happen during this chapter");
@@ -205,7 +205,7 @@ describe("background actor selection", () => {
       ),
     ) as Record<string, unknown>;
 
-    expect(prompt).toHaveProperty("beforeTurnPovCharacter.experience", 0);
+    expect(prompt).toHaveProperty("beforeTurnEffectValues.experience", 0);
     expect(prompt).toHaveProperty("afterTurnViewpointCanon.povCharacter.experience", 10);
     expect(prompt).toHaveProperty("currentChapterCanonicalEffects.stateMutations.0.amount", 10);
     expect(prompt.instruction).toContain("Never call an exact listed effect pre-existing");

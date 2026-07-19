@@ -144,7 +144,7 @@ export function buildNarrationPrompt(
   const povId = prospective.lockedPovId;
   return JSON.stringify({
     afterTurnViewpointCanon: compactPovContext(prospective, povId),
-    beforeTurnPovCharacter: compactPovContext(before, povId).povCharacter,
+    beforeTurnEffectValues: beforeTurnEffectValues(before, delta, povId),
     chapter: prospective.chapter,
     currentChapterCanonicalEffects: canonicalEffectsForPov(delta, povId),
     currentChapterVisibleEvents: visibleEventsForPov(delta, povId),
@@ -160,7 +160,7 @@ export function buildNarrationPrompt(
       "Never narrate a background intent as an action performed by the viewpoint character.",
     ],
     instruction:
-      "Write only the complete chapter prose. Use close-third viewpoint. Write 975 to 1025 words and stop before 1100. The absolute valid range is 900 to 1300 words. Dramatize exactly the attempted action and currentChapterCanonicalEffects, not plausible extra actions. currentChapterCanonicalEffects and currentChapterVisibleEvents happen during this chapter. afterTurnViewpointCanon is the resulting state and already includes those changes. Compare beforeTurnPovCharacter with the after-turn character when describing a listed change as newly happening. Show only supplied LitRPG changes. Build depth with immediate sensory texture, existing beliefs and goals, and already-known facts. Use supplied facts at face value only: never extrapolate their causes, mechanisms, history, places, or consequences. These may add prose but never canon. Do not append choices or notes.",
+      "Write only the complete chapter prose. Use close-third viewpoint. Write 975 to 1025 words and stop before 1100. The absolute valid range is 900 to 1300 words. Dramatize exactly the attempted action and currentChapterCanonicalEffects, not plausible extra actions. currentChapterCanonicalEffects and currentChapterVisibleEvents happen during this chapter. afterTurnViewpointCanon is the resulting state and already includes those changes. beforeTurnEffectValues contains only the prior values touched by those effects. Compare them when describing a listed change as newly happening. Show only supplied LitRPG changes. Build depth with immediate sensory texture, existing beliefs and goals, and already-known facts. Use supplied facts at face value only: never extrapolate their causes, mechanisms, history, places, or consequences. These may add prose but never canon. Do not append choices or notes.",
     playerAction,
     stateTransition: {
       actAfter: prospective.act,
@@ -191,7 +191,7 @@ export function buildAuditPrompt(
   const allowedFactIds = new Set(buildPovContext(prospective, povId).factIds);
   return JSON.stringify({
     afterTurnViewpointCanon: compactPovContext(prospective, povId),
-    beforeTurnPovCharacter: compactPovContext(before, povId).povCharacter,
+    beforeTurnEffectValues: beforeTurnEffectValues(before, delta, povId),
     chapterFrame: { terminal: chapterFrame.terminal, title: chapterFrame.title },
     currentChapterCanonicalEffects: canonicalEffectsForPov(delta, povId),
     currentChapterVisibleEvents: visibleEventsForPov(delta, povId),
@@ -208,7 +208,7 @@ export function buildAuditPrompt(
       ),
     },
     instruction:
-      "Audit only. Never change canon. Audit the title, nextChoices, and prose as one artifact. choiceFulfillment scores whether prose fulfills playerAction. nextChoices are future options and must not occur in this prose; never penalize them for not occurring. currentChapterCanonicalEffects and currentChapterVisibleEvents happen during this chapter. afterTurnViewpointCanon is the resulting state and already includes those changes. Never call an exact listed effect pre-existing merely because its after-turn value appears there; compare beforeTurnPovCharacter. forbiddenFacts and forbiddenRemoteEffects exist only for leak detection; never treat them as permitted knowledge. Asserting or paraphrasing any forbidden remote event or mutation gives povSafety zero with issueCode hidden-knowledge, even when true canon. Only an item in forbiddenFacts can appear in leakedFactIds. Every field in afterTurnViewpointCanon is established POV canon, including plan, goals, beliefs, relationships, inventory, and observed events. Referring to an intention from plan or goals does not claim completion. Every field in currentChapterVisibleEvents and currentChapterCanonicalEffects is permitted POV knowledge. Event participantIds and observerIds establish witnesses, not motives or private thoughts. A System notice that exactly restates a current chapter canonical mutation is permitted. Score every rubric dimension 0 to 2. Return seven evidence objects in rubricDimensions order. Each object copies its dimension, uses one allowed issueCode, and gives detail under 25 words. Use issueCode pass only when that dimension score is above zero. Continuity is zero for a contradiction or unsupported durable canon, not generic sensory texture. Any zero or leaked fact rejects. Copy proseHash exactly.",
+      "Audit only. Never change canon. Audit the title, nextChoices, and prose as one artifact. choiceFulfillment scores whether prose fulfills playerAction. nextChoices are future options and must not occur in this prose; never penalize them for not occurring. currentChapterCanonicalEffects and currentChapterVisibleEvents happen during this chapter. afterTurnViewpointCanon is the resulting state and already includes those changes. beforeTurnEffectValues contains only prior values touched by those effects. Never call an exact listed effect pre-existing merely because its after-turn value appears there; compare the supplied prior value. forbiddenFacts and forbiddenRemoteEffects exist only for leak detection; never treat them as permitted knowledge. Asserting or paraphrasing any forbidden remote event or mutation gives povSafety zero with issueCode hidden-knowledge, even when true canon. Only an item in forbiddenFacts can appear in leakedFactIds. Every field in afterTurnViewpointCanon is established POV canon, including plan, goals, beliefs, relationships, inventory, and observed events. Referring to an intention from plan or goals does not claim completion. Every field in currentChapterVisibleEvents and currentChapterCanonicalEffects is permitted POV knowledge. Event participantIds and observerIds establish witnesses, not motives or private thoughts. A System notice that exactly restates a current chapter canonical mutation is permitted. Score every rubric dimension 0 to 2. Return seven evidence objects in rubricDimensions order. Each object copies its dimension, uses one allowed issueCode, and gives detail under 25 words. Use issueCode pass only when that dimension score is above zero. Continuity is zero for a contradiction or unsupported durable canon, not generic sensory texture. Any zero or leaked fact rejects. Copy proseHash exactly.",
     playerAction,
     prose,
     proseHash,
@@ -289,6 +289,48 @@ function compactPovContext(state: WorldState, povId: string) {
     povCharacter: context.povCharacter,
     publicCharacters: context.publicCharacters,
   };
+}
+
+function beforeTurnEffectValues(state: WorldState, delta: WorldDelta, povId: string) {
+  const character = state.characters.find(({ id }) => id === povId);
+  if (!character) return {};
+  const values: Record<string, unknown> = {};
+  for (const mutation of delta.stateMutations) {
+    if ("characterId" in mutation && mutation.characterId !== povId) continue;
+    switch (mutation.type) {
+      case "grant_experience":
+        values.experience = character.experience;
+        values.level = character.level;
+        break;
+      case "set_location":
+        values.locationId = character.locationId;
+        break;
+      case "adjust_inventory":
+        values.inventoryStack =
+          character.inventory.find(({ itemId }) => itemId === mutation.itemId) ?? null;
+        break;
+      case "adjust_resource":
+        values[mutation.resource] = character[mutation.resource];
+        break;
+      case "set_relationship":
+        values.relationship =
+          character.relationships.find(
+            ({ characterId }) => characterId === mutation.targetCharacterId,
+          ) ?? null;
+        break;
+      case "learn_skill":
+        values.skillIds = character.skills.map(({ id }) => id);
+        break;
+      case "set_status":
+        values.status = character.status;
+        break;
+      case "complete_milestone":
+      case "end_story":
+      case "set_threat":
+        break;
+    }
+  }
+  return values;
 }
 
 function localWorldContext(

@@ -2,7 +2,7 @@ import { z } from "zod";
 
 export const CONTRACT_VERSION = "1.1.0" as const;
 export const FIXTURE_VERSION = "1.1.0" as const;
-export const PROMPT_VERSION = "1.4.0" as const;
+export const PROMPT_VERSION = "1.4.1" as const;
 
 export const IdSchema = z
   .string()

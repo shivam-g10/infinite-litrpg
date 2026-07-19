@@ -2,7 +2,7 @@
 
 - Updated: 2026-07-19
 - Layer: Release evaluation
-- Current phase: Phase 5 prompt `1.4.0` checkpoint before final paid gates
+- Current phase: Phase 5 prompt `1.4.1` checkpoint before final release run
 - Repository: initialized on `main`
 - Remote: `git@github.com:shivam-g10/infinite-litrpg.git`
 - Initial commit: `39b19a2` (`chore: scaffold agent workflow`)
@@ -21,12 +21,12 @@
 
 ## Current Blockers
 
-- Prompt `1.4.0` needs one Rowan smoke and the final twelve-cycle sequential report.
+- Prompt `1.4.1` needs the final twelve-cycle sequential report. Its first Rowan cycle is the remaining smoke gate.
 - Current native report does not exist yet; native capability already has a green capped smoke on the configured key.
 
 ## Next Action
 
-Commit prompt `1.4.0`, exact deterministic disposition, milestone, ending, and report-v3 hardening. Run Rowan smoke with prior spend `$1.82804285`. Derive the twelve-cycle per-chapter cap from the exact smoke cost.
+Commit the effect-only pre-turn snapshot. Run the final suite with prior conservative spend `$1.92504285` and chapter cap `$0.0895`.
 
 ## Evidence Log
 
@@ -68,5 +68,7 @@ Commit prompt `1.4.0`, exact deterministic disposition, milestone, ending, and r
 - 2026-07-19 prompt `1.3.0` release baseline: zero chapters committed. One Terra draft failed deterministic validation; a later Luna audit falsely treated the exact current-chapter 10 XP grant as pre-existing because the compressed prompt omitted the pre-turn character value. Safe preflight blocked the next request. Exposure was `$0.06607685`; report: `evals/reports/live-full-sequential.json`.
 - 2026-07-19 cumulative live-spend conservative upper bound is now `$1.82804285`, leaving `$1.17195715`. A deterministic prompt probe measured 8,745 narration bytes with a `$0.052178125` maximum request reservation and 15,240 audit bytes with a `$0.02299` maximum reservation.
 - 2026-07-19 prompt `1.4.0` and release hardening: before-turn character, current-chapter effects, and after-turn POV canon are explicit. Final review defects now have regressions for duplicate matched mutations, dropped player disposition, fake milestone completion, fake ending, milestone choice deadlock, failure-reason persistence, and attempt phases. Targeted tests, strict typecheck, 1,000 simulations, 35 checkpoints, and the 350/no-351 horizon are green. Live report version 3 enforces cumulative prior-spend ceilings.
+- 2026-07-19 prompt `1.4.0` Rowan smoke was killed by the local shell timeout before a report was written. No live result is claimed. The full `$0.097` chapter ceiling is conservatively reserved as unknown exposure, raising prior spend to `$1.92504285` and leaving `$1.07495715`.
+- 2026-07-19 prompt `1.4.1` keeps the explicit before/current/after timing but limits pre-turn input to values touched by current canonical effects. Probe size fell to 7,416 narration bytes with a `$0.048025` maximum reservation and 13,957 audit bytes with a `$0.02138625` maximum. `npm run check` and `npm audit` exited 0 with 82 tests and all non-live gates green. The final `$0.0895` chapter cap projects cumulative worst-case exposure of `$2.99904285` across twelve cycles.
 
 Add exact command, date, exit code, cost, and report path after every future milestone gate.
