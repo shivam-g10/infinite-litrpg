@@ -87,16 +87,16 @@ describe("OpenAI runtime models and accounting", () => {
   });
 
   it("locks the failed Rowan audit boundary at the remaining release budget", () => {
-    const fits = new ChapterCostBudget(0.044652620833);
+    const fits = new ChapterCostBudget(0.0424);
     fits.charge(0.031564875);
-    fits.assertRequestAllowed(estimateMaximumCountedRequestCostUsd("gpt-5.6-luna", 7_798, 450));
+    fits.assertRequestAllowed(estimateMaximumCountedRequestCostUsd("gpt-5.6-luna", 5_996, 450));
 
-    const blocks = new ChapterCostBudget(0.044652620833);
+    const blocks = new ChapterCostBudget(0.0424);
     blocks.charge(0.031564875);
     expectRuntimeError(
       () =>
         blocks.assertRequestAllowed(
-          estimateMaximumCountedRequestCostUsd("gpt-5.6-luna", 7_799, 450),
+          estimateMaximumCountedRequestCostUsd("gpt-5.6-luna", 5_997, 450),
         ),
       "COST_CAP_EXCEEDED",
     );

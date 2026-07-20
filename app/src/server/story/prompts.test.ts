@@ -23,6 +23,8 @@ import {
   selectBackgroundActors,
 } from "./prompts";
 
+const ROWAN_IDENTITY_PROSE = `Rowan knew he was Malachar reincarnated. ${"Ash ".repeat(894)}`;
+
 describe("background actor selection", () => {
   it("selects relevant actors only and never fills empty slots", () => {
     const state = seed();
@@ -100,7 +102,7 @@ describe("background actor selection", () => {
     expect(prompt.instruction).toContain("happen now");
   });
 
-  it("audits against a minimal projection and treats POV knowledge as allowed", () => {
+  it("treats selected-POV private canon as narratable without transferring it", () => {
     const before = seed();
     before.lockedPovId = "rowan-ashborn";
     const action = {
@@ -119,7 +121,7 @@ describe("background actor selection", () => {
         action,
         delta,
         { choices: [], terminal: false, title: "A safe frame" },
-        "Ash ".repeat(900),
+        ROWAN_IDENTITY_PROSE,
       ),
     ) as Record<string, unknown>;
     const narration = JSON.parse(buildNarrationPrompt(before, before, action, delta)) as Record<
@@ -131,12 +133,23 @@ describe("background actor selection", () => {
     expect(prompt).not.toHaveProperty("stateProspective");
     expect(JSON.stringify(prompt)).not.toContain("knowledgeLedgers");
     expect(prompt.instruction).toContain("Allowed canon is exactly afterCanon");
+    expect(prompt.instruction).toContain("afterCanon is selected POV knowledge");
+    expect(prompt.instruction).toContain("reader access is not a leak");
+    expect(prompt.instruction).toContain(
+      "Another character learning it requires allowed currentEffects or visibleEvents",
+    );
+    expect(prompt.instruction).toContain("forbiddenRemote never licenses narration");
+    expect(prompt.instruction).toContain(
+      "never score povSafety 0 for an exact restatement or faithful paraphrase",
+    );
     expect(prompt.instruction).toContain("World fields may be restated or paraphrased");
     expect(prompt.instruction).toContain("despite forbiddenFacts overlap");
     expect(prompt.instruction).toContain("reject only exclusive details");
     expect(prompt.instruction).toContain("A plan or goal permits intent only");
     expect(prompt.instruction).toContain("nextChoices are future");
     expect(prompt.forbiddenFacts).not.toHaveProperty("rowan-is-malachar-reincarnated");
+    expect(prompt.forbiddenFacts).toHaveProperty("malachar-contained-the-void");
+    expect(prompt).toHaveProperty("prose", ROWAN_IDENTITY_PROSE);
     expect(prompt.afterCanon).toEqual(narration.afterCanon);
     expect(prompt.world).toEqual(narration.world);
     expect(prompt).not.toHaveProperty("proseHash");
@@ -163,11 +176,11 @@ describe("background actor selection", () => {
       2,
     ]);
     expect(prompt).toHaveProperty(
-      "afterCanon.factsByIdAsCertaintyClaim.rowan-is-malachar-reincarnated.1",
+      "afterCanon.allowedPovFactsByIdAsCertaintyClaim.rowan-is-malachar-reincarnated.1",
       "Rowan is Malachar reincarnated.",
     );
     expect(prompt).toHaveProperty(
-      "afterCanon.factsByIdAsCertaintyClaim.rowan-is-malachar-reincarnated",
+      "afterCanon.allowedPovFactsByIdAsCertaintyClaim.rowan-is-malachar-reincarnated",
       ["certain", "Rowan is Malachar reincarnated."],
     );
     expect(prompt).toHaveProperty("world.factionsByIdAsNameGoal.cinder-survivors", [
@@ -176,9 +189,47 @@ describe("background actor selection", () => {
     ]);
     expect(narration.instruction).toContain("afterCanon, visibleEvents, currentEffects, and world");
     expect(narration.instruction).toContain("Every world field is public canon");
+    expect(narration.instruction).toContain("POV-private afterCanon may appear internally");
+    expect(narration.instruction).toContain("never reveal it to another character");
     expect(prompt).toHaveProperty(
       "world.threat",
       "The seal beneath the old Demon Throne is weakening.",
+    );
+  });
+
+  it("keeps Rowan private canon forbidden outside Rowan POV", () => {
+    const before = seed();
+    before.lockedPovId = "elara-voss";
+    const action = {
+      action: { type: "wait" as const },
+      actorId: "elara-voss",
+      description: "Wait.",
+      milestoneId: null,
+      source: "suggested" as const,
+      stateVersion: before.version,
+    };
+    const prompt = JSON.parse(
+      buildAuditPrompt(
+        before,
+        before,
+        action,
+        emptyDelta(before),
+        { choices: [], terminal: false, title: "A guarded secret" },
+        ROWAN_IDENTITY_PROSE,
+      ),
+    ) as Record<string, unknown>;
+
+    expect(prompt).not.toHaveProperty(
+      "afterCanon.allowedPovFactsByIdAsCertaintyClaim.rowan-is-malachar-reincarnated",
+    );
+    expect(prompt).toHaveProperty("prose", ROWAN_IDENTITY_PROSE);
+    expect(prompt).toHaveProperty(
+      "forbiddenFacts.rowan-is-malachar-reincarnated",
+      "Rowan is Malachar reincarnated.",
+    );
+    expect(prompt).toHaveProperty(
+      "forbiddenFacts.malachar-contained-the-void",
+      "Malachar contained the Void beneath his throne.",
     );
   });
 
@@ -272,7 +323,7 @@ describe("background actor selection", () => {
     expect(prompt).toHaveProperty("forbiddenRemote.state.0.actorId", "varek-thorn");
     expect(JSON.stringify(prompt.currentEffects)).not.toContain("varek-thorn");
     expect(prompt.instruction).toContain("forbiddenFacts/forbiddenRemote are detection-only");
-    expect(prompt.instruction).toContain("asserting or paraphrasing them makes povSafety 0");
+    expect(prompt.instruction).toContain("content exclusive to them makes povSafety 0");
   });
 
   it("sends a current visible event once while preserving older observed canon", () => {
@@ -370,7 +421,7 @@ describe("background actor selection", () => {
       ),
     ) as Record<string, unknown>;
 
-    expect(prompt).toHaveProperty(`afterCanon.factsByIdAsCertaintyClaim.${fact.id}`, [
+    expect(prompt).toHaveProperty(`afterCanon.allowedPovFactsByIdAsCertaintyClaim.${fact.id}`, [
       fact.certainty,
       fact.claim,
     ]);

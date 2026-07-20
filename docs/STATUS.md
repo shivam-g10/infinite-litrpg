@@ -2,7 +2,7 @@
 
 - Updated: 2026-07-19
 - Layer: Release evaluation
-- Current phase: Phase 5 counted-reservation checkpoint ready for the final sequential matrix
+- Current phase: Phase 5 prompt `1.4.9` checkpoint ready for the final sequential matrix
 - Repository: initialized on `main`
 - Remote: `git@github.com:shivam-g10/infinite-litrpg.git`
 - Initial commit: `39b19a2` (`chore: scaffold agent workflow`)
@@ -25,7 +25,7 @@
 
 ## Next Action
 
-Commit the counted-reservation checkpoint. Then run the final suite with prior spend `$2.46416855` and chapter cap `$0.0446`.
+Commit the prompt `1.4.9` checkpoint. Then run the final suite with prior spend `$2.49105695` and chapter cap `$0.0424`.
 
 ## Evidence Log
 
@@ -96,5 +96,8 @@ Commit the counted-reservation checkpoint. Then run the final suite with prior s
 - 2026-07-19 prompt `1.4.8` full run command `npm run evals:live:full -- --prior-spend-usd 2.3994093 --chapter-cap-usd 0.05` exited 1 after one of twelve chapters. Rowan chapter 1 passed at 1,049 words, `$0.033194375`, 22,808 ms, exact 12-chunk replay, empty leak list, and all audit scores 2. Rowan chapter 2 spent `$0.031564875` across two background agents, Luna option ranking, and valid Terra narration. Its 12,545-byte Luna audit reserved `$0.01902125`, exceeding the `$0.018435125` left by `$0.000586125`. Run exposure was `$0.06475925`; cumulative conservative exposure is `$2.46416855`, leaving `$0.53583145`. Archived report: `evals/reports/live-full-sequential-prompt-1.4.8.json`.
 - 2026-07-19 counted-reservation research: the official `POST /responses/input_tokens` endpoint and installed SDK accept the exact generation input, instructions, model, reasoning, and structured format. A reconstructed Rowan narration counted 1,260 tokens, matching live usage exactly. A reconstructed accepted audit counted 2,931 tokens versus 2,947 reported live. Count plus the 512-token margin reserves `$0.0265375` for narration and `$0.00700375` for audit. Conservatively using the higher 2,947-token live audit usage raises that audit reserve to `$0.00702375`; the failed chapter-two checkpoint becomes `$0.038588625`, leaving `$0.006011375` under the next `$0.0446` cap. The full prompt, seven-dimension audit, and maximum-three-agent gate are unchanged.
 - 2026-07-19 counted-reservation non-live gate: `npm run check` and `npm audit` exited 0. Vitest passed 119 tests. Offline eval passed 14 invariant cases, 12 POV attacks, 1,000 simulations, 35 checkpoints, and the 350/no-351 horizon. Production build, 17 E2E tests with one intentional desktop skip, secret scan across 145 working files, client-bundle scan, 526 package licenses, and zero-vulnerability audit passed. Final read-only review found no runtime, correctness, security, accounting, or gate defect; its one documentation arithmetic correction is applied.
+- 2026-07-19 counted-reservation prompt `1.4.8` full run command `npm run evals:live:full -- --prior-spend-usd 2.46416855 --chapter-cap-usd 0.0446` exited 1 with zero commits. Rowan used one background agent, Luna frame ranking, valid 1,326-output-token Terra narration, and a Luna audit retry. The final audit scored only POV safety zero, called Rowan's explicitly supplied reincarnation canon hidden, and named no leaked fact ID. A safe Terra retry could not fit the chapter. Run exposure was `$0.0268884`; cumulative conservative exposure is `$2.49105695`, leaving `$0.50894305`. Archived report: `evals/reports/live-full-sequential-prompt-1.4.8-counted-1.json`. A fresh twelve-chapter cap is at most `$0.042411920833`; `$0.0424` projects `$2.99985695`.
+- 2026-07-19 prompt `1.4.9` baseline fix: selected-POV private facts are explicitly allowed in internal close-third narration, but transfer to another character still requires allowed current effects or visible events. Detection-only remote context never licenses prose. The fact map is named as allowed POV canon, and faithful single-field paraphrases cannot fail POV safety merely because the fact is secret from other characters. The paired regression uses explicit Rowan-reincarnation prose: it is allowed for Rowan, remains forbidden for Elara, and does not expose Rowan's hidden Void history. Targeted Vitest passed 42 prompt, story-service, and cost tests; strict typecheck, lint, and diff check passed. The strongest three-agent recovery path passes at `$0.0424` with conservative counted-input mocks.
+- 2026-07-19 prompt `1.4.9` non-live gate: `npm run check` and `npm audit` exited 0. Vitest passed 120 tests. Offline eval passed 14 invariant cases, 12 POV attacks, 1,000 simulations, 35 checkpoints, and the 350/no-351 horizon. Production build, 17 E2E tests with one intentional desktop skip, secret scan across 146 working files, client-bundle scan, 526 package licenses, and zero-vulnerability audit passed.
 
 Add exact command, date, exit code, cost, and report path after every future milestone gate.

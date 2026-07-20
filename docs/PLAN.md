@@ -123,6 +123,8 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 - Prompt `1.4.8` makes final choices application-owned. Luna ranks safe option IDs and supplies the title; deterministic code owns actions, IDs, descriptions, milestone targets, and terminal state. Terra now targets 975 to 1,000 words. An otherwise-valid 840-to-899-word draft may use one tail-only Luna continuation capped at 1,200 request bytes and `$0.00298`, then must pass every deterministic gate and the full independent audit. A three-agent, two-frame-retry, 848-word regression committed at `$0.0332095`; every request preflight stayed below `$0.05`.
 - The prompt `1.4.8` paid matrix passed Rowan chapter 1 at 1,049 words and `$0.033194375`. Rowan chapter 2 produced valid narration, but the crude audit byte reservation missed the remaining chapter budget by `$0.000586125`. One of twelve chapters committed. Run exposure was `$0.06475925`; cumulative conservative exposure is `$2.46416855`.
 - ADR-010 keeps byte bounds as the safe fallback and uses the official Responses input-token counter only when that bound would block. Counted input adds a 512-token margin, prices every token at the cache-write rate, and retains maximum output. The reconstructed live narration count exactly matched 1,260 used tokens; the audit counted 2,931 versus 2,947 used. Conservatively using the higher 2,947-token live audit usage, the failed checkpoint falls to a `$0.038588625` preflight without changing any prompt or eval.
+- The counted-reservation prompt `1.4.8` matrix baseline committed zero chapters. Its audit treated Rowan's explicitly supplied private reincarnation canon as hidden from his own viewpoint, returned no leaked fact ID, and blocked otherwise valid narration. Exact run exposure was `$0.0268884`; cumulative conservative exposure is `$2.49105695`. This establishes the regression baseline before prompt `1.4.9` clarifies that selected-POV private canon is narratable but cannot become another character's knowledge without a canonical effect.
+- Prompt `1.4.9` names the selected viewpoint's fact map as allowed POV canon. It permits exact restatements and faithful paraphrases of POV-private canon in internal close-third narration while requiring allowed current effects or visible events before another character can learn it; detection-only remote context never grants narration permission. A paired regression sends the same explicit reincarnation prose through Rowan and Elara contexts: Rowan's fact is allowed, Elara's is forbidden, and the hidden Void history stays forbidden. The strongest three-agent, two-frame-retry, narration-recovery, full-audit test passes at the final `$0.0424` cap with conservative 1,400-token narration and 3,200-token audit counts.
 
 ## Decision Log
 
@@ -134,6 +136,7 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 - ADR-008 routes title and option ranking to Luna while application code owns the final chapter frame. Terra remains the custom-action translator and narrator. The full live eval still allows all three relevant background agents.
 - ADR-009 permits one bounded Luna continuation only for an otherwise-valid 840-to-899-word Terra draft. It does not weaken the absolute 900-to-1,300-word gate.
 - ADR-010 permits official input-token counting to narrow a byte reservation. Failed counting keeps the byte bound. Actual overrun aborts before commit with exact accounting.
+- Prompt `1.4.9` distinguishes reader access to selected-POV private canon from an in-world knowledge transfer. It does not auto-approve empty leak lists or weaken forbidden fact and remote-effect checks.
 
 ## Outcomes and Retrospective
 
@@ -141,4 +144,4 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 
 ## Current Milestone
 
-Phase 5 release eval: finish the counted-reservation checkpoint, then run twelve complete cycles across all six viewpoints at `$0.0446` per chapter. Conservative prior exposure is `$2.46416855`; projected worst-case cumulative exposure is `$2.99936855`, leaving `$0.00063145` below the POC cap.
+Phase 5 release eval: prove and checkpoint the prompt `1.4.9` POV-private-canon regression, then run twelve complete cycles across all six viewpoints at `$0.0424` per chapter. Conservative prior exposure is `$2.49105695`; projected worst-case cumulative exposure is `$2.99985695`, leaving `$0.00014305` below the POC cap.

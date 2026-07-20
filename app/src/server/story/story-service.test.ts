@@ -344,14 +344,14 @@ describe("StoryService", () => {
       .mockReturnValueOnce(fakeStream(continuation, "resp_recovery_three", usage(300, 80)));
     const count = vi
       .fn()
-      .mockResolvedValueOnce({ input_tokens: 1_252, object: "response.input_tokens" })
-      .mockResolvedValueOnce({ input_tokens: 3_000, object: "response.input_tokens" });
+      .mockResolvedValueOnce({ input_tokens: 1_400, object: "response.input_tokens" })
+      .mockResolvedValueOnce({ input_tokens: 3_200, object: "response.input_tokens" });
     const service = new StoryService(
       store,
       { responses: { inputTokens: { count }, parse, stream } } as unknown as OpenAI,
       {
         maxBackgroundAgents: 3,
-        maxCostUsdPerChapter: 0.0446,
+        maxCostUsdPerChapter: 0.0424,
         nativeMultiAgent: false,
       },
     );
@@ -371,7 +371,7 @@ describe("StoryService", () => {
     );
 
     expect(result.world).toMatchObject({ chapter: 1, version: 2 });
-    expect(result.estimatedCostUsd).toBeLessThanOrEqual(0.0446);
+    expect(result.estimatedCostUsd).toBeLessThanOrEqual(0.0424);
     expect(result.chapter.prose).toBe(prose);
     expect(parse).toHaveBeenCalledTimes(7);
     expect(stream).toHaveBeenCalledTimes(2);
