@@ -1,6 +1,6 @@
 # Six POV Story Samples
 
-Human review reading pack for Infinite LitRPG. Each selected chapter passed its original human chapter review. This pack does not mark the full twelve-chapter release report approved; three different chapters remain in correction review.
+Human review reading pack for Infinite LitRPG. Each selected chapter passed its original human chapter review. Full twelve-chapter packet status: **human-reviewed-rejected**. This curated passing selection does not replace that packet verdict.
 
 - Source report SHA-256: `fb9295d7c33ca154c7e407894b807d4a371b83d5ef066d78eee05ee42d4c49d2`
 - Source Git SHA: `ded7b00c54f6a6d70e073aad159e2d6e66b80fc2`

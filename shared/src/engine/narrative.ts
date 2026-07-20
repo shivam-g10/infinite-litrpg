@@ -913,12 +913,22 @@ function arrivalSegmentTargetsLocation(
 }
 
 function treatsDepartedLocationAsAhead(prose: string, locationName: string): boolean {
-  const location = escapeRegExp(locationName);
-  return [
-    new RegExp(`\\bahead\\s+(?:waited|stood|lay)\\s+(?:the\\s+)?${location}\\b`, "iu"),
-    new RegExp(`\\b${location}\\b[^.!?\\n]{0,24}?\\b(?:waited|stood|lay)\\s+ahead\\b`, "iu"),
-    new RegExp(`\\b${location}\\b\\s+drew\\s+nearer\\b`, "iu"),
-  ].some((pattern) => pattern.test(prose));
+  const references = [escapeRegExp(locationName)];
+  if (/\sCapital$/iu.test(locationName)) references.push("capital(?!\\s+road)");
+  return references.some((location) =>
+    [
+      new RegExp(`\\bahead\\s+(?:waited|stood|lay)\\s+(?:the\\s+)?${location}\\b`, "iu"),
+      new RegExp(
+        `\\b(?:the\\s+)?${location}\\b[^.!?\\n]{0,24}?\\b(?:waited|stood|lay)\\s+ahead\\b`,
+        "iu",
+      ),
+      new RegExp(`\\b(?:the\\s+)?${location}\\b\\s+drew\\s+nearer\\b`, "iu"),
+      new RegExp(
+        `\\b(?:set|sets|setting|place|places|placing|put|puts|putting)\\s+(?:the\\s+)?${location}\\s+ahead\\b`,
+        "iu",
+      ),
+    ].some((pattern) => pattern.test(prose)),
+  );
 }
 
 function misattributedPovFact(

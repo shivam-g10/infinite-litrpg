@@ -122,6 +122,42 @@ describe("live report version 9", () => {
     ).toBe(true);
   });
 
+  it("rejects native adapter labels without hosted multi-agent call evidence", () => {
+    const report = nativeSmokeReport([]);
+
+    expect(LiveReportSchema.safeParse(report).success).toBe(false);
+  });
+
+  it("requires a matched hosted spawn and root final message for native evidence", () => {
+    const call = {
+      action: "spawn_agent",
+      arguments: "{}",
+      call_id: "call_native_1",
+      type: "multi_agent_call",
+    };
+    const output = {
+      action: "spawn_agent",
+      call_id: "call_native_1",
+      output: [{ text: "child complete", type: "output_text" }],
+      type: "multi_agent_call_output",
+    };
+    const rootFinal = {
+      agent: { agent_name: "/root" },
+      content: [{ text: '{"intents":[]}', type: "output_text" }],
+      phase: "final_answer",
+      type: "message",
+    };
+
+    expect(LiveReportSchema.safeParse(nativeSmokeReport([call, output, rootFinal])).success).toBe(
+      true,
+    );
+    expect(
+      LiveReportSchema.safeParse(
+        nativeSmokeReport([call, { ...output, call_id: "call_wrong" }, rootFinal]),
+      ).success,
+    ).toBe(false);
+  });
+
   it("accepts only append-only stale-run evidence", () => {
     const checkpointed = [{ id: 1 }, { id: 2 }];
     expect(isAppendOnlyEvidence(checkpointed, [...checkpointed, { id: 3 }])).toBe(true);
@@ -1376,7 +1412,7 @@ describe("live report version 9", () => {
       }),
     ).toThrow("audited hash");
 
-    const maximumBridgeFiles = Array.from({ length: 30 }, (_, index) => ({
+    const maximumBridgeFiles = Array.from({ length: 50 }, (_, index) => ({
       path: `release/bridge-${index}.txt`,
       sha256: bridgeSha256,
     }));
@@ -1394,7 +1430,7 @@ describe("live report version 9", () => {
         maximumBridgeRegistry,
         maximumBridgeHashes,
       ),
-    ).toHaveLength(30);
+    ).toHaveLength(50);
     expect(() =>
       assertRegisteredResumeCheckpoint(
         legacy,
@@ -1406,12 +1442,12 @@ describe("live report version 9", () => {
               ...maximumBridgeRegistry.checkpoints[0],
               bridgeFiles: [
                 ...maximumBridgeFiles,
-                { path: "release/bridge-30.txt", sha256: bridgeSha256 },
+                { path: "release/bridge-50.txt", sha256: bridgeSha256 },
               ],
             },
           ],
         },
-        { ...maximumBridgeHashes, "release/bridge-30.txt": bridgeSha256 },
+        { ...maximumBridgeHashes, "release/bridge-50.txt": bridgeSha256 },
       ),
     ).toThrow();
 
@@ -2222,6 +2258,21 @@ function fakeSmokeReport(): LiveReport {
     runtimeAttemptEvidence: fakeRuntimeAttemptEvidence([result]),
     suite: "smoke",
   } as LiveReport;
+}
+
+function nativeSmokeReport(items: Record<string, unknown>[]): LiveReport {
+  const report = fakeSmokeReport();
+  report.nativeRequested = true;
+  report.adapterMode = "native-multi-agent";
+  const result = report.results[0];
+  const candidate = report.narrativeCandidates[0];
+  if (!result || !candidate) throw new Error("Fake smoke evidence is incomplete");
+  result.adapterMode = "native-multi-agent";
+  result.trace.adapterMode = "native-multi-agent";
+  result.trace.multiAgentOutputItems = items;
+  candidate.adapterMode = "native-multi-agent";
+  candidate.multiAgentOutputItems = items;
+  return report;
 }
 
 function standardSmokeReport(): LiveReport {

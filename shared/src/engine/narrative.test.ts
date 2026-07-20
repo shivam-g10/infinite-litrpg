@@ -681,6 +681,28 @@ describe("narrative gates", () => {
       ),
     ).toEqual([]);
   });
+
+  it("rejects the exact escaped Elara route contradiction", () => {
+    const before = seedState();
+    before.lockedPovId = "elara-voss";
+    before.characters.find(({ id }) => id === "elara-voss")!.locationId = "capital";
+    const after = structuredClone(before);
+    after.characters.find(({ id }) => id === "elara-voss")!.locationId = "capital-road";
+    after.chapter = 1;
+    after.version = 2;
+
+    expect(
+      validateNarrativeStateClaims(
+        before,
+        after,
+        "Elara crossed into Capital Road fully, leaving the capital behind her as a destination and setting the capital ahead as the place she would reach.",
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        message: expect.stringContaining("departed location Aurelis Capital"),
+      }),
+    ]);
+  });
 });
 
 function legalChoices() {

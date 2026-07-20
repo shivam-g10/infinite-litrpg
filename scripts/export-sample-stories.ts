@@ -94,7 +94,7 @@ function main(): void {
   const markdown = [
     "# Six POV Story Samples",
     "",
-    "Human review reading pack for Infinite LitRPG. Each selected chapter passed its original human chapter review. This pack does not mark the full twelve-chapter release report approved; three different chapters remain in correction review.",
+    `Human review reading pack for Infinite LitRPG. Each selected chapter passed its original human chapter review. Full twelve-chapter packet status: **${manifest.reviewStatus}**. This curated passing selection does not replace that packet verdict.`,
     "",
     `- Source report SHA-256: \`${manifest.reportSha256}\``,
     `- Source Git SHA: \`${manifest.sourceGitSha}\``,

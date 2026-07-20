@@ -16,6 +16,7 @@ import {
   type ValidationIssue,
 } from "@infinite-litrpg/shared";
 import type OpenAI from "openai";
+import type { BetaResponse } from "openai/resources/beta/responses/responses";
 import type { Response, ResponseUsage } from "openai/resources/responses/responses";
 import { describe, expect, it, vi } from "vitest";
 
@@ -423,6 +424,108 @@ describe("StoryService", () => {
       store.close();
     },
   );
+
+  it("persists hosted native multi-agent evidence through a committed chapter", async () => {
+    const store = new StoryStore();
+    const prose = Array.from({ length: 900 }, (_, index) => `native${index}`).join(" ");
+    const proseHash = createHash("sha256").update(prose).digest("hex");
+    const audit: NarrativeAudit = {
+      approved: true,
+      evidence: NARRATIVE_AUDIT_DIMENSIONS.map((dimension) => ({
+        detail: "The chapter matches committed native intent evidence.",
+        dimension,
+        issueCode: "pass",
+      })),
+      leakedFactIds: [],
+      proseHash,
+      scores: {
+        arcProgress: 2,
+        characterAutonomy: 2,
+        choiceFulfillment: 2,
+        continuity: 2,
+        litrpgMechanics: 2,
+        povSafety: 2,
+        prose: 2,
+      },
+    };
+    const callItem = {
+      action: "spawn_agent",
+      arguments: '{"task_name":"nyra"}',
+      call_id: "call_native_story",
+      id: "ma_native_story",
+      type: "multi_agent_call",
+    } as const;
+    const callOutputItem = {
+      action: "spawn_agent",
+      call_id: "call_native_story",
+      id: "mao_native_story",
+      output: [{ text: "Nyra intent complete.", type: "output_text" }],
+      type: "multi_agent_call_output",
+    } as const;
+    const rootMessage = {
+      agent: { agent_name: "/root" },
+      content: [
+        {
+          text: JSON.stringify({ intents: [{ c: "nyra-vale", ...waitIntent() }] }),
+          type: "output_text",
+        },
+      ],
+      id: "msg_native_story",
+      phase: "final_answer",
+      role: "assistant",
+      status: "completed",
+      type: "message",
+    } as const;
+    const betaCreate = vi.fn().mockResolvedValue({
+      error: null,
+      id: "resp_native_story_intent",
+      incomplete_details: null,
+      output: [callItem, callOutputItem, rootMessage],
+      service_tier: "default",
+      status: "completed",
+      usage: usage(),
+    } as unknown as BetaResponse);
+    const frame = { choices: [], terminal: false, title: "Native Ash" };
+    const create = vi
+      .fn()
+      .mockResolvedValueOnce(parsedResponse(frame, "resp_native_story_frame"))
+      .mockResolvedValueOnce(parsedResponse(audit, "resp_native_story_audit"));
+    const stream = vi.fn().mockReturnValue(fakeStream(prose, "resp_native_story_narration"));
+    const service = new StoryService(
+      store,
+      {
+        beta: { responses: { create: betaCreate } },
+        responses: { create, stream },
+      } as unknown as OpenAI,
+      {
+        ...options(),
+        maxBackgroundAgents: 3,
+        nativeMultiAgent: true,
+      },
+    );
+    const selected = service.selectPov("rowan-ashborn");
+
+    const view = await service.takeTurn({
+      choiceId: selected.chapter.choices[0]?.id ?? "missing",
+      expectedWorldVersion: 1,
+      requestId: "00000000-0000-4000-8000-000000000099",
+      type: "take_action",
+    });
+
+    const chapter = store.loadChapter("ashen-crown-v1", 1);
+    const trace = chapter ? store.loadTrace(chapter.traceId) : null;
+    expect(view.adapterMode).toBe("native-multi-agent");
+    expect(betaCreate).toHaveBeenCalledTimes(1);
+    expect(trace?.adapterMode).toBe("native-multi-agent");
+    expect(trace?.multiAgentOutputItems).toEqual([callItem, callOutputItem, rootMessage]);
+    expect(trace?.calls.map(({ phase }) => phase)).toEqual([
+      "intent",
+      "intent",
+      "narration",
+      "audit",
+    ]);
+    store.close();
+  });
 
   it("rejects automatic continuation at an incomplete milestone before any model call", async () => {
     const store = new StoryStore();
