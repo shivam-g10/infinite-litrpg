@@ -33,7 +33,7 @@ Human review rejected Rowan chapter 2, Elara chapter 1, and Lucan chapter 1. The
 npm run evals:live:full -- --prior-spend-usd 2.811082175 --chapter-cap-usd 0.0424 --resume-report evals/reports/live-full-sequential.json --rerun-from rowan-ashborn:2 --rerun-from elara-voss:1 --rerun-from lucan-aurelis:1
 ```
 
-The authorized command ran once. It spent `$0.01183` on seven known Flex attempts before final report validation exposed a superseded-evidence harness defect. The source report was not overwritten. Exact sidecar evidence and durable reservations are registered in `evals/settled-run-checkpoints.json`; exposure is `$2.959276675` and headroom is `$0.040723325`. Do not rerun the paid command until the settled report is materialized, registered, and reviewed.
+The authorized command ran once. It spent `$0.01183` on seven known Flex attempts before final report validation exposed a superseded-evidence harness defect. The source report was not overwritten. Exact sidecar evidence and durable reservations are registered in `evals/settled-run-checkpoints.json`; exposure is `$2.959276675` and headroom is `$0.040723325`. Provider-free reconciliation materialized `evals/reports/live-full-sequential-settled-1.json` at SHA-256 `af6e64f1481e2220001e4408d4b3b20f42cf19861c72dc0d2d4bc7e62c18b7ec`. The committed resume registry binds it to nine exact bridge hashes. It retains all twelve source results and marks the one new Rowan turn as uncommitted settled evidence. Do not rerun a paid command until canon-preserving re-narration passes every non-live gate and the user authorizes its exact command.
 
 Never resume automatically.
 

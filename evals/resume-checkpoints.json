@@ -279,6 +279,55 @@
       "reportVersion": 9,
       "serviceTier": "flex",
       "sourceGitSha": "ded7b00c54f6a6d70e073aad159e2d6e66b80fc2"
+    },
+    {
+      "adapterMode": "sequential",
+      "bridgeFiles": [
+        {
+          "path": "decisions/ADR-017-settled-live-run-reconciliation.md",
+          "sha256": "6609dce67731738761b580b03808a3ba4d2a92871a9bb6ccc85db2ddf10bac15"
+        },
+        {
+          "path": "evals/live-spend-ledger.ts",
+          "sha256": "055f378db46b53d0d8fa54e859ff33c6848a5019ce12e83e2fb02ae6fa2d9f37"
+        },
+        {
+          "path": "evals/reconcile-settled-live-run.test.ts",
+          "sha256": "1d667be875d88b1d81b934613f7a839c4480518c56c4aedc9a6255f1a245ae5a"
+        },
+        {
+          "path": "evals/reconcile-settled-live-run.ts",
+          "sha256": "35671b3f9b98d2ce5762c901bad3128c4e1ba02d04351ed98e3877de41bc132f"
+        },
+        {
+          "path": "evals/settled-run-checkpoints.json",
+          "sha256": "ffec810e2d4b9d990ac6b45afea96df76e3d5ec0c95c57d30b2ba70c325c5701"
+        },
+        {
+          "path": "evals/run-live.ts",
+          "sha256": "674517a96368c736e2167c55348b862bbe942d9a3c6c38807aba2338a4b79c9c"
+        },
+        {
+          "path": "package.json",
+          "sha256": "27474bb9089ac8108232b3ca7d48414643f22d35382bf4375357b649671d1411"
+        },
+        {
+          "path": "shared/src/engine/narrative.test.ts",
+          "sha256": "9bd1d01766b4912fa8659b2dd5ab52254a3404b1979d4dab02ca1db58ca23c02"
+        },
+        {
+          "path": "shared/src/engine/narrative.ts",
+          "sha256": "49cde1e2545aa8c04435512d1d7546230ed0819d33e3b1b59e4d7fe33d667b03"
+        }
+      ],
+      "chapterCostCapUsd": 0.0424,
+      "id": "prompt-1-4-11-flex-human-review-settled-1",
+      "priorSpendUsd": 2.811082175,
+      "promptVersion": "1.4.11",
+      "reportSha256": "af6e64f1481e2220001e4408d4b3b20f42cf19861c72dc0d2d4bc7e62c18b7ec",
+      "reportVersion": 9,
+      "serviceTier": "flex",
+      "sourceGitSha": "98564305d3a037f40bd1afdac06627990a4c664d"
     }
   ],
   "version": 2
