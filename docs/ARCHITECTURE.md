@@ -106,7 +106,7 @@ Never store API key or raw environment.
 
 These are planning estimates. Runtime usage fields are token source of truth. OpenAI responses do not return cost, so UI must show actual tokens, latency, and estimated cost from a versioned pricing table after each call.
 
-Each generation request reserves its maximum estimated exposure before transport. The local byte bound is first. If that bound would block, stable Responses may call the official input-token counter with the exact input, instructions, model, reasoning, and schema. Counted reservations price the returned input plus 512 safety tokens entirely at the cache-write rate and add maximum output. Invalid, failed, or timed-out counting falls back to the byte bound and blocks safely. Native Multi-agent keeps the byte bound because its counter schema does not include the multi-agent configuration.
+Each generation request reserves its maximum estimated exposure before transport. The local byte bound is first. If that bound would block, stable Responses may call the official input-token counter with the exact input, instructions, model, reasoning, and schema. Counted reservations price the returned input plus 512 safety tokens at the request's explicit service tier and cache policy, then add maximum output. Invalid, failed, or timed-out counting falls back to the byte bound and blocks safely. Native Multi-agent keeps the byte bound because its counter schema does not include the multi-agent configuration.
 
 Known generation usage settles the reservation to measured estimated cost. An actual cost above the reservation aborts before commit and records exact usage and exposure. Timeouts and transport failures retain the full reservation because provider billing is unknown. Failed exposure carries into every retry for the same world version.
 
@@ -123,6 +123,8 @@ Release evals add a durable global layer above the per-chapter budget:
 SQLite uses WAL and full synchronous writes. A killed process leaves both its request reservation and run lock intact. An active provider reservation requires external reconciliation; deleting the ledger would destroy the `$3` safety proof.
 
 An explicit stale-run takeover is allowed only when the recorded process is dead, the caller supplies the exact old run ID, and no provider reservation remains active. It transfers the lock in one immediate transaction without changing exposure. The new run must still reconcile its source report before it can reserve a request.
+
+If one exact request remains active after process death, a separate tracked interruption checkpoint must bind the source commit, immutable sidecar hash, run and turn identities, every reservation, and recovery-code hashes. The no-network reconciler verifies all fields in one immediate transaction, converts only the registered unknown request to uncertain at full maximum, atomically writes and rereads a strict receipt, then releases the lock. Any live owner, different row owner, missing row, changed cost, changed artifact, or unregistered bridge fails closed.
 
 Version 7 reports retain authenticated contiguous chapter prefixes. Restoring chapter 1 restages the accepted `WorldDelta` from the seed fixture and verifies both state hashes. Retained results keep their source cap and Git SHA. New results use the current cap and Git SHA.
 

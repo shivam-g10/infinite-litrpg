@@ -35,4 +35,4 @@ The next paid result must be adjudicable. Exact quote grounding prevents an audi
 - A successful version 8 run preserves enough evidence to reproduce state transition, stream replay, response identity, and committed chapter independently of its summary booleans.
 - Unique requests avoid the cache-write premium. Repeated identical retries lose cached-read savings, so retry removal remains mandatory.
 - Historical version 7 reports stay strict and readable. Only new runs write version 8.
-- Exact provider counts on the six-POV schedule plus the minimum structural output saving reduce the no-cache twelve-cycle projection from `$0.223732` to `$0.207336`. This fits `$0.213614825` headroom by `$0.006278825` before narration and audit prompt savings. No generation runs until full non-live gates, review, commit, and clean-clone verification pass.
+- The original `$0.207336` projection incorrectly valued saved ordinary input at the `$1.25` cache-write rate. Explicit no-cache input costs `$1` per million, so the corrected Standard projection is `$0.208988`. ADR-014 supersedes this ADR for release-eval service tier and cost projection.

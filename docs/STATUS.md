@@ -2,7 +2,7 @@
 
 - Updated: 2026-07-20
 - Layer: Release evaluation
-- Current phase: Phase 5 prompt `1.4.11` final non-live verification
+- Current phase: Phase 5 Flex live-eval implementation after conservative interruption recovery
 - Repository: initialized on `main`
 - Remote: `git@github.com:shivam-g10/infinite-litrpg.git`
 - Initial commit: `39b19a2` (`chore: scaffold agent workflow`)
@@ -21,12 +21,13 @@
 
 ## Current Blockers
 
-- The fresh sequential prompt `1.4.10` run stopped after Rowan chapter 1. Rowan chapter 2 exhausted narration recovery and audit retries. The current report is not a full release matrix.
-- Conservative generation headroom is `$0.213614825`. The provider-counted prompt `1.4.11` clean-path projection is `$0.207336`, leaving `$0.006278825`. The full live matrix remains the only current engineering gate.
+- The fresh prompt `1.4.11` run was killed by the local shell timeout during Rowan chapter 1 narration retry. The unknown provider request is permanently charged at its full `$0.014623` reservation. No chapter committed.
+- Durable exposure is `$2.811082175`; headroom is `$0.188917825`. The corrected Standard projection is `$0.208988`, so another Standard matrix cannot fit. The behavior-preserving Flex projection is `$0.104494`, but service-tier request, pricing, trace, and report binding are not implemented yet.
+- The twelve-cycle matrix, six-POV zero-leak proof, and review packets remain open.
 
 ## Next Action
 
-Run the fresh sequential twelve-cycle command at `$0.0424` per chapter exactly once. Do not retry automatically if it fails.
+Implement explicit Flex processing for the release eval, keep product traffic Standard by default, bind the tier into reservations and evidence, then pass full non-live and clean-clone gates. Run no paid request before the corrected twelve-cycle projection is reproduced by code.
 
 ## Evidence Log
 
@@ -130,5 +131,9 @@ Run the fresh sequential twelve-cycle command at `$0.0424` per chapter exactly o
 - 2026-07-20 complete-evidence hardening: one turn identity now binds every model attempt, raw response, candidate, failure, committed chapter request, and final trace. Same-prose audit exhaustion stops without another narration. Version 8 stores seed-rooted before and after state, canonical action, intents, delta, frame, facts, committed chapter, and exact stream chunks; deterministic restaging, raw and final audit agreement, provider-response uniqueness, and every release gate are recomputed. Raw narration, recovery, and audit responses checkpoint before durable settlement. Retry trace binding tolerates interleaved audit and recovery calls while preserving exact attempt identity. Transitive legacy evidence gaps use an authenticated start index. Stale-run recovery atomically validates append-only evidence, preserves the stable run ID through dead-PID takeover, matches settled exposure, and holds the lock until the reconciliation report commits. `npm run check` exited 0 with 188 tests across 14 files, all six offline gates, 1,000 simulations, chapter 351 blocked, production build, 17 E2E passes with one intentional skip, secret scan across 162 working files plus ignored reports and Git history, client-bundle scan, and 526 package licenses. `npm audit --audit-level=low` and `git diff --check` exited 0 with zero vulnerabilities. Two independent read-only reviews reran 39 ledger and recovery tests plus 85 runtime and report tests and found no remaining blocker. No generation ran.
 - 2026-07-20 prompt `1.4.11` clean checkpoint: `git commit -m "fix(evals): bind complete live evidence"` exited 0 and created `e4a1c77`. `npm run verify:clean-clone` exited 0 in 49.9 seconds with 188 tests, all offline evals, production build, 17 E2E passes with one intentional desktop skip, both security scans, 526 licenses, and zero vulnerabilities green.
 - 2026-07-20 final live preflight: read-only strict parsing authenticated prompt `1.4.10` report version 7 at SHA-256 `7d907207f8cfa4b1806820d8ae23fdab7acf7a418624bf74b4d953c7eccc82c8`, 15 attempts, one result, and cumulative `$2.786385175`. Read-only SQLite inspection found no run lock, no active or uncertain reservation, 15 known reservations totaling `$0.0512422`, and exact remaining headroom `$0.213614825`. No generation ran.
+- 2026-07-20 prompt `1.4.11` interrupted full run: command `npm run evals:live:full -- --prior-spend-usd 2.786385175 --chapter-cap-usd 0.0424` was started once, then killed by a 10-second local shell timeout. Three returned Luna attempts cost `$0.010074`; the first 767-word narration failed deterministic validation. Narration retry reservation `9fbe44b0-443e-4260-ab23-148b6fc2a188` had no response or usage evidence. Zero chapters committed. Sidecar SHA-256: `be05811e800f32f7af20d1b4c5b19db3e20571bb97ec926228e9b2a30810ea63`.
+- 2026-07-20 interruption reconciliation: commit `cded33c` adds an exact tracked checkpoint and a no-network recovery command. It authenticated source commit `7afba1d`, sidecar, run, turn, three known reservations, and one unknown retry; rejected cross-run reservation ownership; converted only that retry to uncertain at its full `$0.014623`; wrote strict receipt `evals/reports/live-interruption-prompt-1.4.11-1.json` with SHA-256 `235b2d455389e9c9f3376f8f234fd6a45253107783e1d23b584e3a0e0f43872b`; then released the lock. Read-only SQLite inspection found zero lock, zero active reservations, three known reservations, one uncertain reservation, exact exposure `$2.811082175`, and headroom `$0.188917825`.
+- 2026-07-20 recovery gates: `npm run check`, `npm audit`, and `npm run verify:clean-clone` exited 0. Vitest passed 195 tests. Offline evals, production build, 17 E2E passes with one intentional desktop skip, both security scans, 526 licenses, and zero vulnerabilities passed. Independent review found and the regression closed one reservation-owner mismatch.
+- 2026-07-20 cost correction and Flex research: the prior compaction projection priced saved ordinary Luna input at the `$1.25` cache-write rate instead of the explicit no-cache `$1` rate. Correct Standard projection is `$0.208988`. Official Flex processing keeps the same Responses request semantics and models at half Standard token prices, making the same matrix `$0.104494`; projected final exposure is `$2.915576175` with `$0.084423825` margin. The organization usage endpoint still returns 403 because the project key lacks `api.usage.read`, so no lower provider bill is claimed. No generation ran.
 
 Add exact command, date, exit code, cost, and report path after every future milestone gate.
