@@ -1,5 +1,7 @@
 import type { ActNumber } from "../contracts";
 
+export const DEMO_CHAPTER_LIMIT = 100;
+
 export interface ClockPolicy {
   readonly choicesRequireMilestone: boolean;
   readonly convergencePressure: boolean;

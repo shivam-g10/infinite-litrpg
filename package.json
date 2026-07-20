@@ -26,14 +26,19 @@
     "evals:live:reconcile": "tsx evals/reconcile-live-interruption.ts",
     "evals:live:reconcile-settled": "tsx evals/reconcile-settled-live-run.ts",
     "evals:review-packets": "tsx evals/review-packets.ts",
+    "demo:evidence": "tsx scripts/export-demo-evidence.ts",
+    "demo:samples": "tsx scripts/export-sample-stories.ts",
+    "demo:samples:check": "tsx scripts/export-sample-stories.ts --check",
     "demo:seed": "tsx scripts/seed-demo-evidence.ts",
     "build": "npm run build --workspace @infinite-litrpg/app",
     "test:e2e": "playwright test",
     "security:secrets": "tsx scripts/secret-scan.ts",
     "security:bundle": "tsx scripts/bundle-scan.ts",
     "licenses": "tsx scripts/license-check.ts",
+    "audit": "npm audit --audit-level=low",
+    "diff:check": "git diff --check",
     "verify:clean-clone": "tsx scripts/verify-clean-clone.ts",
-    "check": "npm run format:check && npm run lint && npm run typecheck && npm run test && npm run evals && npm run build && npm run test:e2e && npm run security:secrets && npm run security:bundle && npm run licenses"
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm run test && npm run evals && npm run build && npm run test:e2e && npm run security:secrets && npm run security:bundle && npm run licenses && npm run demo:samples:check && npm run audit && npm run diff:check"
   },
   "devDependencies": {
     "@playwright/test": "1.61.1",

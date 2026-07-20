@@ -1,13 +1,13 @@
 # Status
 
 - Updated: 2026-07-20
-- Layer: Release evaluation
-- Current phase: Phase 5 canon-preserving re-narration checkpoint
+- Layer: Product hardening and human review
+- Current phase: Phase 6 chapter-100 demo and simple Reader
 - Repository: initialized on `main`
 - Remote: public `https://github.com/shivam-g10/infinite-litrpg`; current local build not pushed
 - Initial commit: `39b19a2` (`chore: scaffold agent workflow`)
-- App: strict Next.js selection UI plus deterministic engine and SQLite store
-- Live API: prompt `1.4.11` sequential twelve-cycle automation green; canon-preserving correction path verified; human-corrected report and current-prompt native proof pending; no paid call authorized now
+- App: strict Next.js Reader with meaningful-decision continuation, deterministic engine, and SQLite store
+- Live API: prompt `1.4.11` sequential twelve-cycle automation green; Rowan correction retained; Elara and Lucan correction plus current-prompt native proof pending; no paid call authorized now
 - Evals: offline suite green
 - Build Week deadline: 2026-07-22 05:30 IST
 
@@ -21,18 +21,14 @@
 
 ## Current Blockers
 
-- Human review rejected Rowan chapter 2, Elara chapter 1, and Lucan chapter 1 in otherwise automated-green report `fb9295d7c33ca154c7e407894b807d4a371b83d5ef066d78eee05ee42d4c49d2`.
-- The authorized selective resume ran exactly once. Seven known Flex attempts cost `$0.01183`. Final report construction failed; no replacement chapter committed and source report stayed byte-identical.
-- Sidecar `617e4f493d331c873ea11c88539388ffa5cfa5a202399ade53417424ede169e8` preserves 98 attempts, 21 candidates, 49 raw responses, and 98 turn-bound runtime rows. Only new Rowan turn `5a889b80-2af8-4887-b81f-5b9f4e71defe` is uncommitted.
-- Durable exposure is `$2.959276675`; headroom is `$0.040723325`. Ledger has zero lock and zero active or uncertain reservations.
-- Provider-free ADR-017 recovery retains all twelve source results, binds the failed turn as a separate settled evidence suffix, blocks current-turn provenance laundering, holds report locks until atomic commit, and supports authenticated crash retry. Commits `6e5424f` and `1b6b162`, the full local gate, clean-clone proof, strict report materialization, idempotent replay, and registry binding pass.
-- Full suffix regeneration cannot fit conservative headroom. Canon-preserving re-narration now preserves exact state, action, intents, delta, frame, dependent chapters, and source provenance while replacing prose-only evidence. Narration uses reasoning `none`; audit uses `low`.
-- The exact three-target plan uses a `$0.0135` target cap. Its hard new maximum is `$0.0405`; projected exposure is `$2.999776675`, leaving `$0.000223325`. Preflight rejects any larger plan before client creation.
-- Implementation, 263-test full gate, dependency audit, strict full-report regression, three independent audits, real-receipt probe, commit `3fe329b`, and isolated clean-clone verification pass. Fresh exact paid authority is now the blocker.
+- Human review originally rejected Rowan chapter 2, Elara chapter 1, and Lucan chapter 1 in automated-green report `fb9295d7c33ca154c7e407894b807d4a371b83d5ef066d78eee05ee42d4c49d2`.
+- The authorized re-narration chain retained a corrected Rowan chapter 2. Elara did not commit and Lucan was not reached. Current failure report SHA-256 is `d935b56ed039e560ac067c2ec268ed7780b9daf196497e3ffde6349be2c02e0a`.
+- Durable exposure is `$2.993429175`; headroom is `$0.006570825`. Ledger has zero lock and zero active or uncertain reservations. No paid command is prepared or authorized.
+- Current-prompt native Multi-agent proof, a human-approved corrected six-POV report, real-click video approval, feedback session ID, push, and submission remain release gates. They do not block local human testing of the Reader.
 
 ## Next Action
 
-Request fresh authority for the exact three-target `$0.0135` Flex command documented in `evals/README.md`. Never run it without that authority.
+Human-test the centered Reader, exact cost confirmation, meaningful-decision pauses, stop and retry behavior, God Mode, and the six-story packet using `docs/HUMAN_REVIEW.md`. Do not run another paid correction without a new exact plan and authority.
 
 ## Evidence Log
 
@@ -173,5 +169,14 @@ Request fresh authority for the exact three-target `$0.0135` Flex command docume
 - 2026-07-20 ADR-018 full non-live gate: `npm run check` exited 0 in 30.0 seconds. Format, lint, all three strict TypeScript projects, 263 tests across 18 files, all six offline gates with 1,000 simulations and chapter 351 blocked, production build, 17 E2E passes with one intentional desktop skip, both security scans across 199 working files, and 526 licenses passed. `npm audit --audit-level=low` found zero vulnerabilities and `git diff --check` passed. The strict pre-provider three-target report projects `$2.999776675` exposure and `$0.000223325` headroom. No provider call ran.
 - 2026-07-20 ADR-018 real-receipt probe: a provider-free import of the registered settled report authenticated all eleven bridge files, retained all twelve results and `$0.1481945` attempt cost, and prepared only Rowan 2, Elara 1, and Lucan 1. Their source turn IDs are `2b68ad35-d51a-4ae3-87ab-31d922b17612`, `ffe01c81-596d-45e6-8737-66c2ee46d9a9`, and `c3b32592-d890-4f4b-882c-c0b13333bc7e`; all three canonical hashes recomputed exactly. The hard `$0.0405` plan retained `$0.000223325` headroom. No API key was read, no OpenAI client was created, and no provider call ran.
 - 2026-07-20 ADR-018 clean checkpoint: commit `3fe329b` (`feat(evals): preserve canon in re-narration`) contains the narrative-only service path, strict replacement provenance and WAL, hard total-plan preflight, exact regressions, ADR, architecture, eval docs, and eleven-hash settled-report bridge. `npm run verify:clean-clone` exited 0 in 60.1 seconds. A fresh install found zero vulnerabilities and passed 263 tests, all offline evals, production build, 17 E2E tests with one intentional desktop skip, both security scans, and 526 licenses. No provider call ran.
+- 2026-07-20 authorized three-target re-narration: `npm run evals:live:full -- --prior-spend-usd 2.811082175 --chapter-cap-usd 0.0135 --resume-report evals/reports/live-full-sequential-settled-1.json --renarrate rowan-ashborn:2 --renarrate elara-voss:1 --renarrate lucan-aurelis:1` exited 1. It retained a corrected Rowan chapter 2, did not commit Elara, and did not reach Lucan. Registered partial report SHA-256 is `9a67f509cd4aaca04e60bdeb02ff5a5473858d5916275ffe5832f2f4859095f5`; cumulative exposure reached `$2.981993675`.
+- 2026-07-20 authorized Elara continuation and settlement: the exact `$0.0135` Elara-only resume exited 1 after two known Flex narration attempts cost `$0.0071895`; final provenance validation failed before a replacement commit. Provider-free settlement wrote `evals/reports/live-full-sequential-renarrated-settled-2.json`, SHA-256 `90374f2e4ca49fe390fc6c64cd9412579efa7cdaa2c7e291f1b8a772127ea1bc`, with exposure `$2.989183175`, headroom `$0.010816825`, and no lock.
+- 2026-07-20 authorized final Elara variant: `npm run evals:live:full -- --prior-spend-usd 2.811082175 --chapter-cap-usd 0.0056 --resume-report evals/reports/live-full-sequential-renarrated-settled-2.json --renarrate elara-voss:1` exited 1 after 12.4 seconds. Two known Flex requests cost `$0.004246`; the chapter then had `$0.001354` left while the next request could cost `$0.00515`, so preflight stopped before transport. Failure report SHA-256 is `d935b56ed039e560ac067c2ec268ed7780b9daf196497e3ffde6349be2c02e0a`. Ledger exposure is `$2.993429175`, headroom is `$0.006570825`, with zero lock and zero active or uncertain reservation.
+- 2026-07-20 clean-clone demo evidence: `npm run demo:evidence` exported exact Rowan chapter 1 from authenticated settled report SHA-256 `90374f2e4ca49fe390fc6c64cd9412579efa7cdaa2c7e291f1b8a772127ea1bc` into tracked `docs/evidence/rowan-chapter-1-demo.json`, SHA-256 `bd8f7205b20698537f06ecafd38abf0b529f8e449de2b5ba068ae557e6686da8`. `npm run demo:seed` restores it without a provider client or request.
+- 2026-07-20 Reader UX baseline and proof-first slice: focused pre-change tests passed 54 cases. Added milestone, routine continuation, stop-after-current, retry, and chapter-100 tests then failed on missing policy, view contract, and controls. Implementation moved the decision rule into shared deterministic policy, added strict `continue_story`, and kept one atomic HTTP request per chapter. No prompt, runtime model, or provider call changed.
+- 2026-07-20 cost and accessibility re-review: independent review found that one click could authorize 46 default-cap chapters without an aggregate price, direct continuation could cross chapter 100, focus was lost during generation, Reader lacked an `h1`, and character selection lacked radio semantics. Regressions now require exact next-decision count and worst-case cost, explicit confirmation, a server-matched approved stop chapter, zero model calls at chapter 100, focused status and committed chapter headings, one page `h1`, structured God Mode headings, and native keyboard radio selection.
+- 2026-07-20 six-story review pack: `npm run demo:samples` generated `docs/SAMPLE_STORIES.md` provider-free from authenticated human-reviewed packets. It selects one chapter-level pass for each POV, records each prose hash, includes review fields, and fails if a selected verdict or source packet drifts. `npm run demo:samples:check` passes.
+- 2026-07-20 final browser QA: authenticated Rowan Reader rendered at 1440 by 1000 and 390 by 844. Desktop client width and scroll width both measured 1,425; mobile both measured 375. The exact 46-chapter plan showed `$4.6000` maximum at a `$0.1000` per-chapter cap, confirmation moved focus to its heading, Reader and God Mode each had one page `h1`, and mobile confirmation plus all three God Mode columns had no horizontal overflow. No generation button was confirmed and no provider request ran. Current screenshots were recaptured.
+- 2026-07-20 human-review checkpoint full gate: `npm run check` exited 0 in 42.5 seconds. Format, lint, all three strict TypeScript projects, 272 tests across 18 files, all six offline gates with 1,000 simulations and chapter 351 blocked, production build, 21 E2E passes with one intentional desktop skip, both security scans across 215 working files, 526 licenses, reproducible six-story pack, zero-vulnerability audit, and diff hygiene passed. Both independent reviewers reran their focused suites after fixes; every reported P0 through P3 finding closed and neither found a new P0 through P2 defect. No provider call ran.
 
 Add exact command, date, exit code, cost, and report path after every future milestone gate.

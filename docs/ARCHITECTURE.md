@@ -44,6 +44,8 @@ Narration failure leaves canon unchanged. Accepted `WorldDelta` is sole source o
 
 From chapter 48 through 50 of each act, choices stay milestone-compatible. An incomplete milestone requires a direct typed target. The locked POV can target the milestone through `investigate.subjectId` or a supported `targetId`; background agents cannot claim that abstract target.
 
+Reader input follows that same deterministic milestone policy. The opening and an incomplete milestone require a player choice. Otherwise `continue_story` may use only the persisted application-owned `choice-1`. The server computes the next decision or chapter-100 stop, exposes exact chapter count and worst-case per-chapter-cap total, and requires every request to carry that approved stop chapter. A stale, broader, milestone-crossing, or post-100 automatic request fails before provider work. The browser runs one atomic request at a time and can stop only after the active chapter settles. Chapter 100 is a demo horizon; chapter 350 remains the canonical terminal.
+
 ## Model Routing
 
 | Work                                                              | Model           | Baseline effort |

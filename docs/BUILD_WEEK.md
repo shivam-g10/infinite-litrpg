@@ -14,9 +14,9 @@ Use the timed [recording script](DEMO_SCRIPT.md). Required spoken evidence inclu
 2. Choose action.
 3. Show up to three Luna background intents.
 4. Show World Director resolve one valid delta.
-5. Stream Luna chapter containing only Rowan-safe knowledge.
+5. Replay the audited Luna chapter as a stream containing only Rowan-safe knowledge.
 6. Open God Mode trace, cost, latency, and act clock.
-7. Show chapter 350 terminal test.
+7. Show meaningful-decision continuation, chapter-100 stop, and chapter-350 terminal tests.
 
 ## Submission Evidence
 

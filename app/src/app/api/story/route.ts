@@ -1,4 +1,4 @@
-import { CHARACTER_IDS } from "@infinite-litrpg/shared";
+import { CHARACTER_IDS, DEMO_CHAPTER_LIMIT } from "@infinite-litrpg/shared";
 
 import { getServerEnvironment, redactSecret } from "@/server/env";
 import { OpenAIRuntimeError } from "@/server/openai";
@@ -153,7 +153,32 @@ function parseCommand(value: unknown): ApiCommand {
       type: "custom_action",
     };
   }
+  if (value.type === "continue_story") {
+    requireExactKeys(value, [
+      "approvedThroughChapter",
+      "expectedWorldVersion",
+      "requestId",
+      "type",
+    ]);
+    return {
+      approvedThroughChapter: parseApprovedChapter(value.approvedThroughChapter),
+      expectedWorldVersion: parseWorldVersion(value.expectedWorldVersion),
+      requestId: parseRequestId(value.requestId),
+      type: "continue_story",
+    };
+  }
   throw new StoryServiceError("Unknown command type");
+}
+
+function parseApprovedChapter(value: unknown): number {
+  if (
+    !Number.isSafeInteger(value) ||
+    (value as number) < 1 ||
+    (value as number) > DEMO_CHAPTER_LIMIT
+  ) {
+    throw new StoryServiceError("Approved continuation chapter is invalid");
+  }
+  return value as number;
 }
 
 function parseWorldVersion(value: unknown): number {

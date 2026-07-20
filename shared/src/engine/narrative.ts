@@ -83,6 +83,51 @@ export interface ChapterChoiceOption {
   readonly milestoneId: string | null;
 }
 
+export function requiresPlayerDecision(state: WorldState): boolean {
+  if (state.lockedPovId === null || state.terminal) return false;
+  if (state.chapter === 0) return true;
+  return requiresMilestoneDecisionAtChapter(state, state.chapter);
+}
+
+export interface RoutineContinuationPlan {
+  readonly chapterCount: number;
+  readonly endChapter: number;
+}
+
+export function planRoutineContinuation(
+  state: WorldState,
+  horizonChapter: number,
+): RoutineContinuationPlan | null {
+  if (!Number.isInteger(horizonChapter) || horizonChapter < 1 || horizonChapter > 350) {
+    throw new RangeError(`Continuation horizon must be between 1 and 350: ${horizonChapter}`);
+  }
+  if (
+    state.lockedPovId === null ||
+    state.terminal ||
+    state.chapter >= horizonChapter ||
+    requiresPlayerDecision(state)
+  ) {
+    return null;
+  }
+
+  for (let chapter = state.chapter + 1; chapter <= horizonChapter; chapter += 1) {
+    if (requiresMilestoneDecisionAtChapter(state, chapter)) {
+      return { chapterCount: chapter - state.chapter, endChapter: chapter };
+    }
+  }
+  return {
+    chapterCount: horizonChapter - state.chapter,
+    endChapter: horizonChapter,
+  };
+}
+
+function requiresMilestoneDecisionAtChapter(state: WorldState, chapter: number): boolean {
+  const policy = getClockPolicy(chapter);
+  if (!policy.choicesRequireMilestone) return false;
+  const milestone = state.arcClock.milestones.find(({ act }) => act === policy.currentAct);
+  return milestone?.completed !== true;
+}
+
 export function buildChapterChoiceOptions(state: WorldState): readonly ChapterChoiceOption[] {
   if (state.lockedPovId === null || state.terminal) return [];
   const actor = state.characters.find(({ id }) => id === state.lockedPovId);

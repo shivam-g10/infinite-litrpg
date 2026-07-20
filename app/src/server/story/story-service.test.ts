@@ -41,6 +41,7 @@ describe("StoryService", () => {
 
     expect(view.pov.id).toBe(characterId);
     expect(view.chapter.choices).toHaveLength(2);
+    expect(view.continuationPlan).toBeNull();
     expect(view.world).toMatchObject({ chapter: 0, terminal: false, version: 1 });
     store.close();
   });
@@ -422,6 +423,148 @@ describe("StoryService", () => {
       store.close();
     },
   );
+
+  it("rejects automatic continuation at an incomplete milestone before any model call", async () => {
+    const store = new StoryStore();
+    const locked = milestoneLockedWorld();
+    const create = vi.fn();
+    const stream = vi.fn();
+    const service = new StoryService(
+      store,
+      { responses: { create, stream } } as unknown as OpenAI,
+      options(),
+      () => locked,
+    );
+    const view = service.selectPov("rowan-ashborn");
+
+    expect(view.continuationPlan).toBeNull();
+    await expect(
+      service.takeTurn({
+        approvedThroughChapter: 47,
+        expectedWorldVersion: locked.version,
+        requestId: "00000000-0000-4000-8000-000000000147",
+        type: "continue_story",
+      }),
+    ).rejects.toMatchObject({ status: 409 });
+    expect(create).not.toHaveBeenCalled();
+    expect(stream).not.toHaveBeenCalled();
+    store.close();
+  });
+
+  it("continues with the persisted recommended choice on routine chapters", async () => {
+    const store = new StoryStore();
+    const prose = Array.from({ length: 900 }, (_, index) => `ember${index}`).join(" ");
+    const proseHash = createHash("sha256").update(prose).digest("hex");
+    const frame = {
+      choices: [],
+      terminal: false,
+      title: "The Ash Road",
+    } as const;
+    const audit: NarrativeAudit = {
+      approved: true,
+      evidence: NARRATIVE_AUDIT_DIMENSIONS.map((dimension) => ({
+        detail: "The chapter follows committed canon.",
+        dimension,
+        issueCode: "pass",
+      })),
+      leakedFactIds: [],
+      proseHash,
+      scores: {
+        arcProgress: 2,
+        characterAutonomy: 2,
+        choiceFulfillment: 2,
+        continuity: 2,
+        litrpgMechanics: 2,
+        povSafety: 2,
+        prose: 2,
+      },
+    };
+    const create = vi
+      .fn()
+      .mockResolvedValueOnce(parsedResponse(frame, "resp_frame_1"))
+      .mockResolvedValueOnce(parsedResponse(audit, "resp_audit_1"))
+      .mockResolvedValueOnce(parsedResponse(frame, "resp_frame_2"))
+      .mockResolvedValueOnce(parsedResponse(audit, "resp_audit_2"));
+    const stream = vi
+      .fn()
+      .mockReturnValueOnce(fakeStream(prose, "resp_narration_1"))
+      .mockReturnValueOnce(fakeStream(prose, "resp_narration_2"));
+    const service = new StoryService(
+      store,
+      { responses: { create, stream } } as unknown as OpenAI,
+      options(),
+    );
+    const opening = service.selectPov("rowan-ashborn");
+    const first = await service.takeTurn({
+      choiceId: opening.chapter.choices[0]?.id ?? "missing",
+      expectedWorldVersion: 1,
+      requestId: "00000000-0000-4000-8000-000000000151",
+      type: "take_action",
+    });
+    const recommended = first.chapter.choices.find(({ id }) => id === "choice-1");
+    if (!recommended) throw new Error("Recommended choice missing");
+
+    expect(first.continuationPlan).toEqual({
+      chapterCount: 46,
+      endChapter: 47,
+      maxCostUsd: 46,
+      maxCostUsdPerChapter: 1,
+    });
+    await expect(
+      service.takeTurn({
+        approvedThroughChapter: 100,
+        expectedWorldVersion: 2,
+        requestId: "00000000-0000-4000-8000-000000000154",
+        type: "continue_story",
+      }),
+    ).rejects.toMatchObject({ status: 409 });
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(stream).toHaveBeenCalledTimes(1);
+
+    const continued = await service.takeTurn({
+      approvedThroughChapter: 47,
+      expectedWorldVersion: 2,
+      requestId: "00000000-0000-4000-8000-000000000152",
+      type: "continue_story",
+    });
+
+    expect(continued.world).toMatchObject({ chapter: 2, version: 3 });
+    expect(store.loadChapter("ashen-crown-v1", 2)?.playerAction).toMatchObject({
+      action: recommended.action,
+      description: recommended.description,
+      source: "suggested",
+    });
+    expect(create).toHaveBeenCalledTimes(4);
+    expect(stream).toHaveBeenCalledTimes(2);
+    store.close();
+  });
+
+  it("rejects automatic continuation at the chapter-100 demo horizon before model work", async () => {
+    const store = new StoryStore();
+    const horizon = demoHorizonWorld();
+    const create = vi.fn();
+    const stream = vi.fn();
+    const service = new StoryService(
+      store,
+      { responses: { create, stream } } as unknown as OpenAI,
+      options(),
+      () => horizon,
+    );
+    const view = service.selectPov("rowan-ashborn");
+
+    expect(view.continuationPlan).toBeNull();
+    await expect(
+      service.takeTurn({
+        approvedThroughChapter: 100,
+        expectedWorldVersion: horizon.version,
+        requestId: "00000000-0000-4000-8000-000000000153",
+        type: "continue_story",
+      }),
+    ).rejects.toMatchObject({ status: 409 });
+    expect(create).not.toHaveBeenCalled();
+    expect(stream).not.toHaveBeenCalled();
+    store.close();
+  });
 
   it.each([
     {
@@ -1718,6 +1861,24 @@ function milestoneLockedWorld() {
   state.calendar.label = "Year 1, Ashfall 48";
   state.chapter = 47;
   state.version = 48;
+  return state;
+}
+
+function demoHorizonWorld() {
+  const store = new StoryStore();
+  const service = new StoryService(store, unusedClient(), options());
+  service.selectPov("rowan-ashborn");
+  const state = store.loadWorldState("ashen-crown-v1");
+  store.close();
+  if (!state) throw new Error("Seed world missing");
+  state.act = 3;
+  state.calendar.day = 101;
+  state.calendar.label = "Year 1, Ashfall 101";
+  state.chapter = 100;
+  state.version = 101;
+  for (const milestone of state.arcClock.milestones) {
+    if (milestone.act <= 2) milestone.completed = true;
+  }
   return state;
 }
 

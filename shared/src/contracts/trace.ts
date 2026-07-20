@@ -122,7 +122,7 @@ export const FailedTurnTraceSchema = z
   .object({
     attempts: z.array(RuntimeAttemptTraceSchema).min(1).max(50),
     attemptedChapter: ChapterNumberSchema.refine((chapter) => chapter >= 1),
-    commandType: z.enum(["take_action", "custom_action"]),
+    commandType: z.enum(["take_action", "custom_action", "continue_story"]),
     contractVersion: z.literal(CONTRACT_VERSION),
     errorCode: ShortTextSchema,
     fixtureId: IdSchema,

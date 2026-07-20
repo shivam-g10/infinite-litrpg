@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { DEMO_CHAPTER_LIMIT } from "@infinite-litrpg/shared";
+import { useEffect, useRef, useState } from "react";
 
 import type { StoryView } from "./story-types";
 
@@ -18,14 +19,21 @@ const ROMAN_NUMERALS = ["I", "II", "III", "IV", "V", "VI", "VII"] as const;
 
 export type StoryCommand =
   | { readonly type: "take_action"; readonly choiceId: string }
-  | { readonly type: "custom_action"; readonly description: string };
+  | { readonly type: "custom_action"; readonly description: string }
+  | { readonly approvedThroughChapter: number; readonly type: "continue_story" };
 
 interface StoryShellProps {
+  readonly automaticRun: boolean;
   readonly busy: boolean;
   readonly error: string | null;
+  readonly generationChapter: number | null;
   readonly onCommand: (command: StoryCommand) => void;
+  readonly onContinue: () => void;
   readonly onRetry: () => void;
+  readonly onStop: () => void;
+  readonly runMessage: string | null;
   readonly story: StoryView;
+  readonly stopRequested: boolean;
   readonly streamedProse: string;
 }
 
@@ -165,55 +173,38 @@ function StoryHeader({
   );
 }
 
-function ActRail({ story }: { readonly story: StoryView }) {
+function ReaderContext({ story }: { readonly story: StoryView }) {
   const activeActIndex = Math.max(0, Math.min(ACT_NAMES.length - 1, story.world.act - 1));
-  const activeActName = ACT_NAMES[activeActIndex];
-  const chapterProgress = Math.min(100, Math.max(0, story.progress * 100));
+  const chapterProgress = Math.min(
+    100,
+    Math.max(0, (story.world.chapter / DEMO_CHAPTER_LIMIT) * 100),
+  );
 
   return (
-    <aside className="act-rail" aria-label="Story clock">
-      <p className="rail-label">Story</p>
-      <h2>
-        Act {ROMAN_NUMERALS[activeActIndex]} · {activeActName}
-      </h2>
-      <p>Chapter {story.world.chapter} of 350</p>
+    <section className="reader-context" aria-label="Story position">
+      <div>
+        <strong>
+          {story.pov.name}
+          <small>Viewpoint locked</small>
+        </strong>
+        <span>
+          Chapter {story.world.chapter} of {DEMO_CHAPTER_LIMIT}
+        </span>
+      </div>
+      <p>
+        Act {ROMAN_NUMERALS[activeActIndex]} · {ACT_NAMES[activeActIndex]}
+      </p>
       <div
-        aria-label={`${Math.round(chapterProgress)} percent of story complete`}
-        aria-valuemax={100}
+        aria-label={`Chapter ${story.world.chapter} of ${DEMO_CHAPTER_LIMIT}`}
+        aria-valuemax={DEMO_CHAPTER_LIMIT}
         aria-valuemin={0}
-        aria-valuenow={Math.round(chapterProgress)}
+        aria-valuenow={Math.min(story.world.chapter, DEMO_CHAPTER_LIMIT)}
         className="progress-line"
         role="progressbar"
       >
         <span style={{ width: `${chapterProgress}%` }} />
       </div>
-      <p className="rail-label rail-label--acts">The seven acts</p>
-      <ol className="act-list">
-        {ACT_NAMES.map((name, index) => {
-          const active = index === activeActIndex;
-          return (
-            <li
-              aria-current={active ? "step" : undefined}
-              className={active ? "is-active" : ""}
-              key={name}
-            >
-              <span>{ROMAN_NUMERALS[index]}</span>
-              <p>{name}</p>
-            </li>
-          );
-        })}
-      </ol>
-      <dl className="world-clock">
-        <div>
-          <dt>Calendar</dt>
-          <dd>{story.world.calendar.label || `Day ${story.world.calendar.day}`}</dd>
-        </div>
-        <div>
-          <dt>Threat</dt>
-          <dd>{story.world.threat || "Unknown"}</dd>
-        </div>
-      </dl>
-    </aside>
+    </section>
   );
 }
 
@@ -375,16 +366,43 @@ function CharacterState({ story }: { readonly story: StoryView }) {
 }
 
 function ReaderActions({
+  automaticRun,
   busy,
+  generationChapter,
   onCommand,
+  onContinue,
+  onStop,
+  runMessage,
   story,
+  stopRequested,
+  streamedProse,
 }: {
+  readonly automaticRun: boolean;
   readonly busy: boolean;
+  readonly generationChapter: number | null;
   readonly onCommand: (command: StoryCommand) => void;
+  readonly onContinue: () => void;
+  readonly onStop: () => void;
+  readonly runMessage: string | null;
   readonly story: StoryView;
+  readonly stopRequested: boolean;
+  readonly streamedProse: string;
 }) {
   const [customAction, setCustomAction] = useState("");
+  const [confirmingContinuation, setConfirmingContinuation] = useState(false);
+  const confirmationHeading = useRef<HTMLHeadingElement>(null);
+  const generationPanel = useRef<HTMLElement>(null);
+  const wasBusy = useRef(busy);
   const firstName = story.pov.name.split(" ")[0] || story.pov.name;
+
+  useEffect(() => {
+    if (busy && !wasBusy.current) generationPanel.current?.focus();
+    wasBusy.current = busy;
+  }, [busy]);
+
+  useEffect(() => {
+    if (confirmingContinuation) confirmationHeading.current?.focus();
+  }, [confirmingContinuation]);
 
   if (story.world.terminal) {
     return (
@@ -404,9 +422,115 @@ function ReaderActions({
     );
   }
 
+  if (busy) {
+    return (
+      <section
+        aria-live="polite"
+        className="generation-panel"
+        ref={generationPanel}
+        role="status"
+        tabIndex={-1}
+      >
+        <span aria-hidden="true" className="generation-mark" />
+        <div>
+          <h2>
+            Creating chapter {generationChapter ?? story.world.chapter + 1} of {DEMO_CHAPTER_LIMIT}
+          </h2>
+          <p>
+            {streamedProse
+              ? "Canon checked. Loading the chapter."
+              : "Resolving the next world turn and checking canon."}
+          </p>
+        </div>
+        {automaticRun ? (
+          <button disabled={stopRequested} onClick={onStop} type="button">
+            {stopRequested ? "Stopping after this chapter…" : "Stop after this chapter"}
+          </button>
+        ) : null}
+      </section>
+    );
+  }
+
+  if (story.world.chapter >= DEMO_CHAPTER_LIMIT) {
+    return (
+      <section className="demo-complete">
+        <h2>Chapter {DEMO_CHAPTER_LIMIT} ready</h2>
+        <p>Review the story here or export the complete draft as Markdown.</p>
+      </section>
+    );
+  }
+
+  if (story.continuationPlan) {
+    const plan = story.continuationPlan;
+    return (
+      <section
+        className="reader-actions reader-actions--continue"
+        aria-labelledby="continue-heading"
+      >
+        {runMessage ? (
+          <p className="run-message" role="status">
+            {runMessage}
+          </p>
+        ) : null}
+        {confirmingContinuation ? (
+          <>
+            <p className="decision-label">Confirm generation</p>
+            <h2 id="continue-heading" ref={confirmationHeading} tabIndex={-1}>
+              Create up to {plan.chapterCount} {plan.chapterCount === 1 ? "chapter" : "chapters"}?
+            </h2>
+            <p className="continue-budget">
+              Through chapter {plan.endChapter}. Maximum {formatMoney(plan.maxCostUsd)} at the
+              configured {formatMoney(plan.maxCostUsdPerChapter)} per-chapter cap.
+            </p>
+            <div className="continuation-confirmation-actions">
+              <button
+                className="continue-action"
+                onClick={() => {
+                  setConfirmingContinuation(false);
+                  onContinue();
+                }}
+                type="button"
+              >
+                Start generation
+              </button>
+              <button onClick={() => setConfirmingContinuation(false)} type="button">
+                Cancel
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <h2 id="continue-heading">Ready for the story to move?</h2>
+            <p className="continue-budget">
+              Up to {plan.chapterCount} {plan.chapterCount === 1 ? "chapter" : "chapters"} · maximum{" "}
+              {formatMoney(plan.maxCostUsd)}
+            </p>
+            <button
+              className="continue-action"
+              onClick={() => setConfirmingContinuation(true)}
+              type="button"
+            >
+              Continue to next decision
+            </button>
+            <p className="continue-note">
+              Uses your API key one chapter at a time. Keep this tab open. You can stop after the
+              active chapter.
+            </p>
+          </>
+        )}
+      </section>
+    );
+  }
+
   return (
     <section className="reader-actions" aria-labelledby="action-heading">
-      <h2 id="action-heading">What does {firstName} attempt?</h2>
+      {runMessage ? (
+        <p className="run-message" role="status">
+          {runMessage}
+        </p>
+      ) : null}
+      <p className="decision-label">Story decision</p>
+      <h2 id="action-heading">What does {firstName} do next?</h2>
       <div className="choice-list">
         {story.chapter.choices.map((choice) => (
           <button
@@ -420,137 +544,119 @@ function ReaderActions({
           </button>
         ))}
       </div>
-      <form
-        className="custom-action"
-        onSubmit={(event) => {
-          event.preventDefault();
-          const description = customAction.trim();
-          if (!description || busy) return;
-          onCommand({ description, type: "custom_action" });
-        }}
-      >
-        <label className="sr-only" htmlFor="custom-action">
-          Describe another attempt
-        </label>
-        <input
-          autoComplete="off"
-          disabled={busy}
-          id="custom-action"
-          maxLength={240}
-          onChange={(event) => setCustomAction(event.target.value)}
-          placeholder="Describe another attempt…"
-          required
-          value={customAction}
-        />
-        <button disabled={busy || customAction.trim().length === 0} type="submit">
-          {busy ? "Resolving…" : "Attempt"}
-        </button>
-      </form>
+      <details className="custom-action-disclosure">
+        <summary>Write a different action</summary>
+        <form
+          className="custom-action"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const description = customAction.trim();
+            if (!description || busy) return;
+            onCommand({ description, type: "custom_action" });
+          }}
+        >
+          <label className="sr-only" htmlFor="custom-action">
+            Describe another attempt
+          </label>
+          <input
+            autoComplete="off"
+            disabled={busy}
+            id="custom-action"
+            maxLength={240}
+            onChange={(event) => setCustomAction(event.target.value)}
+            placeholder="Describe another attempt…"
+            required
+            value={customAction}
+          />
+          <button disabled={busy || customAction.trim().length === 0} type="submit">
+            Attempt
+          </button>
+        </form>
+      </details>
     </section>
   );
 }
 
-function ReaderView({ busy, error, onCommand, onRetry, story, streamedProse }: StoryShellProps) {
-  const actIndex = Math.max(0, Math.min(ACT_NAMES.length - 1, story.world.act - 1));
-  const streaming = busy && streamedProse.length > 0;
-  const displayedProse = streaming ? streamedProse : (story.chapter?.prose ?? "");
-  const paragraphs = displayedProse.split(/\n\s*\n/gu).filter(Boolean);
+function ReaderView(props: StoryShellProps) {
+  const { error, onRetry, story } = props;
+  const chapterHeading = useRef<HTMLHeadingElement>(null);
+  const previousChapter = useRef(story.world.chapter);
+  const paragraphs = (story.chapter?.prose ?? "").split(/\n\s*\n/gu).filter(Boolean);
+
+  useEffect(() => {
+    if (previousChapter.current !== story.world.chapter) chapterHeading.current?.focus();
+    previousChapter.current = story.world.chapter;
+  }, [story.world.chapter]);
 
   return (
-    <>
-      <div className="mobile-story-context">
-        <p>
-          {story.pov.name} · Chapter {story.world.chapter} of 350
-        </p>
-        <h2>
-          Act {ROMAN_NUMERALS[actIndex]} · {ACT_NAMES[actIndex]}
-        </h2>
-        <div className="progress-line">
-          <span style={{ width: `${Math.min(100, Math.max(0, story.progress * 100))}%` }} />
-        </div>
-      </div>
-      <main className="reader-layout">
-        <ActRail story={story} />
-        <article className="chapter-column">
-          <header className="chapter-byline">
-            <h1>{story.pov.name}</h1>
-            <p>Viewpoint locked</p>
-            <p>AI-generated chapter · deterministic canon audited</p>
-          </header>
-          {story.chapter ? (
-            <div
-              aria-live={streaming ? "polite" : undefined}
-              className={streaming ? "chapter-copy chapter-copy--streaming" : "chapter-copy"}
-            >
-              <h2>{streaming ? "Validated chapter arriving" : story.chapter.title}</h2>
-              {streaming ? (
-                <p className="stream-status">Audit passed · replaying safe prose</p>
+    <main className="reader-layout">
+      <article className="chapter-column">
+        <ReaderContext story={story} />
+        {story.chapter ? (
+          <div className="chapter-copy">
+            <h1 ref={chapterHeading} tabIndex={-1}>
+              {story.chapter.title}
+            </h1>
+            {paragraphs.map((paragraph, index) => (
+              <p key={`${index}-${paragraph.slice(0, 28)}`}>{paragraph}</p>
+            ))}
+          </div>
+        ) : null}
+        {error ? (
+          <div className="error-rail error-rail--reader" role="alert">
+            <p>{error}</p>
+            <button onClick={onRetry} type="button">
+              Retry same chapter
+            </button>
+          </div>
+        ) : null}
+        <ReaderActions {...props} />
+        <details className="reader-details">
+          <summary>
+            Story and character details <ChevronIcon />
+          </summary>
+          <div className="reader-details__grid">
+            <CharacterState story={story} />
+            <div className="world-detail">
+              <p className="rail-label">Story clock</p>
+              <dl className="compact-list">
+                <div>
+                  <dt>Calendar</dt>
+                  <dd>{story.world.calendar.label || `Day ${story.world.calendar.day}`}</dd>
+                </div>
+                <div>
+                  <dt>Threat</dt>
+                  <dd>{story.world.threat}</dd>
+                </div>
+                <div>
+                  <dt>World</dt>
+                  <dd>v{story.world.version}</dd>
+                </div>
+                <div>
+                  <dt>Last chapter</dt>
+                  <dd>
+                    {formatLatency(story.latencyMs)} · {formatMoney(story.estimatedCostUsd)}
+                  </dd>
+                </div>
+              </dl>
+              {story.visibleEvents.length > 0 ? (
+                <section className="visible-events">
+                  <h2>Visible events</h2>
+                  <ul>
+                    {story.visibleEvents.map((event) => (
+                      <li key={event.id || event.summary}>
+                        <span>{event.summary}</span>
+                        {event.location ? <small>{event.location}</small> : null}
+                      </li>
+                    ))}
+                  </ul>
+                </section>
               ) : null}
-              {paragraphs.map((paragraph, index) => (
-                <p key={`${index}-${paragraph.slice(0, 28)}`}>{paragraph}</p>
-              ))}
             </div>
-          ) : null}
-          {error ? (
-            <div className="error-rail error-rail--reader" role="alert">
-              <p>{error}</p>
-              <button onClick={onRetry} type="button">
-                Retry
-              </button>
-            </div>
-          ) : null}
-          <ReaderActions busy={busy} onCommand={onCommand} story={story} />
-          {story.visibleEvents.length > 0 ? (
-            <section className="visible-events">
-              <h2>Visible events</h2>
-              <ul>
-                {story.visibleEvents.map((event) => (
-                  <li key={event.id || event.summary}>
-                    <span>{event.summary}</span>
-                    {event.location ? <small>{event.location}</small> : null}
-                  </li>
-                ))}
-              </ul>
-            </section>
-          ) : null}
-        </article>
-        <aside className="state-rail" aria-label="Visible character state">
-          <CharacterState story={story} />
-        </aside>
-      </main>
-      <section className="mobile-disclosures" aria-label="Story details">
-        <details>
-          <summary>
-            Character state <ChevronIcon />
-          </summary>
-          <CharacterState story={story} />
-        </details>
-        <details>
-          <summary>
-            Story clock <ChevronIcon />
-          </summary>
-          <div className="mobile-detail-content">
-            <p>
-              Day {story.world.calendar.day} · {story.world.calendar.label}
-            </p>
-            <p>Threat: {story.world.threat}</p>
-            <p>World v{story.world.version}</p>
           </div>
         </details>
-        <details>
-          <summary>
-            Usage and trace <ChevronIcon />
-          </summary>
-          <div className="mobile-detail-content">
-            <p>{titleCase(story.adapterMode)}</p>
-            <p>{story.usage.totalTokens.toLocaleString()} tokens</p>
-            <p>
-              {formatLatency(story.latencyMs)} · {formatMoney(story.estimatedCostUsd)}
-            </p>
-          </div>
-        </details>
-      </section>
-    </>
+      </article>
+    </main>
   );
 }
 
@@ -595,6 +701,7 @@ function GodModeView({ story }: { readonly story: StoryView }) {
 
   return (
     <main className="god-shell">
+      <h1 className="sr-only">God Mode</h1>
       <header className="god-context">
         <p>
           {story.pov.name} <span>·</span> Chapter {story.world.chapter} <span>·</span> World v
@@ -603,7 +710,7 @@ function GodModeView({ story }: { readonly story: StoryView }) {
       </header>
       <div className="god-grid">
         <section className="intent-column" aria-labelledby="intents-heading">
-          <h1 id="intents-heading">Background intents</h1>
+          <h2 id="intents-heading">Background intents</h2>
           {story.godMode.intents.length > 0 ? (
             <ol>
               {story.godMode.intents.map((intent, index) => (
@@ -625,7 +732,7 @@ function GodModeView({ story }: { readonly story: StoryView }) {
           )}
           {story.godMode.rejected.length > 0 ? (
             <section className="rejected-intents">
-              <h2>Rejected intents</h2>
+              <h3>Rejected intents</h3>
               <ul>
                 {story.godMode.rejected.map((intent) => (
                   <li key={`${intent.id}-${intent.code}`}>
@@ -638,7 +745,7 @@ function GodModeView({ story }: { readonly story: StoryView }) {
           ) : null}
         </section>
         <section className="resolution-column" aria-labelledby="resolution-heading">
-          <h1 id="resolution-heading">Canonical resolution</h1>
+          <h2 id="resolution-heading">Canonical resolution</h2>
           <div className="resolution-lead">
             <span>Committed WorldDelta</span>
             <strong>World v{story.world.version}</strong>
@@ -646,7 +753,7 @@ function GodModeView({ story }: { readonly story: StoryView }) {
           <JsonBlock defaultOpen label="Accepted delta" value={story.godMode.delta} />
           {story.visibleEvents.length > 0 ? (
             <section className="resolution-section">
-              <h2>Observed events</h2>
+              <h3>Observed events</h3>
               <ul>
                 {story.visibleEvents.map((event) => (
                   <li key={event.id || event.summary}>{event.summary}</li>
@@ -656,7 +763,7 @@ function GodModeView({ story }: { readonly story: StoryView }) {
           ) : null}
         </section>
         <section className="trace-column" aria-labelledby="trace-heading">
-          <h1 id="trace-heading">Trace</h1>
+          <h2 id="trace-heading">Trace</h2>
           <p className="trace-mode">{titleCase(story.adapterMode)}</p>
           <dl className="trace-list">
             <div>
@@ -734,17 +841,6 @@ function GodModeView({ story }: { readonly story: StoryView }) {
   );
 }
 
-function StoryStatus({ story }: { readonly story: StoryView }) {
-  return (
-    <footer className="story-status">
-      <span>{titleCase(story.adapterMode)}</span>
-      <span>{formatLatency(story.latencyMs)}</span>
-      <span>{formatMoney(story.estimatedCostUsd)}</span>
-      <span>{story.usage.totalTokens.toLocaleString()} tokens</span>
-    </footer>
-  );
-}
-
 function MobileNavigation({
   mode,
   onMode,
@@ -783,12 +879,11 @@ export function StoryShell(props: StoryShellProps) {
     <div className={`story-app story-app--${mode}`}>
       <StoryHeader mode={mode} onMode={setMode} />
       {mode === "reader" ? <ReaderView {...props} /> : <GodModeView story={props.story} />}
-      <StoryStatus story={props.story} />
       <MobileNavigation mode={mode} onMode={setMode} />
-      {props.busy ? (
+      {props.busy && mode === "god" ? (
         <div aria-live="polite" className="turn-progress" role="status">
           <span />
-          {props.streamedProse ? "Replaying validated chapter…" : "Resolving world turn…"}
+          Creating chapter {props.generationChapter ?? props.story.world.chapter + 1}
         </div>
       ) : null}
     </div>

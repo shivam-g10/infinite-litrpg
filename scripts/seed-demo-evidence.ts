@@ -4,46 +4,114 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
+import { CONTRACT_VERSION, PROMPT_VERSION } from "@infinite-litrpg/shared";
 import type OpenAI from "openai";
+import { z } from "zod";
 
 import { StoryService } from "../app/src/server/story/story-service";
 import { StoryStore } from "../app/src/server/storage/story-store";
-import {
-  assertRegisteredResumeCheckpoint,
-  parseLiveReport,
-  restoreRetainedChapter,
-} from "../evals/run-live";
+import { LiveResultSchema, restoreRetainedChapter, type LiveResult } from "../evals/run-live";
 
 const ROOT = process.cwd();
 const DATA_DIRECTORY = resolve(ROOT, "data");
 const FINAL_DATABASE = resolve(DATA_DIRECTORY, "ashen-crown.db");
 const TEMPORARY_DATABASE = resolve(DATA_DIRECTORY, `ashen-crown.seed.${process.pid}.db`);
+export const DEMO_EVIDENCE_VERSION = "1.0.0-demo-evidence" as const;
 
-export function defaultDemoReportPath(root = ROOT): string {
-  return resolve(root, "evals", "reports", "live-full-sequential-settled-1.json");
+const Sha256Schema = z.string().regex(/^[a-f0-9]{64}$/u);
+const GitShaSchema = z.string().regex(/^[a-f0-9]{40}$/u);
+
+const DemoEvidenceSourceSchema = z
+  .object({
+    reportSha256: Sha256Schema,
+    reportVersion: z.literal(9),
+    sourceGitSha: GitShaSchema,
+  })
+  .strict();
+
+export const DemoEvidenceSchema = z
+  .object({
+    result: LiveResultSchema,
+    resultSha256: Sha256Schema,
+    schemaVersion: z.literal(DEMO_EVIDENCE_VERSION),
+    source: DemoEvidenceSourceSchema,
+  })
+  .strict()
+  .superRefine((evidence, context) => {
+    if (hashJson(evidence.result) !== evidence.resultSha256) {
+      context.addIssue({ code: "custom", message: "Demo result hash does not match evidence" });
+    }
+    if (
+      evidence.result.povId !== "rowan-ashborn" ||
+      evidence.result.chapter !== 1 ||
+      evidence.result.canonicalNarrativeInput === undefined
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Demo evidence must contain canonical Rowan chapter 1",
+      });
+    }
+    if (
+      evidence.result.trace.promptVersion !== PROMPT_VERSION ||
+      evidence.result.trace.contractVersion !== CONTRACT_VERSION
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Demo evidence does not match current prompt and contract versions",
+      });
+    }
+  });
+
+export type DemoEvidence = z.infer<typeof DemoEvidenceSchema>;
+
+export function defaultDemoEvidencePath(root = ROOT): string {
+  return resolve(root, "docs", "evidence", "rowan-chapter-1-demo.json");
+}
+
+export function buildDemoEvidence(
+  resultCandidate: unknown,
+  sourceCandidate: z.input<typeof DemoEvidenceSourceSchema>,
+): DemoEvidence {
+  const result = LiveResultSchema.parse(resultCandidate);
+  return DemoEvidenceSchema.parse({
+    result,
+    resultSha256: hashJson(result),
+    schemaVersion: DEMO_EVIDENCE_VERSION,
+    source: DemoEvidenceSourceSchema.parse(sourceCandidate),
+  });
+}
+
+export function parseDemoEvidence(candidate: unknown): DemoEvidence {
+  return DemoEvidenceSchema.parse(candidate);
+}
+
+export function readDemoEvidence(path: string): DemoEvidence {
+  let candidate: unknown;
+  try {
+    candidate = JSON.parse(readFileSync(path, "utf8")) as unknown;
+  } catch (error) {
+    throw new Error(
+      `Cannot read demo evidence: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  return parseDemoEvidence(candidate);
 }
 
 function main(): void {
-  const reportPath = process.argv[2] ? resolve(process.argv[2]) : defaultDemoReportPath();
+  const evidencePath = process.argv[2] ? resolve(process.argv[2]) : defaultDemoEvidencePath();
   const finalFiles = [FINAL_DATABASE, `${FINAL_DATABASE}-shm`, `${FINAL_DATABASE}-wal`];
   if (finalFiles.some((path) => existsSync(path))) {
     throw new Error("Existing app database found. Preserve it; demo seed refuses to overwrite");
   }
-  if (!existsSync(reportPath)) {
-    throw new Error(`Authenticated live report not found: ${reportPath}`);
+  if (!existsSync(evidencePath)) {
+    throw new Error(`Tracked demo evidence not found: ${evidencePath}`);
   }
 
   mkdirSync(DATA_DIRECTORY, { recursive: true });
-  const raw = readFileSync(reportPath, "utf8");
-  const report = parseLiveReport(JSON.parse(raw) as unknown);
-  const reportSha256 = createHash("sha256").update(raw).digest("hex");
-  assertRegisteredResumeCheckpoint(report, reportSha256);
-  const result = report.results.find(
-    (candidate) => candidate.povId === "rowan-ashborn" && candidate.chapter === 1,
-  );
-  if (!result) throw new Error("Authenticated Rowan chapter 1 is missing");
+  const evidence = readDemoEvidence(evidencePath);
+  const result: LiveResult = evidence.result;
   const canonical = result.canonicalNarrativeInput;
-  if (!canonical) throw new Error("Authenticated Rowan chapter lacks exact canonical evidence");
+  if (!canonical) throw new Error("Tracked Rowan chapter lacks exact canonical evidence");
 
   try {
     const store = new StoryStore(TEMPORARY_DATABASE);
@@ -76,7 +144,9 @@ function main(): void {
       throw new Error("SQLite sidecars remain after demo seed close");
     }
     renameSync(TEMPORARY_DATABASE, FINAL_DATABASE);
-    console.log(`seeded authenticated Rowan chapter 1 from ${reportSha256}; no model request made`);
+    console.log(
+      `seeded authenticated Rowan chapter 1 from ${evidence.source.reportSha256}; no model request made`,
+    );
   } catch (error) {
     for (const path of [
       TEMPORARY_DATABASE,
@@ -87,6 +157,10 @@ function main(): void {
     }
     throw error;
   }
+}
+
+function hashJson(value: unknown): string {
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

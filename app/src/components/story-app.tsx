@@ -1,6 +1,10 @@
 "use client";
 
-import type { CharacterId, PublicCharacterProfile } from "@infinite-litrpg/shared";
+import {
+  DEMO_CHAPTER_LIMIT,
+  type CharacterId,
+  type PublicCharacterProfile,
+} from "@infinite-litrpg/shared";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { CharacterSelection } from "./character-selection";
@@ -107,16 +111,21 @@ export function StoryApp({ characters }: StoryAppProps) {
   const [streamedProse, setStreamedProse] = useState("");
   const [busy, setBusy] = useState<BusyState>("loading");
   const [error, setError] = useState<string | null>(null);
+  const [automaticRun, setAutomaticRun] = useState(false);
+  const [generationChapter, setGenerationChapter] = useState<number | null>(null);
+  const [runMessage, setRunMessage] = useState<string | null>(null);
+  const [stopRequested, setStopRequested] = useState(false);
   const [failedRequestKind, setFailedRequestKind] = useState<RequestDescriptor["kind"] | null>(
     null,
   );
   const lastRequest = useRef<RequestDescriptor>({ kind: "load" });
+  const automaticRunActive = useRef(false);
+  const stopRequestedRef = useRef(false);
 
-  const runRequest = useCallback(async (request: RequestDescriptor, signal?: AbortSignal) => {
+  const performRequest = useCallback(async (request: RequestDescriptor, signal?: AbortSignal) => {
     lastRequest.current = request;
     setError(null);
     setFailedRequestKind(null);
-    setBusy(request.kind === "load" ? "loading" : request.kind === "lock" ? "locking" : "turn");
     if (request.kind === "command") setStreamedProse("");
 
     const init: RequestInit =
@@ -156,15 +165,33 @@ export function StoryApp({ characters }: StoryAppProps) {
       }
       setStory(nextStory);
       setStreamedProse("");
+      return { ok: true as const, story: nextStory };
     } catch (requestError) {
-      if (requestError instanceof DOMException && requestError.name === "AbortError") return;
+      if (requestError instanceof DOMException && requestError.name === "AbortError") {
+        return { aborted: true as const, ok: false as const };
+      }
       setStreamedProse("");
       setFailedRequestKind(request.kind);
       setError(requestError instanceof Error ? requestError.message : "Story request failed.");
-    } finally {
-      if (!signal?.aborted) setBusy(null);
+      return { aborted: false as const, ok: false as const };
     }
   }, []);
+
+  const runRequest = useCallback(
+    async (request: RequestDescriptor, signal?: AbortSignal) => {
+      setBusy(request.kind === "load" ? "loading" : request.kind === "lock" ? "locking" : "turn");
+      if (request.kind === "command") setRunMessage(null);
+      try {
+        return await performRequest(request, signal);
+      } finally {
+        if (!signal?.aborted) {
+          setBusy(null);
+          setGenerationChapter(null);
+        }
+      }
+    },
+    [performRequest],
+  );
 
   useEffect(() => {
     const controller = new AbortController();
@@ -175,6 +202,79 @@ export function StoryApp({ characters }: StoryAppProps) {
   const retry = useCallback(() => {
     void runRequest(lastRequest.current);
   }, [runRequest]);
+
+  const continueToDecision = useCallback(async () => {
+    if (
+      automaticRunActive.current ||
+      !story?.continuationPlan ||
+      story.world.chapter >= DEMO_CHAPTER_LIMIT ||
+      story.world.terminal
+    ) {
+      return;
+    }
+    automaticRunActive.current = true;
+    stopRequestedRef.current = false;
+    setAutomaticRun(true);
+    setStopRequested(false);
+    setRunMessage(null);
+    setBusy("turn");
+    let current = story;
+    const approvedThroughChapter = story.continuationPlan.endChapter;
+    try {
+      while (
+        current.continuationPlan?.endChapter === approvedThroughChapter &&
+        current.world.chapter < approvedThroughChapter &&
+        !current.world.terminal
+      ) {
+        const nextChapter = current.world.chapter + 1;
+        setGenerationChapter(nextChapter);
+        const result = await performRequest({
+          command: {
+            approvedThroughChapter,
+            expectedWorldVersion: current.world.version,
+            requestId: crypto.randomUUID(),
+            type: "continue_story",
+          },
+          kind: "command",
+        });
+        if (!result.ok || !result.story) break;
+        current = result.story;
+        if (stopRequestedRef.current) {
+          setRunMessage(`Stopped after chapter ${current.world.chapter}.`);
+          break;
+        }
+        if (current.world.chapter >= approvedThroughChapter) {
+          if (approvedThroughChapter < DEMO_CHAPTER_LIMIT) {
+            setRunMessage(`Decision ready at chapter ${current.world.chapter}.`);
+            break;
+          }
+          setRunMessage(`Chapter ${DEMO_CHAPTER_LIMIT} is ready for review.`);
+          break;
+        }
+        if (!current.continuationPlan) {
+          setRunMessage(`Decision ready at chapter ${current.world.chapter}.`);
+          break;
+        }
+        if (current.continuationPlan.endChapter !== approvedThroughChapter) {
+          setRunMessage("Stopped because the continuation plan changed.");
+          break;
+        }
+      }
+    } finally {
+      automaticRunActive.current = false;
+      stopRequestedRef.current = false;
+      setAutomaticRun(false);
+      setStopRequested(false);
+      setBusy(null);
+      setGenerationChapter(null);
+    }
+  }, [performRequest, story]);
+
+  const stopAfterCurrentChapter = useCallback(() => {
+    if (!automaticRunActive.current) return;
+    stopRequestedRef.current = true;
+    setStopRequested(true);
+  }, []);
 
   if (busy === "loading" && !story && !error) {
     return (
@@ -217,8 +317,11 @@ export function StoryApp({ characters }: StoryAppProps) {
   return (
     <StoryShell
       busy={busy === "turn"}
+      automaticRun={automaticRun}
       error={error}
-      onCommand={(command) =>
+      generationChapter={generationChapter}
+      onCommand={(command) => {
+        setGenerationChapter(story.world.chapter + 1);
         void runRequest({
           command: {
             ...command,
@@ -226,10 +329,14 @@ export function StoryApp({ characters }: StoryAppProps) {
             requestId: crypto.randomUUID(),
           },
           kind: "command",
-        })
-      }
+        });
+      }}
+      onContinue={() => void continueToDecision()}
       onRetry={retry}
+      onStop={stopAfterCurrentChapter}
+      runMessage={runMessage}
       story={story}
+      stopRequested={stopRequested}
       streamedProse={streamedProse}
     />
   );

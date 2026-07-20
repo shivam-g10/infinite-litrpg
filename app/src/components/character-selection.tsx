@@ -40,9 +40,6 @@ export function CharacterSelection({
           <span className="brand">Infinite LitRPG</span>
           <span className="story-name">Ashen Crown</span>
         </div>
-        <button className="text-action" disabled type="button">
-          Import save
-        </button>
       </header>
 
       <section className="selection-intro" aria-labelledby="selection-heading">
@@ -51,7 +48,7 @@ export function CharacterSelection({
       </section>
 
       <div className="selection-workspace">
-        <ol className="character-list" aria-label="Selectable characters">
+        <ol aria-label="Selectable characters" className="character-list" role="radiogroup">
           {characters.map((character, index) => {
             const selected = character.id === selectedId;
             return (
@@ -59,13 +56,16 @@ export function CharacterSelection({
                 className={selected ? "character-row is-selected" : "character-row"}
                 key={character.id}
               >
-                <button
-                  aria-pressed={selected}
-                  className="character-choice"
-                  disabled={busy}
-                  onClick={() => setSelectedId(character.id)}
-                  type="button"
-                >
+                <label className="character-choice">
+                  <input
+                    checked={selected}
+                    className="sr-only"
+                    disabled={busy}
+                    name="viewpoint-character"
+                    onChange={() => setSelectedId(character.id)}
+                    type="radio"
+                    value={character.id}
+                  />
                   <span className="character-number">{index + 1}</span>
                   <span aria-hidden="true" className="selection-rune">
                     {selected ? "⌘" : ""}
@@ -77,7 +77,7 @@ export function CharacterSelection({
                       {character.characterClass} · Level {character.level} · {character.location}
                     </small>
                   </span>
-                </button>
+                </label>
               </li>
             );
           })}
@@ -138,14 +138,6 @@ export function CharacterSelection({
           <span className="sr-only" id="viewpoint-lock-warning">
             Confirm permanent viewpoint lock.
           </span>
-          <button
-            className="secondary-action"
-            disabled={busy}
-            onClick={() => onLock(selectedCharacter.id)}
-            type="button"
-          >
-            Load seeded world
-          </button>
         </aside>
       </div>
 

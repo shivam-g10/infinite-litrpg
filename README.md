@@ -38,7 +38,9 @@ Start the app:
 npm run dev
 ```
 
-Open `http://127.0.0.1:3000`. Choose one of six characters. The viewpoint locks for that local world. Runtime state stays in ignored `data/ashen-crown.db`.
+Open `http://127.0.0.1:3000`. Choose one of six characters. The viewpoint locks for that local world. After the opening action, the reader can create routine chapters one at a time until the next meaningful act decision. The demo flow pauses after chapters 47 and 97 and stops at chapter 100. Runtime state stays in ignored `data/ashen-crown.db`.
+
+For a no-cost seeded review, the exact chapter-100 behavior proof, and the live cost boundary, use the [human review guide](docs/HUMAN_REVIEW.md). Six authenticated POV samples are ready in [SAMPLE_STORIES.md](docs/SAMPLE_STORIES.md).
 
 Set `OPENAI_NATIVE_MULTI_AGENT=true` to use the native Multi-agent beta. The default sequential Luna adapter preserves the same intent schema and deterministic resolver.
 
@@ -48,7 +50,7 @@ Product requests explicitly use Standard processing. Flex is isolated to the rel
 
 ```mermaid
 flowchart LR
-    U["Player action"] --> V["Deterministic validation"]
+    U["Player decision or routine continuation"] --> V["Deterministic validation"]
     L["Up to 3 Luna intent agents"] --> R["Single world resolver"]
     V --> R
     R --> S["Prospective state"]
@@ -93,7 +95,7 @@ Only the OpenAI Responses API is used.
 npm run check
 ```
 
-This runs format, lint, strict type checks, unit tests, 1,000 deterministic simulations, POV and chapter-350 evals, production build, desktop and mobile E2E tests, secret and client-bundle scans, and license checks.
+This runs format, lint, strict type checks, unit tests, 1,000 deterministic simulations, POV and chapter-350 evals, production build, desktop and mobile E2E tests, secret and client-bundle scans, license checks, the six-story packet check, dependency audit, and diff hygiene.
 
 Live API evals are separate and capped:
 
@@ -110,6 +112,7 @@ The smoke command defaults to Standard. The full npm script requires explicit co
 - Reader JSON excludes hidden world facts and other characters' private ledgers.
 - God Mode JSON is an explicit full-canon export.
 - Every request carries a UUID and expected world version for replay safety.
+- Multi-chapter continuation shows exact chapter count and worst-case cost, requires confirmation, and carries a server-validated stop chapter. Automatic continuation cannot cross a meaningful decision or chapter 100.
 - Per-chapter cost, retries, timeout, and background concurrency are bounded. Generation uses a tier-priced byte worst case first. When that bound would falsely block, the official input-token counter supplies an exact count plus a 512-token margin at the same tier. Counter failure keeps the byte bound. Returned tier mismatch fails, unknown response cost keeps its reservation, and failed exposure carries into later chapter retries.
 
 ## Build Week

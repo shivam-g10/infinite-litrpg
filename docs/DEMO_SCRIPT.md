@@ -14,7 +14,7 @@ Final recording uses a fresh local world and a real Standard-tier chapter reques
 
 Generation is variable. Start the final take only after one successful private rehearsal. If the real turn exceeds 60 seconds or fails, stop the take. Do not cut a failure into apparent success. Diagnose it, keep its trace, then record a new full take.
 
-For no-cost layout rehearsal only, start from an empty `data/` directory and run `npm run demo:seed`. It restores the authenticated Rowan chapter-1 checkpoint from the registered local live report, verifies its report hash and trace, and makes no model request. It refuses to overwrite a save. This path rehearses Reader, God Mode, and evidence timing; it does not replace the real click-to-result segment in the final video.
+For no-cost layout rehearsal only, start from an empty `data/` directory and run `npm run demo:seed`. It restores the authenticated Rowan chapter-1 checkpoint from tracked evidence, verifies its result hash, and makes no model request. It refuses to overwrite a save. This path rehearses Reader, God Mode, continuation confirmation, and evidence timing; it does not replace the real click-to-result segment in the final video.
 
 ## 0:00 to 0:18 — One Life
 
@@ -46,11 +46,11 @@ Point to accepted and rejected intents, world version, and accepted delta.
 
 ## 1:08 to 1:38 — Safe Chapter
 
-Return to Reader. Show chapter prose and next choices.
+Return to Reader. Show chapter prose and `Continue to next decision`. Open its confirmation, show the exact chapter count and maximum cost, then cancel it for the timed demo.
 
 Say:
 
-> Luna writes only from Rowan's supplied knowledge. The draft is buffered, length-checked, audited for canon and hidden facts, then replayed as a stream. Rejected prose never reaches the reader.
+> Luna writes only from Rowan's supplied knowledge. The draft is buffered, length-checked, audited for canon and hidden facts, then replayed as a stream. Routine chapters can continue automatically, but the app stops for meaningful act decisions. The cost is explicit before a multi-chapter run starts.
 
 ## 1:38 to 2:04 — Trace and Cost
 
@@ -62,11 +62,11 @@ Say:
 
 ## 2:04 to 2:24 — Hard Limits
 
-Show terminal test output or the submission evidence page.
+Show the chapter-100 browser test and terminal test output or the submission evidence page.
 
 Say:
 
-> Offline evaluation runs one thousand resolved simulations, every act boundary, and the full chapter horizon. Chapter 350 becomes terminal. Chapter 351 is blocked before any model call.
+> The browser path pauses for decisions after chapters 47 and 97, commits chapter 100, and makes no chapter-101 request. The full engine still ends at chapter 350, and chapter 351 is blocked before any model call.
 
 ## 2:24 to 2:45 — Codex Build Story
 
@@ -91,3 +91,4 @@ End on Reader plus title:
 - Upload as public YouTube video.
 - Watch exported video once at normal speed before approval.
 - Confirm the final take shows a real action click through committed Reader output.
+- Do not start the long continuation batch during the three-minute recording. Show and cancel its explicit confirmation, then use provider-free test evidence for chapter 100.

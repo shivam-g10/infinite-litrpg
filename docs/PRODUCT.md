@@ -25,15 +25,16 @@ Each starts with class, level, stats, skills, inventory, location, goals, belief
 
 ## User Loop
 
-1. Load seeded world or generate one variant.
+1. Load the seeded Ashen Crown world.
 2. Inspect six public character profiles.
 3. Lock viewpoint.
-4. Choose one of two valid actions or enter custom action.
+4. Choose one of two valid actions or enter a custom action when the story reaches a meaningful decision.
 5. Relevant background actors propose independent intents.
 6. World Director resolves one canonical delta.
 7. Read streamed POV-safe chapter.
 8. Inspect visible state, progression, clock, cost, and latency.
-9. Repeat until terminal outcome or chapter 350.
+9. Continue routine chapters automatically, one atomic chapter at a time, until the next meaningful decision.
+10. Stop the demo at chapter 100. Continue the full story until terminal outcome or chapter 350.
 
 ## Narrative Contract
 
@@ -42,7 +43,7 @@ Each starts with class, level, stats, skills, inventory, location, goals, belief
 - Off-screen events surface through consequences, rumors, messages, divination, reports, or encounters.
 - User controls chosen character attempt, not world outcome.
 - Impossible actions fail honestly. They never rewrite canon.
-- Two suggested actions must be materially different, possible, and consequential.
+- At meaningful decisions, two suggested actions must be materially different, possible, and consequential.
 
 ## Success
 

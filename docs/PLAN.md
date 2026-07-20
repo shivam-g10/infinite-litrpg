@@ -68,6 +68,9 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 - [x] Reader mode hides private state.
 - [x] God Mode shows intents, resolution, delta, usage, cost, and latency.
 - [x] Export POV-safe Reader state, Markdown, and explicit full God Mode JSON.
+- [x] Replace routine chapter prompts with deterministic continuation to meaningful decisions.
+- [x] Stop the demo run after chapter 100 without changing the chapter-350 engine.
+- [x] Keep committed prose visible with truthful progress, stop, retry, and cost-bound copy.
 
 ### Phase 7: Hardening
 
@@ -75,7 +78,7 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 - [x] Browser smoke path green.
 - [ ] Current prompt native Multi-agent live smoke path green. Sequential Rowan proof is current; native proof predates prompt `1.4.11`.
 - [x] Strict offline review-packet generator rejects partial, false-gate, and mixed-tier reports.
-- [ ] Six POV review packets generated and agent-reviewed.
+- [x] Six POV review packets generated and agent-reviewed. Full report approval remains separate.
 - [x] Secret scan and dependency-license check green.
 - [x] Clean-clone setup verified.
 
@@ -150,6 +153,10 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 - The authorized selective resume spent `$0.01183` before report validation failed. ADR-017 keeps discarded-slot turns as authenticated historical evidence, fixes premature lock release, catches explicit resource transitions, and adds exact no-network settled-run report reconciliation. The provider-free receipt is materialized and registered at SHA-256 `af6e64f1481e2220001e4408d4b3b20f42cf19861c72dc0d2d4bc7e62c18b7ec`; durable exposure is `$2.959276675` and headroom is `$0.040723325`. No further paid call may run before canon-preserving re-narration is implemented and verified.
 - ADR-018 adds a narrative-only replacement path for the three human-rejected cells. It parses and exactly restages authenticated state, action, intents, delta, and frame before budget creation; runs no agents, frame generation, state writer, or store commit; keeps dependent chapter 2 results; and binds source and replacement identities around one canonical hash. Narration and recovery stay at reasoning `none`; audit uses reasoning `low`. A `$0.0135` target cap gives a hard three-target maximum of `$0.0405`, projected exposure `$2.999776675`, and headroom `$0.000223325`.
 - Test-first review caught two pre-release defects: target-count projection conflicted with the strict full-report schema, and a tampered non-transition milestone could reach narration. The strict three-target report and action re-resolution regressions failed before the fixes. Independent re-audit and `npm run check` now pass 263 tests, all offline evals, production build, 17 E2E passes with one intentional desktop skip, both security scans, and 526 licenses. No provider call ran.
+- The authorized re-narration chain corrected Rowan chapter 2 but did not commit Elara or reach Lucan. The latest Elara attempt stopped safely before an unaffordable request. Durable exposure is `$2.993429175`; only `$0.006570825` remains, with no lock or active or uncertain reservation. No new paid command is prepared.
+- ADR-019 uses shared deterministic milestone policy for player input. Routine continuation submits the persisted application-owned recommendation one atomic chapter at a time, stops after chapters 47 and 97 for decisions, and ends the demo run at chapter 100 without a chapter-101 request.
+- Primary UX research supports progressive disclosure, truthful status, polite live-region updates, and rare interruption. Browser QA found no horizontal overflow or console warning at desktop or phone width. The foreground run deliberately does not claim reload-safe background generation.
+- A provider-free generator now derives one passed chapter for each of the six POVs from authenticated human-reviewed packets. The tracked Markdown pack is reproducible and cannot silently select a rejected chapter.
 
 ## Decision Log
 
@@ -163,6 +170,7 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 - ADR-016 rejects explicit resource snapshots, location claims, route orientation, and POV-owned fact attribution that contradict staged canon. Human review remains authoritative outside those narrow deterministic checks.
 - ADR-017 keeps paid evidence append-only. Superseded turns must come from an authenticated source boundary; an uncommitted current suffix uses separate checkpoint-bound settled-failure provenance. Final report commitment gates ledger release, and authenticated crash retry is idempotent.
 - ADR-018 permits canon-preserving prose replacement only after exact source authentication and deterministic re-resolution. It records actual reasoning configuration, keeps replacement evidence crash-safe, and rejects the full target plan before client creation if its hard ceilings exceed the global ledger cap.
+- ADR-019 permits routine continuation only when shared milestone policy says no player decision is due. It uses the persisted application-owned recommendation, keeps one atomic request per chapter, and treats chapter 100 as a UI horizon rather than terminal canon.
 - ADR-010 permits official input-token counting to narrow a byte reservation. Failed counting keeps the byte bound. Actual overrun aborts before commit with exact accounting.
 - Prompt `1.4.9` distinguishes reader access to selected-POV private canon from an in-world knowledge transfer. It does not auto-approve empty leak lists or weaken forbidden fact and remote-effect checks.
 - ADR-011 replaces pair-only live recovery and static suite rejection with authenticated prefix recovery plus durable request-level global reservations. Static projection stays visible but cannot reclaim or spend exposure.
@@ -174,8 +182,8 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 
 ## Outcomes and Retrospective
 
-- Phases 1 through 4 and Phase 6 are implemented. Offline contracts, deterministic transitions, knowledge boundaries, atomic storage, both OpenAI adapters, product UI, README, architecture, and current screenshots are green. Phase 5 has a complete automated matrix but awaits a human-approved corrected report. The real-click video rehearsal and current native live proof remain open.
+- Phases 1 through 4 and Phase 6 are implemented. Offline contracts, deterministic transitions, knowledge boundaries, atomic storage, both OpenAI adapters, the simplified reader, chapter-100 demo path, six-story review pack, README, architecture, and current screenshots are green. Phase 5 still awaits a human-approved corrected report. The public real-click video and current native live proof remain open user and paid gates.
 
 ## Current Milestone
 
-Phase 5 release eval: commit `3fe329b` contains the canon-preserving re-narration slice and hard `$3` preflight. The strict three-target full report, 263 tests, offline evals, build, E2E, security, licenses, dependency audit, three independent audits, real settled-receipt probe, and isolated clean-clone gate pass. The registered settled receipt remains the source; no provider call ran. Next: obtain fresh authority for the exact `$0.0135` three-target Flex command.
+Phase 6 human review and demo: the centered Reader, meaningful-decision continuation, truthful stop and retry behavior, chapter-100 boundary, provider-free seeded evidence, six-POV sample pack, desktop and mobile browser QA, and full non-live gate are ready. Stop for human testing after clean-clone verification and final evidence capture. Phase 5 paid correction remains separate; no paid command is prepared.

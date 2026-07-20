@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import {
@@ -17,14 +18,34 @@ import { describe, expect, it } from "vitest";
 
 import { StoryService } from "../app/src/server/story/story-service";
 import { StoryStore } from "../app/src/server/storage/story-store";
-import { defaultDemoReportPath } from "../scripts/seed-demo-evidence";
+import { defaultDemoEvidencePath, parseDemoEvidence } from "../scripts/seed-demo-evidence";
 import { restoreRetainedChapter, type LiveResult } from "./run-live";
 
 describe("retained chapter state restore", () => {
-  it("defaults the provider-free demo to the current settled receipt", () => {
-    expect(defaultDemoReportPath("C:\\repo")).toBe(
-      resolve("C:\\repo", "evals", "reports", "live-full-sequential-settled-1.json"),
+  it("defaults the provider-free demo to tracked clean-clone evidence", () => {
+    expect(defaultDemoEvidencePath("C:\\repo")).toBe(
+      resolve("C:\\repo", "docs", "evidence", "rowan-chapter-1-demo.json"),
     );
+  });
+
+  it("strict-parses the tracked Rowan chapter 1 evidence", () => {
+    const candidate = JSON.parse(readFileSync(defaultDemoEvidencePath(), "utf8")) as unknown;
+    const evidence = parseDemoEvidence(candidate);
+    expect(evidence.result.povId).toBe("rowan-ashborn");
+    expect(evidence.result.chapter).toBe(1);
+    expect(evidence.result.canonicalNarrativeInput).toBeDefined();
+    expect(evidence.source.reportSha256).toMatch(/^[a-f0-9]{64}$/u);
+  });
+
+  it("rejects otherwise-valid result drift against the tracked result hash", () => {
+    const candidate = JSON.parse(readFileSync(defaultDemoEvidencePath(), "utf8")) as unknown;
+    const evidence = parseDemoEvidence(candidate);
+    expect(() =>
+      parseDemoEvidence({
+        ...evidence,
+        result: { ...evidence.result, latencyMs: evidence.result.latencyMs + 1 },
+      }),
+    ).toThrow("Demo result hash");
   });
 
   it("authenticates and restores a chapter 1 prefix without model work", () => {

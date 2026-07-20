@@ -6,6 +6,7 @@ import { isDeepStrictEqual } from "node:util";
 
 import {
   CONTRACT_VERSION,
+  DEMO_CHAPTER_LIMIT,
   ChapterFrameModelCandidateSchema,
   ChapterFrameSchema,
   NARRATIVE_AUDIT_DIMENSIONS,
@@ -32,6 +33,7 @@ import {
   canonicalizeChapterFrameCandidate,
   decodeChapterFrameModelCandidate,
   getClockPolicy,
+  planRoutineContinuation,
   resolveTurn,
   stageWorldDelta,
   validateChapterDraft,
@@ -220,7 +222,14 @@ export interface CustomActionCommand {
   readonly type: "custom_action";
 }
 
-export type TurnCommand = TakeChoiceCommand | CustomActionCommand;
+export interface ContinueStoryCommand {
+  readonly approvedThroughChapter: number;
+  readonly expectedWorldVersion: number;
+  readonly requestId: string;
+  readonly type: "continue_story";
+}
+
+export type TurnCommand = TakeChoiceCommand | CustomActionCommand | ContinueStoryCommand;
 
 export class StoryServiceError extends Error {
   readonly status: number;
@@ -428,6 +437,20 @@ export class StoryService {
     }
     if (before.terminal) throw new StoryServiceError("This story is terminal", 409);
     if (before.lockedPovId === null) throw new StoryServiceError("Viewpoint is not locked", 409);
+    if (command.type === "continue_story") {
+      const plan = this.continuationPlanFor(before);
+      if (!plan) {
+        throw new StoryServiceError(
+          before.chapter >= DEMO_CHAPTER_LIMIT
+            ? `Automatic demo continuation stops at chapter ${DEMO_CHAPTER_LIMIT}`
+            : "This chapter needs a player decision",
+          409,
+        );
+      }
+      if (command.approvedThroughChapter !== plan.endChapter) {
+        throw new StoryServiceError("Continuation approval is stale or exceeds the safe run", 409);
+      }
+    }
 
     const startedAt = performance.now();
     const turnId = randomUUID();
@@ -471,8 +494,10 @@ export class StoryService {
       const calls: ModelCallTrace[] = [];
       let playerAction: PlayerAction;
 
-      if (command.type === "take_action") {
-        const choice = this.currentChoices(before).find(({ id }) => id === command.choiceId);
+      if (command.type === "take_action" || command.type === "continue_story") {
+        const choice = this.currentChoices(before).find(({ id }) =>
+          command.type === "take_action" ? id === command.choiceId : id === "choice-1",
+        );
         if (!choice) throw new StoryServiceError("Choice is stale or unknown", 409);
         playerAction = PlayerActionSchema.parse({
           action: choice.action,
@@ -1096,6 +1121,18 @@ export class StoryService {
     return this.store.loadChapter(state.id, state.chapter)?.choices ?? [];
   }
 
+  private continuationPlanFor(state: WorldState): StoryView["continuationPlan"] {
+    const plan = planRoutineContinuation(state, DEMO_CHAPTER_LIMIT);
+    if (!plan || !this.currentChoices(state).some(({ id }) => id === "choice-1")) return null;
+    return {
+      ...plan,
+      maxCostUsd:
+        Math.round(plan.chapterCount * this.options.maxCostUsdPerChapter * 1_000_000_000) /
+        1_000_000_000,
+      maxCostUsdPerChapter: this.options.maxCostUsdPerChapter,
+    };
+  }
+
   private toView(state: WorldState): StoryView {
     if (state.lockedPovId === null) throw new StoryServiceError("Viewpoint is not locked", 500);
     const pov = state.characters.find(({ id }) => id === state.lockedPovId);
@@ -1111,6 +1148,7 @@ export class StoryService {
 
     return {
       adapterMode: trace?.adapterMode ?? "sequential",
+      continuationPlan: this.continuationPlanFor(state),
       chapter: latestChapter
         ? {
             choices: latestChapter.choices,
@@ -1178,6 +1216,12 @@ export class StoryService {
 
 export interface StoryView {
   readonly adapterMode: string;
+  readonly continuationPlan: {
+    readonly chapterCount: number;
+    readonly endChapter: number;
+    readonly maxCostUsd: number;
+    readonly maxCostUsdPerChapter: number;
+  } | null;
   readonly chapter: {
     readonly choices: readonly Choice[];
     readonly prose: string;

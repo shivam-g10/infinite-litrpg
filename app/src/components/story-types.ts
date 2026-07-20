@@ -115,6 +115,12 @@ export interface GodModeView {
 }
 
 export interface StoryView {
+  readonly continuationPlan: {
+    readonly chapterCount: number;
+    readonly endChapter: number;
+    readonly maxCostUsd: number;
+    readonly maxCostUsdPerChapter: number;
+  } | null;
   readonly world: WorldView;
   readonly pov: PovView;
   readonly chapter: ChapterView | null;
@@ -137,6 +143,30 @@ const EMPTY_USAGE: UsageView = {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeContinuationPlan(value: unknown): StoryView["continuationPlan"] {
+  if (value === null) return null;
+  if (!isRecord(value)) throw new Error("Story response has an invalid continuation plan.");
+  const chapterCount = numberAt(value, "chapterCount");
+  const endChapter = numberAt(value, "endChapter");
+  const maxCostUsd = numberAt(value, "maxCostUsd");
+  const maxCostUsdPerChapter = numberAt(value, "maxCostUsdPerChapter");
+  const expectedMaxCostUsd =
+    Math.round(chapterCount * maxCostUsdPerChapter * 1_000_000_000) / 1_000_000_000;
+  if (
+    !Number.isSafeInteger(chapterCount) ||
+    chapterCount < 1 ||
+    !Number.isSafeInteger(endChapter) ||
+    endChapter < 1 ||
+    endChapter > DEMO_CHAPTER_LIMIT ||
+    maxCostUsd <= 0 ||
+    maxCostUsdPerChapter <= 0 ||
+    maxCostUsd !== expectedMaxCostUsd
+  ) {
+    throw new Error("Story response has an invalid continuation plan.");
+  }
+  return { chapterCount, endChapter, maxCostUsd, maxCostUsdPerChapter };
 }
 
 function recordAt(record: Record<string, unknown>, key: string): Record<string, unknown> {
@@ -342,6 +372,7 @@ export function normalizeStoryPayload(payload: unknown): StoryView | null {
   return {
     adapterMode: stringAt(unwrapped, "adapterMode") || "sequential",
     chapter,
+    continuationPlan: normalizeContinuationPlan(unwrapped.continuationPlan),
     estimatedCostUsd: numberAt(unwrapped, "estimatedCostUsd", "costUsd"),
     godMode: normalizeGodMode(godModeSource),
     latencyMs: numberAt(unwrapped, "latencyMs"),
@@ -381,3 +412,4 @@ export function errorMessageFromPayload(payload: unknown, fallback: string): str
   if (!isRecord(payload)) return fallback;
   return stringAt(payload, "error", "message") || fallback;
 }
+import { DEMO_CHAPTER_LIMIT } from "@infinite-litrpg/shared";

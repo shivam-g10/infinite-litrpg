@@ -2,16 +2,16 @@
 
 ## Submission Fields
 
-| Field               | Value                                                | State                  |
-| ------------------- | ---------------------------------------------------- | ---------------------- |
-| Project             | Infinite LitRPG                                      | Ready                  |
-| Track               | Apps for Your Life                                   | Ready                  |
-| Tagline             | Choose one life. The world keeps moving without you. | Ready                  |
-| Repository          | `https://github.com/shivam-g10/infinite-litrpg`      | Public; build unpushed |
-| License             | MIT                                                  | Ready                  |
-| Demo video          | Public YouTube URL                                   | User recording gate    |
-| Codex Session ID    | Primary build task `/feedback` ID                    | User input gate        |
-| Final live evidence | Twelve valid chapters across six POVs                | Paid resume gate       |
+| Field               | Value                                                | State                   |
+| ------------------- | ---------------------------------------------------- | ----------------------- |
+| Project             | Infinite LitRPG                                      | Ready                   |
+| Track               | Apps for Your Life                                   | Ready                   |
+| Tagline             | Choose one life. The world keeps moving without you. | Ready                   |
+| Repository          | `https://github.com/shivam-g10/infinite-litrpg`      | Public; build unpushed  |
+| License             | MIT                                                  | Ready                   |
+| Demo video          | Public YouTube URL                                   | User recording gate     |
+| Codex Session ID    | Primary build task `/feedback` ID                    | User input gate         |
+| Final live evidence | Human-approved corrected six-POV report              | Paid correction blocked |
 
 ## Paste-Ready Description
 
@@ -31,6 +31,8 @@ Everything runs locally with SQLite and the user's OpenAI API key. There is no a
 - Deterministic single-writer canon and atomic SQLite commits.
 - POV knowledge filtering plus independent narrative audit.
 - Two suggested choices and strict custom-action translation.
+- Routine continuation to meaningful decisions with exact batch cost confirmation.
+- Chapter-100 demo horizon without changing the chapter-350 engine.
 - Reader and full-canon God Mode views.
 - Exact model, service-tier, token, cost, latency, retry, and state-hash traces.
 - One thousand offline simulations and hard chapter-351 rejection.
@@ -67,8 +69,9 @@ Key product decisions stayed explicit: one canonical writer, selected-POV knowle
 3. Copy `.env.example` to `.env` and add an OpenAI API key with GPT-5.6 access.
 4. Run `npm run dev`.
 5. Open `http://127.0.0.1:3000`.
-6. Select Rowan, take a suggested action, read the committed chapter, then open God Mode.
-7. Run `npm run check` for every non-live gate.
+6. Select Rowan, take a suggested action, read the committed chapter, and inspect the exact `Continue to next decision` plan.
+7. Open God Mode.
+8. Run `npm run check` for every non-live gate.
 
 No sample data import is needed. The Ashen Crown world seeds automatically into ignored local SQLite state.
 
@@ -77,6 +80,8 @@ No sample data import is needed. The Ashen Crown world seeds automatically into 
 - [README and setup](../README.md)
 - [Architecture](ARCHITECTURE.md)
 - [Current verified status](STATUS.md)
+- [Human review guide](HUMAN_REVIEW.md)
+- [Six POV story samples](SAMPLE_STORIES.md)
 - [Eval contract](../evals/README.md)
 - [Narrative rubric](../evals/RUBRIC.md)
 - [Desktop reader](screenshots/reader-desktop.png)

@@ -15,6 +15,8 @@ import {
   buildChapterChoiceOptions,
   canonicalizeChapterFrameCandidate,
   decodeChapterFrameModelCandidate,
+  planRoutineContinuation,
+  requiresPlayerDecision,
   validateChapterDraft,
   validateChapterFrameSafety,
   validateNarrativeStateClaims,
@@ -23,6 +25,76 @@ import {
 import { validateWorldState } from "./validation";
 
 describe("narrative gates", () => {
+  it("requires player input only for the opening and incomplete milestone locks", () => {
+    const state = seedState();
+    expect(requiresPlayerDecision(state)).toBe(true);
+
+    state.calendar.day = 2;
+    state.calendar.label = "Year 1, Ashfall 2";
+    state.chapter = 1;
+    state.version = 2;
+    expect(requiresPlayerDecision(state)).toBe(false);
+
+    state.arcClock.convergencePressure = true;
+    state.calendar.day = 48;
+    state.calendar.label = "Year 1, Ashfall 48";
+    state.chapter = 47;
+    state.version = 48;
+    expect(requiresPlayerDecision(state)).toBe(true);
+
+    const milestone = state.arcClock.milestones.find(({ act }) => act === state.act);
+    if (!milestone) throw new Error("Act milestone missing");
+    milestone.completed = true;
+    expect(requiresPlayerDecision(state)).toBe(false);
+
+    state.terminal = true;
+    state.terminalReason = "Test ending";
+    expect(requiresPlayerDecision(state)).toBe(false);
+  });
+
+  it("plans routine continuation only through the next decision or chapter 100", () => {
+    const state = seedState();
+    expect(planRoutineContinuation(state, 100)).toBeNull();
+
+    state.calendar.day = 2;
+    state.calendar.label = "Year 1, Ashfall 2";
+    state.chapter = 1;
+    state.version = 2;
+    expect(planRoutineContinuation(state, 100)).toEqual({ chapterCount: 46, endChapter: 47 });
+
+    state.arcClock.convergencePressure = true;
+    state.calendar.day = 48;
+    state.calendar.label = "Year 1, Ashfall 48";
+    state.chapter = 47;
+    state.version = 48;
+    expect(planRoutineContinuation(state, 100)).toBeNull();
+
+    const actOne = state.arcClock.milestones.find(({ act }) => act === 1);
+    if (!actOne) throw new Error("Act one milestone missing");
+    actOne.completed = true;
+    state.calendar.day = 49;
+    state.calendar.label = "Year 1, Ashfall 49";
+    state.chapter = 48;
+    state.version = 49;
+    expect(planRoutineContinuation(state, 100)).toEqual({ chapterCount: 49, endChapter: 97 });
+
+    const actTwo = state.arcClock.milestones.find(({ act }) => act === 2);
+    if (!actTwo) throw new Error("Act two milestone missing");
+    actTwo.completed = true;
+    state.act = 2;
+    state.calendar.day = 99;
+    state.calendar.label = "Year 1, Ashfall 99";
+    state.chapter = 98;
+    state.version = 99;
+    expect(planRoutineContinuation(state, 100)).toEqual({ chapterCount: 2, endChapter: 100 });
+
+    state.calendar.day = 101;
+    state.calendar.label = "Year 1, Ashfall 101";
+    state.chapter = 100;
+    state.version = 101;
+    expect(planRoutineContinuation(state, 100)).toBeNull();
+  });
+
   it("decodes the compact frame candidate without losing title or option IDs", () => {
     expect(
       decodeChapterFrameModelCandidate({
