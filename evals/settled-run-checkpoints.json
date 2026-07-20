@@ -17,7 +17,7 @@
         },
         {
           "path": "shared/src/engine/narrative.ts",
-          "sha256": "a8475ebdad246672b8f45f4b2ad8d13e2a30c143221adfe74f5bfbe2789af244"
+          "sha256": "49cde1e2545aa8c04435512d1d7546230ed0819d33e3b1b59e4d7fe33d667b03"
         }
       ],
       "expectedSidecar": {

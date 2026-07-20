@@ -425,6 +425,9 @@ describe("narrative gates", () => {
       "He kept his mana from falling from eighteen to sixteen.",
       "His mana refused to fall from eighteen to sixteen.",
       "His mana remained steady, not falling from eighteen to sixteen.",
+      "His mana remained full rather than falling from eighteen to sixteen.",
+      "His mana stayed full instead of dropping from eighteen to sixteen.",
+      "His mana stayed full without falling from eighteen to sixteen.",
       "His reserve did not fall from eighteen to sixteen mana.",
       "Rather than let his reserve fall from eighteen to sixteen mana, Rowan held back.",
       "If his reserve fell from eighteen to sixteen mana, he would stagger.",
@@ -447,6 +450,20 @@ describe("narrative gates", () => {
         elaraBefore,
         elaraAfter,
         "Her mana fell from ninety-six to ninety-four.",
+      ),
+    ).toEqual([expect.objectContaining({ code: "INVALID_SCHEMA", path: "prose" })]);
+    expect(
+      validateNarrativeStateClaims(
+        elaraBefore,
+        elaraAfter,
+        "Nyra watched as Elara drew on her mana, which fell from ninety-six to ninety-four.",
+      ),
+    ).toEqual([expect.objectContaining({ code: "INVALID_SCHEMA", path: "prose" })]);
+    expect(
+      validateNarrativeStateClaims(
+        elaraBefore,
+        elaraAfter,
+        "Nyra watched Elara draw on her own mana, which fell from ninety-six to ninety-four.",
       ),
     ).toEqual([expect.objectContaining({ code: "INVALID_SCHEMA", path: "prose" })]);
   });

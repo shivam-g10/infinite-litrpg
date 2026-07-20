@@ -697,17 +697,19 @@ function resourceClaimBelongsToPov(
     if (owner.pronoun === "their") return false;
     const femaleIds = new Set(["elara-voss", "nyra-vale"]);
     const expectsFemale = owner.pronoun === "her";
-    const leadingPronoun = sentencePrefix
-      .trimStart()
-      .match(/^(he|she)\b/iu)?.[1]
-      ?.toLowerCase();
-    if (leadingPronoun !== undefined) {
-      return (
-        (leadingPronoun === "she") === expectsFemale &&
-        femaleIds.has(context.povId) === expectsFemale
-      );
+    let clauseStart = 0;
+    for (const boundary of sentencePrefix.matchAll(
+      /\b(?:after|although|and|as|because|before|once|since|though|when|while)\b/giu,
+    )) {
+      if (boundary.index >= owner.index) break;
+      clauseStart = boundary.index + boundary[0].length;
     }
+    let firstClauseCompatibleName: {
+      readonly characterId: string;
+      readonly index: number;
+    } | null = null;
     let firstCompatibleName: { readonly characterId: string; readonly index: number } | null = null;
+    let lastCompatibleName: { readonly characterId: string; readonly index: number } | null = null;
     for (const character of context.characters) {
       if (femaleIds.has(character.id) !== expectsFemale) continue;
       for (const variant of [character.name, character.name.split(/\s+/u)[0]!]) {
@@ -719,8 +721,38 @@ function resourceClaimBelongsToPov(
           ) {
             firstCompatibleName = { characterId: character.id, index: nameMatch.index };
           }
+          if (
+            nameMatch.index < owner.index &&
+            (lastCompatibleName === null || nameMatch.index > lastCompatibleName.index)
+          ) {
+            lastCompatibleName = { characterId: character.id, index: nameMatch.index };
+          }
+          if (
+            nameMatch.index >= clauseStart &&
+            nameMatch.index < owner.index &&
+            (firstClauseCompatibleName === null ||
+              nameMatch.index < firstClauseCompatibleName.index)
+          ) {
+            firstClauseCompatibleName = { characterId: character.id, index: nameMatch.index };
+          }
         }
       }
+    }
+    if (clauseStart > 0 && firstClauseCompatibleName !== null) {
+      return firstClauseCompatibleName.characterId === context.povId;
+    }
+    if (clauseStart === 0 && lastCompatibleName !== null) {
+      return lastCompatibleName.characterId === context.povId;
+    }
+    const leadingPronoun = sentencePrefix
+      .trimStart()
+      .match(/^(he|she)\b/iu)?.[1]
+      ?.toLowerCase();
+    if (leadingPronoun !== undefined) {
+      return (
+        (leadingPronoun === "she") === expectsFemale &&
+        femaleIds.has(context.povId) === expectsFemale
+      );
     }
     if (firstCompatibleName !== null) {
       return firstCompatibleName.characterId === context.povId;
@@ -757,7 +789,7 @@ function resourceClaimIsDeniedOrHypothetical(
     "iu",
   );
   const preventionAfterResource = new RegExp(
-    `^${escapedResource}\\b(?:\\s+(?:pool|reserve))?\\s+(?:from\\s+${RESOURCE_TRANSITION_VERB}\\b|refus(?:e|ed|es|ing)\\s+to\\s+${RESOURCE_TRANSITION_VERB}\\b)|^${escapedResource}\\b[^.!?\\n]{0,40}?\\bnot\\s+${RESOURCE_TRANSITION_VERB}\\b`,
+    `^${escapedResource}\\b(?:\\s+(?:pool|reserve))?\\s+(?:from\\s+${RESOURCE_TRANSITION_VERB}\\b|refus(?:e|ed|es|ing)\\s+to\\s+${RESOURCE_TRANSITION_VERB}\\b)|^${escapedResource}\\b[^.!?\\n]{0,40}?\\bnot\\s+${RESOURCE_TRANSITION_VERB}\\b|^${escapedResource}\\b[^.!?\\n]{0,48}?\\b(?:instead\\s+of|rather\\s+than|without)\\s+${RESOURCE_TRANSITION_VERB}\\b`,
     "iu",
   );
   if (
