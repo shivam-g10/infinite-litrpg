@@ -1508,7 +1508,7 @@ describe("live report version 9", () => {
 
   it("parses declared mixed Git provenance and rejects an unlisted result SHA", () => {
     const currentGitSha = "1234567";
-    const bridgeFiles = Array.from({ length: 27 }, (_, index) => ({
+    const bridgeFiles = Array.from({ length: 50 }, (_, index) => ({
       path: `release/bridge-${index}.txt`,
       sha256: "d".repeat(64),
     }));
@@ -1516,9 +1516,13 @@ describe("live report version 9", () => {
       ...bridgeFiles.map(({ path }) => path),
       "app/src/server/openai/stable.test.ts",
       "app/src/server/story/story-service.test.ts",
+      "app/src/server/openai/policy.test.ts",
+      "decisions/ADR-011-durable-live-eval-budget.md",
       "docs/ARCHITECTURE.md",
       "docs/PLAN.md",
       "docs/STATUS.md",
+      "evals/README.md",
+      "evals/live-spend-ledger.test.ts",
       "evals/resume-checkpoints.json",
       "evals/run-live-restore.test.ts",
       "evals/run-live.test.ts",
@@ -1586,7 +1590,7 @@ describe("live report version 9", () => {
       totalCostUsd: 0.03,
     };
 
-    expect(candidate.resume.changedPaths).toHaveLength(35);
+    expect(candidate.resume.changedPaths).toHaveLength(62);
     expect(LiveReportSchema.safeParse(candidate).success).toBe(true);
     expect(
       LiveReportSchema.safeParse({

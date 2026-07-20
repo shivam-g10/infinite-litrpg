@@ -95,17 +95,24 @@ export async function runNativeLunaWorldTick(
     BackgroundIntentBatchCandidateSchema,
     "background_intent_batch",
   );
-  const multiAgentOutputItems: NativeMultiAgentOutputItem[] = [];
+  let acceptedMultiAgentOutputItems: NativeMultiAgentOutputItem[] = [];
   const allowedActors = new Set(request.agents.map(({ actorId }) => actorId));
 
   const call = await runRetriedRequest({
     evaluate: (response: BetaResponse) => {
-      multiAgentOutputItems.push(...extractMultiAgentOutputItems(response.output));
       assertBetaResponseCompleted(response);
       const rootAgentName = request.rootAgentName ?? "root";
       const refusal = findRootRefusal(response.output, rootAgentName);
       if (refusal !== null) {
         throw new OpenAIRuntimeError("REFUSAL", refusal, { retryable: true });
+      }
+      const responseOutputItems = extractMultiAgentOutputItems(response.output);
+      if (!hasHostedMultiAgentEvidence(responseOutputItems, [rootAgentName])) {
+        throw new OpenAIRuntimeError(
+          "INVALID_OUTPUT",
+          "Luna response lacked matched hosted multi-agent spawn evidence",
+          { retryable: true },
+        );
       }
 
       const text = extractRootFinalText(response.output, rootAgentName);
@@ -152,6 +159,7 @@ export async function runNativeLunaWorldTick(
           index + 1,
         );
       });
+      acceptedMultiAgentOutputItems = responseOutputItems;
       return { data: IntentBatchSchema.parse({ intents }), responseId: response.id };
     },
     getResponseId: (response) => response.id,
@@ -193,7 +201,7 @@ export async function runNativeLunaWorldTick(
     batch: call.data,
     calls: [toCallSummary(null, call)],
     mode: "native-multi-agent",
-    multiAgentOutputItems,
+    multiAgentOutputItems: acceptedMultiAgentOutputItems,
   };
 }
 
@@ -291,6 +299,62 @@ function extractMultiAgentOutputItems(
   output: readonly BetaResponseOutputItem[],
 ): NativeMultiAgentOutputItem[] {
   return [...output];
+}
+
+export function hasHostedMultiAgentEvidence(
+  output: readonly unknown[],
+  rootAgentNames: readonly string[] = ["root", "/root"],
+): boolean {
+  const acceptedRootNames = new Set(rootAgentNames);
+  const calls = new Map<string, string>();
+  const outputs = new Map<string, string>();
+  let hasRootFinalMessage = false;
+
+  for (const item of output) {
+    if (!isRecord(item)) continue;
+    if (item.type === "multi_agent_call") {
+      if (typeof item.call_id === "string" && typeof item.action === "string") {
+        calls.set(item.call_id, item.action);
+      }
+      continue;
+    }
+    if (item.type === "multi_agent_call_output") {
+      if (typeof item.call_id === "string" && typeof item.action === "string") {
+        outputs.set(item.call_id, item.action);
+      }
+      continue;
+    }
+    if (item.type !== "message" || item.phase !== "final_answer") continue;
+    const agent = item.agent;
+    const isRoot =
+      agent === null ||
+      agent === undefined ||
+      (isRecord(agent) &&
+        typeof agent.agent_name === "string" &&
+        acceptedRootNames.has(agent.agent_name));
+    if (
+      isRoot &&
+      Array.isArray(item.content) &&
+      item.content.some(
+        (part) =>
+          isRecord(part) &&
+          part.type === "output_text" &&
+          typeof part.text === "string" &&
+          part.text.length > 0,
+      )
+    ) {
+      hasRootFinalMessage = true;
+    }
+  }
+
+  const hasMatchedSpawn = [...calls].some(
+    ([callId, action]) => action === "spawn_agent" && outputs.get(callId) === action,
+  );
+  return hasMatchedSpawn && hasRootFinalMessage;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function findRootRefusal(

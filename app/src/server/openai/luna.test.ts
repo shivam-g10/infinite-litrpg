@@ -26,19 +26,33 @@ describe("Luna world-tick adapters", () => {
       id: "ma_1",
       type: "multi_agent_call",
     } as const;
+    const callOutputItem = {
+      action: "spawn_agent",
+      call_id: "call_1",
+      id: "mao_1",
+      output: [{ text: "child complete", type: "output_text" }],
+      type: "multi_agent_call_output",
+    } as const;
     const rootMessage = messageItem(
       JSON.stringify({ intents: [{ c: "actor-one", ...intentCandidate() }] }),
       "root",
       "final_answer",
     );
-    const create = vi.fn().mockResolvedValue(betaResponse([childMessage, callItem, rootMessage]));
+    const create = vi
+      .fn()
+      .mockResolvedValue(betaResponse([childMessage, callItem, callOutputItem, rootMessage]));
     const parse = vi.fn();
 
     const result = await runLunaWorldTick(client({ create, parse }), request(true));
 
     expect(result.mode).toBe("native-multi-agent");
     expect(result.batch.intents).toEqual([canonicalIntent("actor-one", "intent-background-1-1")]);
-    expect(result.multiAgentOutputItems).toEqual([childMessage, callItem, rootMessage]);
+    expect(result.multiAgentOutputItems).toEqual([
+      childMessage,
+      callItem,
+      callOutputItem,
+      rootMessage,
+    ]);
     expect(parse).not.toHaveBeenCalled();
     expect(create).toHaveBeenCalledTimes(1);
     const body = create.mock.calls[0]?.[0] as {
@@ -73,7 +87,10 @@ describe("Luna world-tick adapters", () => {
   });
 
   it("binds explicit Flex to the native beta request and response", async () => {
+    const [callItem, callOutputItem] = hostedCallEvidence("call_flex");
     const response = betaResponse([
+      callItem,
+      callOutputItem,
       messageItem(
         JSON.stringify({ intents: [{ c: "actor-one", ...intentCandidate() }] }),
         "root",
@@ -105,6 +122,42 @@ describe("Luna world-tick adapters", () => {
       messageItem("root answer", "root", "final_answer"),
     ];
     expect(extractRootFinalText(output as unknown as BetaResponseOutputItem[])).toBe("root answer");
+  });
+
+  it("does not combine hosted spawn evidence across retries", async () => {
+    const callItem = {
+      action: "spawn_agent",
+      arguments: "{}",
+      call_id: "call_failed",
+      id: "ma_failed",
+      type: "multi_agent_call",
+    } as const;
+    const callOutputItem = {
+      action: "spawn_agent",
+      call_id: "call_failed",
+      id: "mao_failed",
+      output: [{ text: "child complete", type: "output_text" }],
+      type: "multi_agent_call_output",
+    } as const;
+    const validRoot = messageItem(
+      JSON.stringify({ intents: [{ c: "actor-one", ...intentCandidate() }] }),
+      "root",
+      "final_answer",
+    );
+    const create = vi
+      .fn()
+      .mockResolvedValueOnce(
+        betaResponse([callItem, callOutputItem, messageItem("not JSON", "root", "final_answer")]),
+      )
+      .mockResolvedValueOnce(betaResponse([validRoot]));
+    const tickRequest = request(true);
+    tickRequest.policy = { budget: new ChapterCostBudget(1), maxRetries: 1 };
+
+    await expectRuntimeError(
+      runLunaWorldTick(client({ create, parse: vi.fn() }), tickRequest),
+      "INVALID_OUTPUT",
+    );
+    expect(create).toHaveBeenCalledTimes(2);
   });
 
   it("does not silently fall back when native capability is enabled", async () => {
@@ -279,6 +332,25 @@ function messageItem(text: string, agentName: string, phase: "commentary" | "fin
     status: "completed",
     type: "message",
   } as const;
+}
+
+function hostedCallEvidence(callId: string) {
+  return [
+    {
+      action: "spawn_agent",
+      arguments: "{}",
+      call_id: callId,
+      id: `ma_${callId}`,
+      type: "multi_agent_call",
+    },
+    {
+      action: "spawn_agent",
+      call_id: callId,
+      id: `mao_${callId}`,
+      output: [{ text: "child complete", type: "output_text" }],
+      type: "multi_agent_call_output",
+    },
+  ] as const;
 }
 
 function betaResponse(output: readonly unknown[]): BetaResponse {

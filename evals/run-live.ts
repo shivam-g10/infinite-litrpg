@@ -43,6 +43,7 @@ import OpenAI from "openai";
 import { z } from "zod";
 
 import { OpenAIRuntimeError } from "../app/src/server/openai/errors";
+import { hasHostedMultiAgentEvidence } from "../app/src/server/openai/luna";
 import { pricingVersionForServiceTier } from "../app/src/server/openai/usage";
 import {
   StoryService,
@@ -69,7 +70,6 @@ const VERSION_8_REPORT_VERSION = 8;
 const REPORT_VERSION = 9;
 const MONEY_EPSILON_USD = 0.000_000_1;
 const MAX_RESUME_BRIDGE_FILES = 50;
-const MAX_RESUME_CHANGED_PATHS = 50;
 export const RENARRATION_AUDIT_REASONING_EFFORT = "none" as const;
 export const RENARRATION_AUDIT_MAX_OUTPUT_TOKENS = 64 as const;
 export const RENARRATION_NARRATION_DIRECTIVE =
@@ -88,6 +88,7 @@ const RESUME_NON_RUNTIME_PATHS = new Set([
   "evals/run-live-restore.test.ts",
   "evals/run-live.test.ts",
 ]);
+const MAX_RESUME_CHANGED_PATHS = MAX_RESUME_BRIDGE_FILES + RESUME_NON_RUNTIME_PATHS.size;
 
 const PovIdSchema = z.enum(CHARACTER_IDS);
 const AdapterModeSchema = z.enum(["native-multi-agent", "sequential"]);
@@ -3952,59 +3953,11 @@ function assertChapterResult(
   }
 }
 
-export function multiAgentEvidenceMatchesAdapter(
+function multiAgentEvidenceMatchesAdapter(
   trace: Pick<LiveResult["trace"], "adapterMode" | "multiAgentOutputItems">,
 ): boolean {
   if (trace.adapterMode === "sequential") return trace.multiAgentOutputItems.length === 0;
-
-  const calls = new Map<string, string>();
-  const outputs = new Map<string, string>();
-  let hasRootFinalMessage = false;
-  for (const item of trace.multiAgentOutputItems) {
-    if (item.type === "multi_agent_call") {
-      if (typeof item.call_id === "string" && typeof item.action === "string") {
-        calls.set(item.call_id, item.action);
-      }
-      continue;
-    }
-    if (item.type === "multi_agent_call_output") {
-      if (typeof item.call_id === "string" && typeof item.action === "string") {
-        outputs.set(item.call_id, item.action);
-      }
-      continue;
-    }
-    if (item.type !== "message" || item.phase !== "final_answer") continue;
-    const agent = item.agent;
-    const isRoot =
-      agent === null ||
-      agent === undefined ||
-      (typeof agent === "object" &&
-        agent !== null &&
-        "agent_name" in agent &&
-        (agent.agent_name === "root" || agent.agent_name === "/root"));
-    const content = item.content;
-    if (
-      isRoot &&
-      Array.isArray(content) &&
-      content.some(
-        (part) =>
-          typeof part === "object" &&
-          part !== null &&
-          "type" in part &&
-          part.type === "output_text" &&
-          "text" in part &&
-          typeof part.text === "string" &&
-          part.text.length > 0,
-      )
-    ) {
-      hasRootFinalMessage = true;
-    }
-  }
-
-  const hasMatchedSpawn = [...calls].some(
-    ([callId, action]) => action === "spawn_agent" && outputs.get(callId) === action,
-  );
-  return hasMatchedSpawn && hasRootFinalMessage;
+  return hasHostedMultiAgentEvidence(trace.multiAgentOutputItems);
 }
 
 export function buildRenarratedLiveResult(
