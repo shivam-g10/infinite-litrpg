@@ -2,7 +2,7 @@
 
 - Updated: 2026-07-20
 - Layer: Release evaluation
-- Current phase: Phase 7 release-artifact checkpoint before Flex recovery
+- Current phase: Phase 5 Flex resume authority gate
 - Repository: initialized on `main`
 - Remote: public `https://github.com/shivam-g10/infinite-litrpg`; current local build not pushed
 - Initial commit: `39b19a2` (`chore: scaffold agent workflow`)
@@ -24,13 +24,13 @@
 - The first paid Flex matrix completed Rowan chapters 1 and 2, then failed Elara chapter 1. Drafts were 789, 850, and 768 words. A coherent 91-word continuation for the 850-word draft was rejected against the requested 50-to-75-word range.
 - Durable exposure is `$2.841054175`; headroom is `$0.158945825`. Nineteen known Flex attempts cost `$0.029972`. There is no run lock, active reservation, or uncertain Flex reservation.
 - ADR-015 has the nonpaid fix and named regression. Recovery now covers 750 to 899 words, keeps the model target at 900 to 925, accepts a deterministic overshoot only through 949, then reruns the unchanged absolute validator and full audit.
-- Reviewed runtime checkpoint `1c5d0c6` passes the full local gate, zero-vulnerability audit, exact resume bridge, fresh-clone verification, and ledger preflight. The no-generation release-artifact slice passes the full local gate and awaits checkpoint review plus fresh-clone verification.
+- Runtime checkpoint `1c5d0c6` and release-artifact checkpoint `066f43e` pass the full local gate, zero-vulnerability audit, independent review, exact resume bridge, fresh-clone verification, and ledger preflight.
 - The twelve-cycle matrix, six-POV zero-leak proof, and review packets remain open.
 - Another paid resume requires explicit user authority. This is the current external blocker.
 
 ## Next Action
 
-Commit the no-generation release-artifact checkpoint, authenticate the exact resume bridge, and run the clean-clone verifier. Then get explicit user authority before resuming the registered report. Never rerun automatically.
+Get explicit user authority before resuming the registered report. Never rerun automatically.
 
 ## Evidence Log
 
@@ -153,5 +153,6 @@ Commit the no-generation release-artifact checkpoint, authenticate the exact res
 - 2026-07-20 current browser QA: `npm run demo:seed` authenticated report SHA-256 `447f860a0e918198d246fef37671f16db3664ef76887fba390eaaabc77f9eddd`, restored Rowan chapter 1, and made no model request. The in-app browser rendered all six profiles, changed Rowan detail to Elara on click, and showed one `Begin as Elara` control. Restored Reader and God Mode passed at desktop and mobile widths with one header, zero console errors or warnings, and no horizontal overflow. QA found and fixed desktop hash-label overlap and mobile intent-list overflow; E2E now regresses both. Three viewport screenshots replaced broken stitched captures.
 - 2026-07-20 release-artifact non-live gate: the first `npm run check` stopped only on Prettier drift in two files. After format, resume-bridge hardening, and independent-review fixes, `npm run check` exited 0 in 37.5 seconds: 226 tests across 17 files, all six offline gates, 1,000 simulations, chapter 351 blocked, production build, 17 E2E passes with one intentional desktop skip, secret scan across 187 working files plus ignored reports and Git history, client-bundle scan, and 526 package licenses passed. `npm audit --audit-level=low` and `git diff --check` exited 0 with zero vulnerabilities. The authenticated partial report matches 27 raw-byte bridge hashes; regressions cover the 30-file bridge ceiling, 35 changed paths, binary screenshots, and both call-level and attempt-level Flex evidence. Exact sanitized evidence is tracked at `docs/evidence/non-live-gates.md`. No generation ran.
 - 2026-07-20 release-artifact independent review: review found and closed marker-boundary injection, future-milestone exposure in the packet's POV-safe section, mutable manifest provenance, and synthetic demo chapter metadata. The strict packet path now cross-checks one exact marker pair and manifest headers, moves full arc milestones to the reviewer-only appendix, and rejects injection. Demo restore commits the exact authenticated chapter record; Reader now shows `Read the Ash Trail` and the report's choices. The obsolete automatic weak packet writer was removed. Strict typecheck and 38 focused packet, resume, and restore tests passed. Desktop and mobile screenshots were recaptured from exact evidence; mobile Reader and God Mode had zero horizontal overflow and browser logs had zero errors or warnings. No generation ran.
+- 2026-07-20 release-artifact clean checkpoint: commit `066f43e` (`chore(release): harden submission evidence`) contains the strict packet CLI, tracked trace, exact demo restore, responsive fixes, current screenshots, release research, and submission docs. Post-commit authentication proved source-SHA ancestry, 35 changed paths, 27 exact raw-byte bridge hashes, retained Rowan chapters 1 and 2, five pending POVs, and `$0.029972` retained attempt cost. `npm run verify:clean-clone` exited 0 in 54.1 seconds; its isolated fresh install reported zero vulnerabilities and passed 226 tests, all offline evals, production build, 17 E2E passes with one intentional skip, both security scans, and 526 licenses. No generation ran.
 
 Add exact command, date, exit code, cost, and report path after every future milestone gate.

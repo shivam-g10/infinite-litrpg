@@ -1,7 +1,7 @@
 # Non-Live Release Evidence
 
 - Verified: 2026-07-20
-- Scope: current release-artifact working tree before checkpoint commit
+- Scope: release-artifact checkpoint `066f43e4cfe5f52ad231c8d681439c146408705b`
 - Paid generation calls: zero
 
 ## Full Gate
@@ -20,6 +20,10 @@
 - Licenses: 526 installed packages passed.
 
 `npm audit --audit-level=low` exited `0` with zero vulnerabilities. `git diff --check` exited `0`.
+
+## Clean Clone
+
+`npm run verify:clean-clone` exited `0` in 54.1 seconds; the verifier reported its isolated gate in 50.8 seconds. A temporary clone of commit `066f43e4cfe5f52ad231c8d681439c146408705b` completed `npm ci` with zero vulnerabilities, then passed format, lint, strict typecheck, 226 tests, every offline eval, production build, 17 E2E passes with one intentional skip, both security scans, and 526 licenses.
 
 ## Resume Continuity Gate
 
