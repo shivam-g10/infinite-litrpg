@@ -1668,6 +1668,20 @@ describe("live report version 9", () => {
     };
 
     expect(LiveReportSchema.safeParse(candidate).success).toBe(true);
+    const inheritedSourceGitSha = "7654321";
+    const multiHop = structuredClone(candidate);
+    multiHop.narrativeCandidates[0]!.sourceGitSha = inheritedSourceGitSha;
+    for (const response of multiHop.narrativeResponses.slice(0, historicalResponses.length)) {
+      response.sourceGitSha = inheritedSourceGitSha;
+    }
+    Object.assign(multiHop.resume!, { sourceEvidenceGitShas: [inheritedSourceGitSha] });
+    expect(LiveReportSchema.safeParse(multiHop).success).toBe(true);
+    expect(
+      LiveReportSchema.safeParse({
+        ...multiHop,
+        resume: { ...multiHop.resume, sourceEvidenceGitShas: [] },
+      }).success,
+    ).toBe(false);
     expect(LiveReportSchema.safeParse({ ...candidate, supersededTurnIds: [] }).success).toBe(false);
     expect(
       LiveReportSchema.safeParse({

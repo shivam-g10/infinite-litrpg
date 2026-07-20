@@ -979,6 +979,7 @@ const Version9ResumeSchema = Version8ResumeSchema.omit({ sourceReportVersion: tr
     renarrations: z.array(RenarrationProvenanceSchema).max(CHARACTER_IDS.length).default([]),
     rerunFrom: z.array(RerunFromSchema).max(CHARACTER_IDS.length).default([]),
     sourceEvidenceBoundary: SourceEvidenceBoundarySchema.nullable().default(null),
+    sourceEvidenceGitShas: z.array(GitShaSchema).max(20).default([]),
     sourceReportVersion: z.union([
       z.literal(LEGACY_REPORT_VERSION),
       z.literal(VERSION_6_REPORT_VERSION),
@@ -988,7 +989,7 @@ const Version9ResumeSchema = Version8ResumeSchema.omit({ sourceReportVersion: tr
     ]),
   })
   .strict()
-  .superRefine(({ renarrate, renarrations, rerunFrom }, context) => {
+  .superRefine(({ renarrate, renarrations, rerunFrom, sourceEvidenceGitShas }, context) => {
     if (rerunFrom.length > 0 && renarrate.length > 0) {
       context.addIssue({ code: "custom", message: "Resume modes are mutually exclusive" });
     }
@@ -1000,6 +1001,9 @@ const Version9ResumeSchema = Version8ResumeSchema.omit({ sourceReportVersion: tr
       !isDeepStrictEqual([...targetKeys].sort(), [...provenanceKeys].sort())
     ) {
       context.addIssue({ code: "custom", message: "Re-narration provenance targets disagree" });
+    }
+    if (new Set(sourceEvidenceGitShas).size !== sourceEvidenceGitShas.length) {
+      context.addIssue({ code: "custom", message: "Source evidence Git SHAs repeat" });
     }
   });
 
@@ -1613,7 +1617,41 @@ function refineNarrativeEvidence(
     report.sourceGitSha,
     ...(report.resume === null ? [] : [report.resume.sourceGitSha]),
     ...(report.resume?.retainedResults.map(({ sourceGitSha }) => sourceGitSha) ?? []),
+    ...(report.resume !== null && "sourceEvidenceGitShas" in report.resume
+      ? report.resume.sourceEvidenceGitShas
+      : []),
   ]);
+  const inheritedSourceEvidenceGitShas =
+    report.resume !== null && "sourceEvidenceGitShas" in report.resume
+      ? report.resume.sourceEvidenceGitShas
+      : [];
+  const sourceEvidenceBoundary =
+    report.resume !== null && "sourceEvidenceBoundary" in report.resume
+      ? report.resume.sourceEvidenceBoundary
+      : null;
+  if (inheritedSourceEvidenceGitShas.length > 0) {
+    const authenticatedSourceGitShas = new Set(
+      sourceEvidenceBoundary === null
+        ? []
+        : [
+            ...candidates
+              .slice(0, sourceEvidenceBoundary.narrativeCandidateCount)
+              .map(({ sourceGitSha }) => sourceGitSha),
+            ...responses
+              .slice(0, sourceEvidenceBoundary.narrativeResponseCount)
+              .map(({ sourceGitSha }) => sourceGitSha),
+          ],
+    );
+    for (const [index, sourceGitSha] of inheritedSourceEvidenceGitShas.entries()) {
+      if (!authenticatedSourceGitShas.has(sourceGitSha)) {
+        context.addIssue({
+          code: "custom",
+          message: "Inherited source Git SHA is outside the authenticated evidence boundary",
+          path: ["resume", "sourceEvidenceGitShas", index],
+        });
+      }
+    }
+  }
   const expectedStateBeforeByResult = refineCommittedResultEvidence(report.results, context);
   const matchingAttempts = (
     phase: string,
@@ -3436,6 +3474,16 @@ function sourceEvidenceBoundary(
   };
 }
 
+function sourceEvidenceGitShas(report: ResumableLiveReport): string[] {
+  if (!("narrativeCandidates" in report) || !("narrativeResponses" in report)) return [];
+  return [
+    ...new Set([
+      ...report.narrativeCandidates.map(({ sourceGitSha }) => sourceGitSha),
+      ...report.narrativeResponses.map(({ sourceGitSha }) => sourceGitSha),
+    ]),
+  ].sort();
+}
+
 export function buildLiveReport(
   failure: unknown,
   ledgerSnapshot: LiveSpendSnapshot,
@@ -3579,6 +3627,7 @@ export function buildLiveReport(
             }),
             sourceChapterCostCapUsd: input.resumeReport.chapterCostCapUsd,
             sourceEvidenceBoundary: sourceEvidenceBoundary(input.resumeReport),
+            sourceEvidenceGitShas: sourceEvidenceGitShas(input.resumeReport),
             sourceGitSha: input.resumeReport.sourceGitSha,
             sourceReportPath: input.resumeReportPath,
             sourceReportSha256: input.resumeSource.sha256,

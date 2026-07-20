@@ -135,6 +135,72 @@
       "sourceReportPath": "evals/reports/live-full-sequential.json",
       "sourceReportSha256": "fb9295d7c33ca154c7e407894b807d4a371b83d5ef066d78eee05ee42d4c49d2",
       "startedAt": "2026-07-20T14:23:32.819Z"
+    },
+    {
+      "baselineAttemptCostUsd": 0.1709115,
+      "bridgeFiles": [
+        {
+          "path": "evals/run-live.ts",
+          "sha256": "d49f43bfcf26ea8ab7f18714aac23a043964dec3392dfbd866fbbdbb8be2bfef"
+        }
+      ],
+      "expectedSidecar": {
+        "attemptCount": 109,
+        "candidateCount": 26,
+        "narrativeResponseCount": 60,
+        "runtimeAttemptEvidenceCount": 109,
+        "runtimeEvidenceStartAttemptIndex": 0
+      },
+      "expectedSourceReport": {
+        "attemptCount": 107,
+        "candidateCount": 24,
+        "narrativeResponseCount": 58,
+        "resultCount": 12,
+        "runtimeAttemptEvidenceCount": 107
+      },
+      "failureMessage": "Settled Elara re-narration evidence recovered after report provenance validation failed; no chapter from this run was committed",
+      "id": "prompt-1-4-11-elara-renarration-settled-2",
+      "knownReservations": [
+        {
+          "actualCostUsd": 0.0035505,
+          "agentId": null,
+          "attempt": 0,
+          "id": "8a12085a-b7c6-4986-b4db-5f58c3161a65",
+          "maximumCostUsd": 0.007178,
+          "model": "gpt-5.6-luna",
+          "phase": "narration",
+          "serviceTier": "flex"
+        },
+        {
+          "actualCostUsd": 0.003639,
+          "agentId": null,
+          "attempt": 1,
+          "id": "e2fd1b34-204c-42a3-9921-73f926757e5b",
+          "maximumCostUsd": 0.005122,
+          "model": "gpt-5.6-luna",
+          "phase": "narration",
+          "serviceTier": "flex"
+        }
+      ],
+      "outputReportPath": "evals/reports/live-full-sequential-renarrated-settled-2.json",
+      "pricingVersion": "openai-flex-explicit-no-cache-2026-07-20",
+      "priorSpendUsd": 2.811082175,
+      "promptVersion": "1.4.11",
+      "rerunFrom": [
+        {
+          "chapter": 1,
+          "povId": "elara-voss"
+        }
+      ],
+      "runId": "4fb309e4-de71-4185-8ed3-d3a7d5aafe1b",
+      "runtimeSchemaVersion": "1.1.0-runtime-candidates-5",
+      "serviceTier": "flex",
+      "sidecarPath": "evals/reports/live-full-sequential-renarrated.narrative-candidates.json",
+      "sidecarSha256": "c575075e79849ab707d10042d7ea7cdb33cc7b6806297f13e9f287b9ef05ae36",
+      "sourceGitSha": "44d79aecf8feb588d25bba1bb720e4f1ccd2f185",
+      "sourceReportPath": "evals/reports/live-full-sequential-renarrated.json",
+      "sourceReportSha256": "9a67f509cd4aaca04e60bdeb02ff5a5473858d5916275ffe5832f2f4859095f5",
+      "startedAt": "2026-07-20T17:57:25.010Z"
     }
   ],
   "version": 1
