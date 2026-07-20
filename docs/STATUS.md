@@ -2,12 +2,12 @@
 
 - Updated: 2026-07-20
 - Layer: Release evaluation
-- Current phase: Phase 5 settled-run recovery checkpoint
+- Current phase: Phase 5 canon-preserving re-narration checkpoint
 - Repository: initialized on `main`
 - Remote: public `https://github.com/shivam-g10/infinite-litrpg`; current local build not pushed
 - Initial commit: `39b19a2` (`chore: scaffold agent workflow`)
 - App: strict Next.js selection UI plus deterministic engine and SQLite store
-- Live API: prompt `1.4.11` sequential twelve-cycle automation green; human-corrected report and current-prompt native proof pending; no paid call authorized now
+- Live API: prompt `1.4.11` sequential twelve-cycle automation green; canon-preserving correction path verified; human-corrected report and current-prompt native proof pending; no paid call authorized now
 - Evals: offline suite green
 - Build Week deadline: 2026-07-22 05:30 IST
 
@@ -26,11 +26,13 @@
 - Sidecar `617e4f493d331c873ea11c88539388ffa5cfa5a202399ade53417424ede169e8` preserves 98 attempts, 21 candidates, 49 raw responses, and 98 turn-bound runtime rows. Only new Rowan turn `5a889b80-2af8-4887-b81f-5b9f4e71defe` is uncommitted.
 - Durable exposure is `$2.959276675`; headroom is `$0.040723325`. Ledger has zero lock and zero active or uncertain reservations.
 - Provider-free ADR-017 recovery retains all twelve source results, binds the failed turn as a separate settled evidence suffix, blocks current-turn provenance laundering, holds report locks until atomic commit, and supports authenticated crash retry. Commits `6e5424f` and `1b6b162`, the full local gate, clean-clone proof, strict report materialization, idempotent replay, and registry binding pass.
-- Full suffix regeneration cannot fit conservative headroom. Canon-preserving re-narration with Luna narrator `none` and audit reasoning `low` has a `$0.0346725` bound, but implementation and verification remain pending. Any new paid command needs fresh exact authority.
+- Full suffix regeneration cannot fit conservative headroom. Canon-preserving re-narration now preserves exact state, action, intents, delta, frame, dependent chapters, and source provenance while replacing prose-only evidence. Narration uses reasoning `none`; audit uses `low`.
+- The exact three-target plan uses a `$0.0135` target cap. Its hard new maximum is `$0.0405`; projected exposure is `$2.999776675`, leaving `$0.000223325`. Preflight rejects any larger plan before client creation.
+- Implementation, 263-test full gate, dependency audit, strict full-report regression, and two independent focused re-audits pass. Commit and clean-clone verification remain before fresh paid authority.
 
 ## Next Action
 
-Build and verify canon-preserving re-narration against the registered settled receipt. Never run another paid command without fresh exact authority.
+Commit and clean-clone verify ADR-018, then request fresh authority for the exact three-target `$0.0135` Flex command. Never run it without that authority.
 
 ## Evidence Log
 
@@ -166,5 +168,9 @@ Build and verify canon-preserving re-narration against the registered settled re
 - 2026-07-20 ADR-017 full non-live gate: `npm run check` exited 0 in 40.5 seconds. Format, lint, all three strict TypeScript projects, 257 tests across 18 files, all six offline gates with 1,000 simulations and chapter 351 blocked, production build, 17 E2E passes with one intentional desktop skip, both security scans, and 526 licenses passed. `npm audit --audit-level=low` found zero vulnerabilities and `git diff --check` passed. Final independent review found and closed clause-local same-gender resource ownership plus post-resource denial scope; the exact and adversarial regressions pass and the bridge hash is current. No provider call ran.
 - 2026-07-20 ADR-017 clean checkpoint: commits `6e5424f` (`fix(evals): reconcile settled live runs`) and `1b6b162` (`fix(story): scope resource claim ownership`) contain the authenticated reconciler, durable-ledger recovery rules, narrative regressions, and current bridge. `npm run verify:clean-clone` exited 0 in 54.4 seconds with 257 tests, all offline evals, production build, 17 E2E passes with one intentional skip, both security scans, 526 licenses, and zero vulnerabilities green. No provider call ran.
 - 2026-07-20 strict settled receipt: `npm run evals:live:reconcile-settled -- --checkpoint prompt-1-4-11-human-review-rerun-settled-1` exited 0 twice without loading an API key or making a provider call. Both runs wrote byte-equivalent report SHA-256 `af6e64f1481e2220001e4408d4b3b20f42cf19861c72dc0d2d4bc7e62c18b7ec` at `evals/reports/live-full-sequential-settled-1.json`. Version 9 parsing retains 12 source results, 98 attempts, 21 candidates, 49 raw responses, 98 runtime rows, one checkpoint-bound failed turn, `$0.1481945` attempt cost, `$2.959276675` exposure, and `$0.040723325` headroom. Every automated gate is true except the deliberate `allCommitsCompleted: false`. The ledger has zero lock and zero active or uncertain reservation. The tracked resume registry binds the report and nine exact bridge hashes.
+- 2026-07-20 ADR-018 test-first slice: canon-only re-narration tests initially failed because no narrative-only service or strict report provenance existed. Implementation now exactly re-resolves and restages the authenticated action, intents, delta, before and after state, and frame before provider budgeting; it never calls agents, frame generation, state writing, or story-store commit. Replacement reports retain all twelve cells, bind exact source and replacement identities and prose hashes around one canonical hash, record narrator `none` and auditor `low`, and checkpoint complete replacements in the sidecar before atomic report writes. Focused StoryService and live-harness suites pass 80 tests. No provider call ran.
+- 2026-07-20 ADR-018 independent review: one audit found that a target-count projection would conflict with the fixed full-matrix schema only after paid work; another found that a tampered non-transition milestone could reach narration. The strict three-target report and milestone tamper regressions captured both failures. Report projection now branches only for authenticated re-narration; action re-resolution and milestone policy reject drift before any extra provider call. Both auditors rechecked their fixes: 35 story tests and 45 harness tests passed, three real version 9 reports parsed, and no blocker remained. A final full-diff audit found no P0 through P2 defect. No provider call ran.
+- 2026-07-20 ADR-018 full non-live gate: `npm run check` exited 0 in 30.0 seconds. Format, lint, all three strict TypeScript projects, 263 tests across 18 files, all six offline gates with 1,000 simulations and chapter 351 blocked, production build, 17 E2E passes with one intentional desktop skip, both security scans across 199 working files, and 526 licenses passed. `npm audit --audit-level=low` found zero vulnerabilities and `git diff --check` passed. The strict pre-provider three-target report projects `$2.999776675` exposure and `$0.000223325` headroom. No provider call ran.
+- 2026-07-20 ADR-018 real-receipt probe: a provider-free import of the registered settled report authenticated all eleven bridge files, retained all twelve results and `$0.1481945` attempt cost, and prepared only Rowan 2, Elara 1, and Lucan 1. Their source turn IDs are `2b68ad35-d51a-4ae3-87ab-31d922b17612`, `ffe01c81-596d-45e6-8737-66c2ee46d9a9`, and `c3b32592-d890-4f4b-882c-c0b13333bc7e`; all three canonical hashes recomputed exactly. The hard `$0.0405` plan retained `$0.000223325` headroom. No API key was read, no OpenAI client was created, and no provider call ran.
 
 Add exact command, date, exit code, cost, and report path after every future milestone gate.

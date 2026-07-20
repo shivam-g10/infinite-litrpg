@@ -47,6 +47,7 @@ import { pricingVersionForServiceTier } from "../app/src/server/openai/usage";
 import {
   StoryService,
   canonicalizeNarrativeAuditOutput,
+  type CanonicalRenarrationResult,
 } from "../app/src/server/story/story-service";
 import { StoryStore } from "../app/src/server/storage/story-store";
 import { LiveSpendLedger, type LiveSpendSnapshot } from "./live-spend-ledger";
@@ -875,6 +876,7 @@ const NarrativeEvidenceSidecarSchema = z
     narrativeResponses: z.array(NarrativeResponseEvidenceSchema).max(500),
     pricingVersion: z.string().min(1).max(240),
     promptVersion: z.literal(PROMPT_VERSION),
+    renarrationResults: z.array(CurrentLiveResultSchema).max(CHARACTER_IDS.length).default([]),
     reportVersion: z.literal(REPORT_VERSION),
     runtimeEvidenceStartAttemptIndex: z.number().int().min(0).max(1_000),
     runtimeSchemaVersion: z.literal(RUNTIME_SCHEMA_VERSION),
@@ -936,8 +938,44 @@ const SettledFailureSchema = z
     }
   });
 
+const RenarrationProvenanceSchema = z
+  .object({
+    chapter: z.union([z.literal(1), z.literal(2)]),
+    povId: PovIdSchema,
+    replacementProseHash: Sha256Schema.nullable(),
+    replacementRequestId: z.string().uuid().nullable(),
+    replacementTurnId: z.string().uuid().nullable(),
+    sourceCanonicalHash: Sha256Schema,
+    sourceProseHash: Sha256Schema,
+    sourceRequestId: z.string().uuid(),
+    sourceTurnId: z.string().uuid(),
+  })
+  .strict()
+  .superRefine((entry, context) => {
+    const replacementValues = [
+      entry.replacementProseHash,
+      entry.replacementRequestId,
+      entry.replacementTurnId,
+    ];
+    const complete = replacementValues.every((value) => value !== null);
+    const pending = replacementValues.every((value) => value === null);
+    if (!complete && !pending) {
+      context.addIssue({ code: "custom", message: "Re-narration replacement is only partial" });
+    }
+    if (
+      complete &&
+      (entry.replacementTurnId === entry.sourceTurnId ||
+        entry.replacementRequestId === entry.sourceRequestId ||
+        entry.replacementProseHash === entry.sourceProseHash)
+    ) {
+      context.addIssue({ code: "custom", message: "Re-narration did not replace source prose" });
+    }
+  });
+
 const Version9ResumeSchema = Version8ResumeSchema.omit({ sourceReportVersion: true })
   .extend({
+    renarrate: z.array(RerunFromSchema).max(CHARACTER_IDS.length).default([]),
+    renarrations: z.array(RenarrationProvenanceSchema).max(CHARACTER_IDS.length).default([]),
     rerunFrom: z.array(RerunFromSchema).max(CHARACTER_IDS.length).default([]),
     sourceEvidenceBoundary: SourceEvidenceBoundarySchema.nullable().default(null),
     sourceReportVersion: z.union([
@@ -948,7 +986,21 @@ const Version9ResumeSchema = Version8ResumeSchema.omit({ sourceReportVersion: tr
       z.literal(REPORT_VERSION),
     ]),
   })
-  .strict();
+  .strict()
+  .superRefine(({ renarrate, renarrations, rerunFrom }, context) => {
+    if (rerunFrom.length > 0 && renarrate.length > 0) {
+      context.addIssue({ code: "custom", message: "Resume modes are mutually exclusive" });
+    }
+    const targetKeys = renarrate.map(({ chapter, povId }) => resultKey(povId, chapter));
+    const provenanceKeys = renarrations.map(({ chapter, povId }) => resultKey(povId, chapter));
+    if (
+      new Set(targetKeys).size !== targetKeys.length ||
+      new Set(provenanceKeys).size !== provenanceKeys.length ||
+      !isDeepStrictEqual([...targetKeys].sort(), [...provenanceKeys].sort())
+    ) {
+      context.addIssue({ code: "custom", message: "Re-narration provenance targets disagree" });
+    }
+  });
 
 export const LiveReportSchema = BaseLiveReportSchema.extend({
   attempts: z.array(CurrentRuntimeAttemptTraceSchema).max(1_000),
@@ -1120,6 +1172,63 @@ function refineDurableReport(report: DurableReportForRefinement, context: z.Refi
         }
       }
     }
+    const renarrations =
+      report.resume !== null && "renarrations" in report.resume ? report.resume.renarrations : [];
+    for (const [index, renarration] of renarrations.entries()) {
+      const key = resultKey(renarration.povId, renarration.chapter);
+      const result = report.results.find(
+        (entry) => entry.povId === renarration.povId && entry.chapter === renarration.chapter,
+      );
+      const sourceCandidates = boundaryFits
+        ? candidates
+            .slice(0, boundary.narrativeCandidateCount)
+            .filter(
+              (candidate) =>
+                candidate.accepted &&
+                candidate.turn.turnId === renarration.sourceTurnId &&
+                candidate.povId === renarration.povId &&
+                candidate.chapter === renarration.chapter,
+            )
+        : [];
+      const sourceCandidate = sourceCandidates[0];
+      const replacementComplete = renarration.replacementTurnId !== null;
+      const replacementCandidate = replacementComplete
+        ? candidates
+            .slice(boundary?.narrativeCandidateCount ?? candidates.length)
+            .filter(
+              (candidate) =>
+                candidate.accepted &&
+                candidate.turn.turnId === renarration.replacementTurnId &&
+                candidate.povId === renarration.povId &&
+                candidate.chapter === renarration.chapter,
+            )
+        : [];
+      if (
+        result === undefined ||
+        sourceCandidates.length !== 1 ||
+        sourceCandidate?.turn.requestId !== renarration.sourceRequestId ||
+        hashText(sourceCandidate.mergedProse) !== renarration.sourceProseHash ||
+        !sourceTurnIds.has(renarration.sourceTurnId) ||
+        canonicalNarrationSourceHash(result) !== renarration.sourceCanonicalHash ||
+        (replacementComplete
+          ? result.trace.runId !== renarration.replacementTurnId ||
+            result.canonicalNarrativeInput?.chapterRecord.requestId !==
+              renarration.replacementRequestId ||
+            result.audit.proseHash !== renarration.replacementProseHash ||
+            !supersededTurnIds.has(renarration.sourceTurnId) ||
+            sourceTurnIds.has(renarration.replacementTurnId!) ||
+            replacementCandidate.length !== 1
+          : result.trace.runId !== renarration.sourceTurnId ||
+            result.audit.proseHash !== renarration.sourceProseHash ||
+            supersededTurnIds.has(renarration.sourceTurnId))
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: `Re-narration ${key} lacks exact source and replacement provenance`,
+          path: ["resume", "renarrations", index],
+        });
+      }
+    }
     for (const turnId of settledTurnIds) supersededTurnIds.add(turnId);
   }
   if (report.resume !== null) {
@@ -1143,12 +1252,12 @@ function refineDurableReport(report: DurableReportForRefinement, context: z.Refi
     }
     if (report.version === REPORT_VERSION && "rerunFrom" in report.resume) {
       const rerunFrom = report.resume.rerunFrom;
+      const renarrate = report.resume.renarrate;
       if (new Set(rerunFrom.map(({ povId }) => povId)).size !== rerunFrom.length) {
         context.addIssue({ code: "custom", message: "Resume repeats a rerun POV" });
       }
-      const minimumDiscardedResultCount = sum(
-        rerunFrom.map(({ chapter }) => (chapter === 1 ? 2 : 1)),
-      );
+      const minimumDiscardedResultCount =
+        sum(rerunFrom.map(({ chapter }) => (chapter === 1 ? 2 : 1))) + renarrate.length;
       if (report.resume.discardedResultCount < minimumDiscardedResultCount) {
         context.addIssue({
           code: "custom",
@@ -1191,10 +1300,21 @@ function refineDurableReport(report: DurableReportForRefinement, context: z.Refi
       });
     }
   }
+  const renarrationByResult = new Map<string, RenarrationProvenance>(
+    report.version === REPORT_VERSION && report.resume !== null && "renarrations" in report.resume
+      ? report.resume.renarrations.map((entry) => [resultKey(entry.povId, entry.chapter), entry])
+      : [],
+  );
   const unmatchedRetainedKeys = new Set(retainedByResult.keys());
   for (const [index, result] of report.results.entries()) {
     const key = resultKey(result.povId, result.chapter);
-    const expectedGitSha = retainedByResult.get(key)?.sourceGitSha ?? report.sourceGitSha;
+    const renarration = renarrationByResult.get(key);
+    const replaced =
+      renarration?.replacementTurnId !== null &&
+      renarration?.replacementTurnId === result.trace.runId;
+    const expectedGitSha = replaced
+      ? report.sourceGitSha
+      : (retainedByResult.get(key)?.sourceGitSha ?? report.sourceGitSha);
     if (result.trace.gitSha !== expectedGitSha) {
       context.addIssue({
         code: "custom",
@@ -1249,7 +1369,13 @@ function refineDurableReport(report: DurableReportForRefinement, context: z.Refi
   for (const [index, result] of report.results.entries()) {
     const key = resultKey(result.povId, result.chapter);
     const cap = caps.get(key);
-    const expectedCap = retainedByResult.get(key)?.sourceChapterCapUsd ?? report.chapterCostCapUsd;
+    const renarration = renarrationByResult.get(key);
+    const replaced =
+      renarration?.replacementTurnId !== null &&
+      renarration?.replacementTurnId === result.trace.runId;
+    const expectedCap = replaced
+      ? report.chapterCostCapUsd
+      : (retainedByResult.get(key)?.sourceChapterCapUsd ?? report.chapterCostCapUsd);
     if (
       cap === undefined ||
       !costsMatch(cap, expectedCap) ||
@@ -1267,10 +1393,16 @@ function refineDurableReport(report: DurableReportForRefinement, context: z.Refi
     context.addIssue({ code: "custom", message: "Result cap has no matching result" });
   }
 
+  const renarrateCount =
+    report.version === REPORT_VERSION && report.resume !== null && "renarrate" in report.resume
+      ? report.resume.renarrate.length
+      : 0;
   const pendingChapterCount =
     report.suite === "smoke"
       ? 1
-      : CHARACTER_IDS.length * 2 - (report.resume?.retainedResults.length ?? 0);
+      : renarrateCount > 0
+        ? renarrateCount
+        : CHARACTER_IDS.length * 2 - (report.resume?.retainedResults.length ?? 0);
   const projected = Math.max(
     projectedCumulativeCostUsd(
       report.priorSpendUsd,
@@ -1378,10 +1510,22 @@ function refineServiceTierEvidence(
       message: "Report pricing version disagrees with service tier",
     });
   }
+  const renarrationTargetCount =
+    report.resume !== null && "renarrate" in report.resume ? report.resume.renarrate.length : 0;
   const expectedProjection =
-    report.suite === "full" ? projectPrompt1411FullMatrixCostUsd(serviceTier) : null;
+    report.suite !== "full"
+      ? null
+      : renarrationTargetCount > 0
+        ? roundNanoUsd(renarrationTargetCount * report.chapterCostCapUsd)
+        : projectPrompt1411FullMatrixCostUsd(serviceTier);
   const expectedFinalExposure =
-    expectedProjection === null ? null : roundNanoUsd(report.priorSpendUsd + expectedProjection);
+    expectedProjection === null
+      ? null
+      : roundNanoUsd(
+          report.priorSpendUsd +
+            (renarrationTargetCount > 0 ? (report.resume?.existingAttemptCostUsd ?? 0) : 0) +
+            expectedProjection,
+        );
   if (
     report.cleanPathProjectedCostUsd !== expectedProjection ||
     report.projectedFinalExposureUsd !== expectedFinalExposure
@@ -2256,6 +2400,14 @@ function refineReportCommon(
       ({ canonicalNarrativeInput, streamChunks }) =>
         canonicalNarrativeInput !== undefined && streamChunks !== undefined,
     );
+  const reportResume = (
+    report as typeof report & {
+      readonly resume?: { readonly renarrations?: readonly RenarrationProvenance[] } | null;
+    }
+  ).resume;
+  const renarrationsComplete =
+    reportResume?.renarrations?.every(({ replacementTurnId }) => replacementTurnId !== null) ??
+    true;
   const expectedCommonGates: readonly [keyof z.infer<typeof GateSchema>, boolean][] = [
     [
       "allAuditsApproved",
@@ -2266,6 +2418,7 @@ function refineReportCommon(
       "allCommitsCompleted",
       report.error === null &&
         committedEvidencePresent &&
+        renarrationsComplete &&
         (report.suite === "smoke"
           ? report.results.length === 1
           : hasExactFullMatrix(report.results)),
@@ -2359,6 +2512,13 @@ export interface ResumeRequirements {
 }
 
 export type RerunFrom = z.infer<typeof RerunFromSchema>;
+export type RenarrationProvenance = z.infer<typeof RenarrationProvenanceSchema>;
+
+export interface RenarrationSource {
+  readonly result: LiveResult;
+  readonly sourceCanonicalHash: string;
+  readonly sourceChapterCapUsd: number;
+}
 
 export interface ResumePreparation {
   readonly attempts: LiveReport["attempts"];
@@ -2371,6 +2531,8 @@ export interface ResumePreparation {
   readonly runtimeEvidenceStartAttemptIndex: number;
   readonly runtimeAttemptEvidence: LiveReport["runtimeAttemptEvidence"];
   readonly pendingPovIds: CharacterId[];
+  readonly renarrate: RerunFrom[];
+  readonly renarrationSources: RenarrationSource[];
   readonly rerunFrom: RerunFrom[];
   readonly retainedPovIds: CharacterId[];
   readonly retainedResultCaps: ResultChapterCap[];
@@ -2393,6 +2555,7 @@ async function main(): Promise<void> {
   const adapterMode = nativeRequested ? "native-multi-agent" : "sequential";
   const povFilter = parsePov(args);
   const resumeReportArgument = parseOptionalFlag(args, "--resume-report");
+  const renarrate = parseRenarrate(args);
   const rerunFrom = parseRerunFrom(args);
   const recoverStaleRunId = parseOptionalFlag(args, "--recover-stale-run");
   if (resumeReportArgument !== null && suite !== "full") {
@@ -2400,6 +2563,15 @@ async function main(): Promise<void> {
   }
   if (rerunFrom.length > 0 && resumeReportArgument === null) {
     throw new Error("--rerun-from requires --resume-report");
+  }
+  if (renarrate.length > 0 && resumeReportArgument === null) {
+    throw new Error("--renarrate requires --resume-report");
+  }
+  if (renarrate.length > 0 && rerunFrom.length > 0) {
+    throw new Error("--renarrate and --rerun-from are mutually exclusive");
+  }
+  if (renarrate.length > 0 && povFilter !== null) {
+    throw new Error("--renarrate cannot be combined with --pov");
   }
   const perChapterCapUsd = parseUsdFlag(
     args,
@@ -2418,11 +2590,11 @@ async function main(): Promise<void> {
   const pricingVersion = pricingVersionForServiceTier(serviceTier);
   const reportPath = resolve(
     REPORT_DIRECTORY,
-    `live-${suite}-${nativeRequested ? "native" : "sequential"}${povFilter ? `-${povFilter}` : ""}.json`,
+    `live-${suite}-${nativeRequested ? "native" : "sequential"}${povFilter ? `-${povFilter}` : ""}${renarrate.length > 0 ? "-renarrated" : ""}.json`,
   );
   const narrativeEvidencePath = reportPath.replace(/\.json$/u, ".narrative-candidates.json");
-  const cleanPathProjection =
-    suite === "full"
+  let cleanPathProjection: ReturnType<typeof assertPrompt1411FullMatrixFits> | null =
+    suite === "full" && renarrate.length === 0
       ? assertPrompt1411FullMatrixFits(priorSpendUsd, serviceTier, TOTAL_CAP_USD)
       : null;
   if (suite === "full" && !args.includes("--confirm-cost")) {
@@ -2511,6 +2683,7 @@ async function main(): Promise<void> {
             sourceGitSha: resumeReport.sourceGitSha,
           },
           rerunFrom,
+          renarrate,
         );
   const plannedPovIds =
     suite === "smoke"
@@ -2520,14 +2693,26 @@ async function main(): Promise<void> {
   const pendingChapterCount =
     suite === "smoke"
       ? 1
-      : CHARACTER_IDS.length * 2 - (resumePreparation?.retainedResults.length ?? 0);
+      : renarrate.length > 0
+        ? renarrate.length
+        : CHARACTER_IDS.length * 2 - (resumePreparation?.retainedResults.length ?? 0);
   const existingAttemptCostUsd = resumePreparation?.existingAttemptCostUsd ?? 0;
-  const projectedMaximumCumulativeCostUsd = projectedCumulativeCostUsd(
+  let projectedMaximumCumulativeCostUsd = projectedCumulativeCostUsd(
     priorSpendUsd,
     existingAttemptCostUsd,
     pendingChapterCount,
     perChapterCapUsd,
   );
+  if (renarrate.length > 0) {
+    cleanPathProjection = assertRenarrationPlanFits(
+      priorSpendUsd,
+      existingAttemptCostUsd,
+      pendingChapterCount,
+      perChapterCapUsd,
+      TOTAL_CAP_USD,
+    );
+    projectedMaximumCumulativeCostUsd = cleanPathProjection.projectedFinalExposureUsd;
+  }
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("OPENAI_API_KEY is not configured");
   const client = new OpenAI({ apiKey });
@@ -2553,6 +2738,28 @@ async function main(): Promise<void> {
     ...(resumePreparation?.runtimeAttemptEvidence ?? []),
   ];
   const supersededTurnIds = [...(resumePreparation?.supersededTurnIds ?? [])];
+  const renarrations: RenarrationProvenance[] = (resumePreparation?.renarrationSources ?? []).map(
+    ({ result, sourceCanonicalHash }) => {
+      const sourceRequestId = result.canonicalNarrativeInput?.chapterRecord.requestId;
+      if (sourceRequestId === undefined) {
+        throw new Error(
+          `Re-narration source ${resultKey(result.povId, result.chapter)} lacks request`,
+        );
+      }
+      return {
+        chapter: result.chapter as 1 | 2,
+        povId: result.povId,
+        replacementProseHash: null,
+        replacementRequestId: null,
+        replacementTurnId: null,
+        sourceCanonicalHash,
+        sourceProseHash: result.audit.proseHash,
+        sourceRequestId,
+        sourceTurnId: result.trace.runId,
+      };
+    },
+  );
+  const renarrationResults: LiveResult[] = [];
   const ledger = new LiveSpendLedger(LIVE_SPEND_LEDGER_PATH, TOTAL_CAP_USD);
   const liveRunId = recoverStaleRunId ?? randomUUID();
   const ledgerBaseline = {
@@ -2580,6 +2787,7 @@ async function main(): Promise<void> {
         sourceGitSha,
         liveRunId,
         supersededTurnIds,
+        renarrationResults,
       );
     } else {
       const recoveredEvidence = readNarrativeEvidenceSidecar(
@@ -2589,13 +2797,54 @@ async function main(): Promise<void> {
         serviceTier,
         pricingVersion,
       );
+      const recoveredSupersededTurnIds = [...supersededTurnIds];
+      for (const replacement of recoveredEvidence.renarrationResults) {
+        const source = resumePreparation?.renarrationSources.find(
+          ({ result }) =>
+            result.povId === replacement.povId && result.chapter === replacement.chapter,
+        );
+        const provenance = renarrations.find(
+          (entry) => entry.povId === replacement.povId && entry.chapter === replacement.chapter,
+        );
+        const resultIndex = results.findIndex(
+          (result) => result.povId === replacement.povId && result.chapter === replacement.chapter,
+        );
+        const capIndex = resultChapterCaps.findIndex(
+          (entry) => entry.povId === replacement.povId && entry.chapter === replacement.chapter,
+        );
+        if (source === undefined || provenance === undefined || resultIndex < 0 || capIndex < 0) {
+          throw new Error("Recovered re-narration WAL changed source canon or identity");
+        }
+        assertRenarrationReplacement(source.result, replacement);
+        if (canonicalNarrationSourceHash(replacement) !== source.sourceCanonicalHash) {
+          throw new Error("Recovered re-narration WAL changed authenticated source canon");
+        }
+        assertChapterResult(replacement, nativeRequested, perChapterCapUsd);
+        results[resultIndex] = replacement;
+        resultChapterCaps[capIndex] = {
+          capUsd: perChapterCapUsd,
+          chapter: replacement.chapter,
+          povId: replacement.povId,
+        };
+        provenance.replacementProseHash = replacement.audit.proseHash;
+        provenance.replacementRequestId =
+          replacement.canonicalNarrativeInput?.chapterRecord.requestId ?? null;
+        provenance.replacementTurnId = replacement.trace.runId;
+        if (provenance.replacementRequestId === null) {
+          throw new Error("Recovered re-narration WAL lacks a request ID");
+        }
+        if (!recoveredSupersededTurnIds.includes(source.result.trace.runId)) {
+          recoveredSupersededTurnIds.push(source.result.trace.runId);
+        }
+      }
       if (
         !isAppendOnlyEvidence(attempts, recoveredEvidence.attempts) ||
         !isAppendOnlyEvidence(narrativeCandidates, recoveredEvidence.candidates) ||
         !isAppendOnlyEvidence(narrativeResponses, recoveredEvidence.narrativeResponses) ||
         recoveredEvidence.runtimeEvidenceStartAttemptIndex !== runtimeEvidenceStartAttemptIndex ||
         !isAppendOnlyEvidence(runtimeAttemptEvidence, recoveredEvidence.runtimeAttemptEvidence) ||
-        !isDeepStrictEqual(supersededTurnIds, recoveredEvidence.supersededTurnIds)
+        !isAppendOnlyEvidence(renarrationResults, recoveredEvidence.renarrationResults) ||
+        !isDeepStrictEqual(recoveredSupersededTurnIds, recoveredEvidence.supersededTurnIds)
       ) {
         throw new Error("Stale-run evidence is not an append-only checkpoint extension");
       }
@@ -2603,7 +2852,8 @@ async function main(): Promise<void> {
         recoveredEvidence.attempts.length > attempts.length ||
         recoveredEvidence.candidates.length > narrativeCandidates.length ||
         recoveredEvidence.narrativeResponses.length > narrativeResponses.length ||
-        recoveredEvidence.runtimeAttemptEvidence.length > runtimeAttemptEvidence.length;
+        recoveredEvidence.runtimeAttemptEvidence.length > runtimeAttemptEvidence.length ||
+        recoveredEvidence.renarrationResults.length > renarrationResults.length;
       attempts.splice(0, attempts.length, ...recoveredEvidence.attempts);
       narrativeCandidates.splice(0, narrativeCandidates.length, ...recoveredEvidence.candidates);
       narrativeResponses.splice(
@@ -2616,6 +2866,12 @@ async function main(): Promise<void> {
         runtimeAttemptEvidence.length,
         ...recoveredEvidence.runtimeAttemptEvidence,
       );
+      renarrationResults.splice(
+        0,
+        renarrationResults.length,
+        ...recoveredEvidence.renarrationResults,
+      );
+      supersededTurnIds.splice(0, supersededTurnIds.length, ...recoveredEvidence.supersededTurnIds);
       ledger.recoverStaleRun(
         recoverStaleRunId,
         ledgerBaseline,
@@ -2634,6 +2890,7 @@ async function main(): Promise<void> {
         sourceGitSha,
         liveRunId,
         supersededTurnIds,
+        renarrationResults,
       );
     }
     if (recoverStaleRunId === null) {
@@ -2647,171 +2904,160 @@ async function main(): Promise<void> {
       );
     } else
       try {
-        for (const povId of plannedPovIds) {
-          const store = new StoryStore();
-          try {
-            const service = new StoryService(store, client, {
-              costHooks,
-              maxBackgroundAgents: 3,
-              maxCostUsdPerChapter: perChapterCapUsd,
-              nativeMultiAgent: nativeRequested,
-              onNarrativeAudit: (audit) => {
-                if (!audit.approved) {
-                  auditRejections.push({ audit, povId });
-                  console.log(
-                    `audit rejected: ${JSON.stringify(audit.scores)}; leaks=${audit.leakedFactIds.join(",") || "none"}; ${audit.evidence.map(({ detail }) => detail).join(" ")}`,
-                  );
-                }
-              },
-              onNarrativeCandidate: (candidate) => {
-                narrativeCandidates.push(NarrativeCandidateEvidenceSchema.parse(candidate));
-                writeNarrativeEvidenceSidecar(
-                  narrativeEvidencePath,
-                  attempts,
-                  narrativeCandidates,
-                  narrativeResponses,
-                  runtimeEvidenceStartAttemptIndex,
-                  runtimeAttemptEvidence,
-                  serviceTier,
-                  pricingVersion,
-                  sourceGitSha,
-                  liveRunId,
-                  supersededTurnIds,
-                );
-              },
-              onNarrativeDraftRejected: (issues) => {
-                draftRejections.push({ issues: [...issues], povId });
-                console.log(
-                  `draft rejected: ${issues.map(({ code, message }) => `${code}: ${message}`).join("; ")}`,
-                );
-              },
-              onNarrativeResponse: (response) => {
-                narrativeResponses.push(NarrativeResponseEvidenceSchema.parse(response));
-                writeNarrativeEvidenceSidecar(
-                  narrativeEvidencePath,
-                  attempts,
-                  narrativeCandidates,
-                  narrativeResponses,
-                  runtimeEvidenceStartAttemptIndex,
-                  runtimeAttemptEvidence,
-                  serviceTier,
-                  pricingVersion,
-                  sourceGitSha,
-                  liveRunId,
-                  supersededTurnIds,
-                );
-              },
-              onRuntimeAttempt: (attempt, turn) => {
-                attempts.push(attempt);
-                runtimeAttemptEvidence.push({ attempt, turn: TurnIdentitySchema.parse(turn) });
-                writeNarrativeEvidenceSidecar(
-                  narrativeEvidencePath,
-                  attempts,
-                  narrativeCandidates,
-                  narrativeResponses,
-                  runtimeEvidenceStartAttemptIndex,
-                  runtimeAttemptEvidence,
-                  serviceTier,
-                  pricingVersion,
-                  sourceGitSha,
-                  liveRunId,
-                  supersededTurnIds,
-                );
-                if (attempt.errorCode !== null) {
-                  console.log(
-                    `${attempt.model} attempt ${attempt.attempt + 1}: ${attempt.errorCode}, $${attempt.costUsd.toFixed(5)}`,
-                  );
-                }
-              },
-              serviceTier,
-            });
-            let view = service.selectPov(povId);
-            const retainedPrefix = results
-              .filter((result) => result.povId === povId)
-              .sort((left, right) => left.chapter - right.chapter);
-            if (retainedPrefix.length === 1) {
-              const retainedChapter = retainedPrefix[0];
-              if (!retainedChapter) throw new Error("Retained chapter prefix disappeared");
-              restoreRetainedChapter(store, retainedChapter, view.chapter.choices[0]);
+        if ((resumePreparation?.renarrationSources.length ?? 0) > 0) {
+          for (const source of resumePreparation?.renarrationSources ?? []) {
+            const sourceResult = source.result;
+            const canonical = sourceResult.canonicalNarrativeInput;
+            if (canonical === undefined) {
+              throw new Error(
+                `Re-narration source ${resultKey(sourceResult.povId, sourceResult.chapter)} lacks canon`,
+              );
             }
-            for (let turn = retainedPrefix.length; turn < turnsPerPov; turn += 1) {
-              const beforeTurn = store.loadWorldState("ashen-crown-v1");
-              if (!beforeTurn) throw new Error("World disappeared before live turn");
-              const streamedChunks: string[] = [];
-              const streamingStartedAt = performance.now();
-              view = await service.takeTurn(
-                turn === 0
-                  ? {
-                      choiceId: view.chapter.choices[0]?.id ?? "missing-choice",
-                      expectedWorldVersion: beforeTurn.version,
-                      requestId: randomUUID(),
-                      type: "take_action",
-                    }
-                  : {
-                      description: "Investigate the immediate area for fresh tracks.",
-                      expectedWorldVersion: beforeTurn.version,
-                      requestId: randomUUID(),
-                      type: "custom_action",
-                    },
-                (chunk) => {
-                  streamedChunks.push(chunk);
+            const store = new StoryStore();
+            try {
+              const service = new StoryService(store, client, {
+                auditReasoningEffort: "low",
+                costHooks,
+                maxBackgroundAgents: 0,
+                maxCostUsdPerChapter: perChapterCapUsd,
+                nativeMultiAgent: false,
+                onNarrativeAudit: (audit) => {
+                  if (!audit.approved) {
+                    auditRejections.push({ audit, povId: sourceResult.povId });
+                  }
                 },
-              );
-              const streamingLatencyMs = Math.max(
-                0,
-                Math.round(performance.now() - streamingStartedAt),
-              );
-              const state = store.loadWorldState("ashen-crown-v1");
-              if (!state || !validateWorldState(state).ok) {
-                throw new Error("World is invalid after live chapter");
-              }
-              const chapter = store.loadChapter("ashen-crown-v1", state.chapter);
-              if (!chapter) throw new Error(`Committed chapter ${state.chapter} is missing`);
-              const trace = store.loadTrace(chapter.traceId);
-              if (!trace) throw new Error(`Trace ${chapter.traceId} is missing`);
-              const povContext = buildPovContext(state, povId);
-              const allowedFactIds = [...povContext.factIds].sort();
-              const allowedFactIdSet = new Set(allowedFactIds);
-              const result: LiveResult = {
-                adapterMode: trace.adapterMode,
-                audit: chapter.narrativeAudit,
-                canonicalNarrativeInput: {
-                  allowedFactIds,
-                  chapterRecord: chapter,
-                  forbiddenFacts: state.facts
-                    .filter(({ id }) => !allowedFactIdSet.has(id))
-                    .map(({ claim, id }) => ({ claim, id })),
-                  frame: {
-                    choices: chapter.choices,
-                    terminal: chapter.terminal,
-                    title: chapter.title,
-                  },
-                  playerAction: chapter.playerAction,
-                  stateAfter: state,
-                  stateBefore: beforeTurn,
-                  worldVersionAfter: chapter.stateAfterVersion,
-                  worldVersionBefore: chapter.stateBeforeVersion,
+                onNarrativeCandidate: (candidate) => {
+                  narrativeCandidates.push(NarrativeCandidateEvidenceSchema.parse(candidate));
+                  writeNarrativeEvidenceSidecar(
+                    narrativeEvidencePath,
+                    attempts,
+                    narrativeCandidates,
+                    narrativeResponses,
+                    runtimeEvidenceStartAttemptIndex,
+                    runtimeAttemptEvidence,
+                    serviceTier,
+                    pricingVersion,
+                    sourceGitSha,
+                    liveRunId,
+                    supersededTurnIds,
+                    renarrationResults,
+                  );
                 },
-                chapter: chapter.chapter,
-                costUsd: chapter.estimatedCostUsd,
-                latencyMs: chapter.latencyMs,
-                povId,
-                prose: chapter.prose,
-                streamChunkCount: streamedChunks.length,
-                streamChunks: streamedChunks,
-                streamingLatencyMs,
-                streamReconstructed: streamedChunks.join("") === chapter.prose,
-                trace,
-                usage: chapter.usage,
-                wordCount: wordCount(chapter.prose),
-              };
-              assertChapterResult(result, nativeRequested, perChapterCapUsd);
-              results.push(result);
-              resultChapterCaps.push({
-                capUsd: perChapterCapUsd,
-                chapter: result.chapter,
-                povId,
+                onNarrativeDraftRejected: (issues) => {
+                  draftRejections.push({ issues: [...issues], povId: sourceResult.povId });
+                  console.log(
+                    `draft rejected: ${issues.map(({ code, message }) => `${code}: ${message}`).join("; ")}`,
+                  );
+                },
+                onNarrativeResponse: (response) => {
+                  narrativeResponses.push(NarrativeResponseEvidenceSchema.parse(response));
+                  writeNarrativeEvidenceSidecar(
+                    narrativeEvidencePath,
+                    attempts,
+                    narrativeCandidates,
+                    narrativeResponses,
+                    runtimeEvidenceStartAttemptIndex,
+                    runtimeAttemptEvidence,
+                    serviceTier,
+                    pricingVersion,
+                    sourceGitSha,
+                    liveRunId,
+                    supersededTurnIds,
+                    renarrationResults,
+                  );
+                },
+                onRuntimeAttempt: (attempt, turn) => {
+                  attempts.push(attempt);
+                  runtimeAttemptEvidence.push({ attempt, turn: TurnIdentitySchema.parse(turn) });
+                  writeNarrativeEvidenceSidecar(
+                    narrativeEvidencePath,
+                    attempts,
+                    narrativeCandidates,
+                    narrativeResponses,
+                    runtimeEvidenceStartAttemptIndex,
+                    runtimeAttemptEvidence,
+                    serviceTier,
+                    pricingVersion,
+                    sourceGitSha,
+                    liveRunId,
+                    supersededTurnIds,
+                    renarrationResults,
+                  );
+                },
+                serviceTier,
               });
+              const streamingStartedAt = performance.now();
+              const generated = await service.renarrateCanonicalTurn(
+                {
+                  adapterMode: sourceResult.adapterMode,
+                  delta: WorldDeltaSchema.parse(sourceResult.trace.acceptedDelta),
+                  frame: canonical.frame,
+                  intents: sourceResult.trace.intents.map((intent) =>
+                    WorldIntentSchema.parse(intent),
+                  ),
+                  multiAgentOutputItems: sourceResult.trace.multiAgentOutputItems,
+                  playerAction: canonical.playerAction,
+                  stateAfter: canonical.stateAfter,
+                  stateBefore: canonical.stateBefore,
+                },
+                randomUUID(),
+              );
+              const replacement = buildRenarratedLiveResult(
+                sourceResult,
+                generated,
+                Math.max(0, Math.round(performance.now() - streamingStartedAt)),
+              );
+              assertRenarrationReplacement(sourceResult, replacement);
+              if (canonicalNarrationSourceHash(replacement) !== source.sourceCanonicalHash) {
+                throw new Error("Re-narration changed authenticated canon");
+              }
+              assertChapterResult(replacement, nativeRequested, perChapterCapUsd);
+              const resultIndex = results.findIndex(
+                (result) =>
+                  result.povId === sourceResult.povId && result.chapter === sourceResult.chapter,
+              );
+              const capIndex = resultChapterCaps.findIndex(
+                (entry) =>
+                  entry.povId === sourceResult.povId && entry.chapter === sourceResult.chapter,
+              );
+              const provenance = renarrations.find(
+                (entry) =>
+                  entry.povId === sourceResult.povId && entry.chapter === sourceResult.chapter,
+              );
+              if (resultIndex < 0 || capIndex < 0 || provenance === undefined) {
+                throw new Error("Re-narration target lost its source result or provenance");
+              }
+              results[resultIndex] = replacement;
+              resultChapterCaps[capIndex] = {
+                capUsd: perChapterCapUsd,
+                chapter: replacement.chapter,
+                povId: replacement.povId,
+              };
+              provenance.replacementProseHash = replacement.audit.proseHash;
+              provenance.replacementRequestId =
+                replacement.canonicalNarrativeInput?.chapterRecord.requestId ?? null;
+              provenance.replacementTurnId = replacement.trace.runId;
+              if (provenance.replacementRequestId === null) {
+                throw new Error("Re-narration replacement lost its request ID");
+              }
+              if (!supersededTurnIds.includes(sourceResult.trace.runId)) {
+                supersededTurnIds.push(sourceResult.trace.runId);
+              }
+              renarrationResults.push(replacement);
+              writeNarrativeEvidenceSidecar(
+                narrativeEvidencePath,
+                attempts,
+                narrativeCandidates,
+                narrativeResponses,
+                runtimeEvidenceStartAttemptIndex,
+                runtimeAttemptEvidence,
+                serviceTier,
+                pricingVersion,
+                sourceGitSha,
+                liveRunId,
+                supersededTurnIds,
+                renarrationResults,
+              );
               writeAtomicJson(
                 reportPath,
                 buildLiveReport(null, ledger.snapshot(), {
@@ -2820,18 +3066,17 @@ async function main(): Promise<void> {
                   attempts,
                   auditRejections,
                   chapterCostCapUsd: perChapterCapUsd,
+                  cleanPathProjection,
                   draftRejections,
                   existingAttemptCostUsd,
                   narrativeCandidates,
                   narrativeResponses,
-                  pricingVersion,
-                  cleanPathProjection,
-                  runtimeEvidenceStartAttemptIndex,
-                  runtimeAttemptEvidence,
                   nativeRequested,
                   povFilter,
+                  pricingVersion,
                   priorSpendUsd,
                   projectedMaximumCumulativeCostUsd,
+                  renarrations,
                   resultChapterCaps,
                   results,
                   resumePreparation,
@@ -2839,19 +3084,233 @@ async function main(): Promise<void> {
                   resumeReportPath,
                   resumeSource,
                   resumeVerification,
-                  sourceGitSha,
+                  runtimeAttemptEvidence,
+                  runtimeEvidenceStartAttemptIndex,
                   serviceTier,
+                  sourceGitSha,
                   startedAt,
-                  supersededTurnIds,
                   suite,
+                  supersededTurnIds,
                 }),
               );
               console.log(
-                `${povId} chapter ${chapter.chapter}: ${result.wordCount} words, $${result.costUsd.toFixed(5)}, ${result.latencyMs}ms, ${result.adapterMode}`,
+                `${replacement.povId} chapter ${replacement.chapter} re-narrated: ${replacement.wordCount} words, $${replacement.costUsd.toFixed(5)}`,
               );
+            } finally {
+              store.close();
             }
-          } finally {
-            store.close();
+          }
+        } else {
+          for (const povId of plannedPovIds) {
+            const store = new StoryStore();
+            try {
+              const service = new StoryService(store, client, {
+                costHooks,
+                maxBackgroundAgents: 3,
+                maxCostUsdPerChapter: perChapterCapUsd,
+                nativeMultiAgent: nativeRequested,
+                onNarrativeAudit: (audit) => {
+                  if (!audit.approved) {
+                    auditRejections.push({ audit, povId });
+                    console.log(
+                      `audit rejected: ${JSON.stringify(audit.scores)}; leaks=${audit.leakedFactIds.join(",") || "none"}; ${audit.evidence.map(({ detail }) => detail).join(" ")}`,
+                    );
+                  }
+                },
+                onNarrativeCandidate: (candidate) => {
+                  narrativeCandidates.push(NarrativeCandidateEvidenceSchema.parse(candidate));
+                  writeNarrativeEvidenceSidecar(
+                    narrativeEvidencePath,
+                    attempts,
+                    narrativeCandidates,
+                    narrativeResponses,
+                    runtimeEvidenceStartAttemptIndex,
+                    runtimeAttemptEvidence,
+                    serviceTier,
+                    pricingVersion,
+                    sourceGitSha,
+                    liveRunId,
+                    supersededTurnIds,
+                    renarrationResults,
+                  );
+                },
+                onNarrativeDraftRejected: (issues) => {
+                  draftRejections.push({ issues: [...issues], povId });
+                  console.log(
+                    `draft rejected: ${issues.map(({ code, message }) => `${code}: ${message}`).join("; ")}`,
+                  );
+                },
+                onNarrativeResponse: (response) => {
+                  narrativeResponses.push(NarrativeResponseEvidenceSchema.parse(response));
+                  writeNarrativeEvidenceSidecar(
+                    narrativeEvidencePath,
+                    attempts,
+                    narrativeCandidates,
+                    narrativeResponses,
+                    runtimeEvidenceStartAttemptIndex,
+                    runtimeAttemptEvidence,
+                    serviceTier,
+                    pricingVersion,
+                    sourceGitSha,
+                    liveRunId,
+                    supersededTurnIds,
+                    renarrationResults,
+                  );
+                },
+                onRuntimeAttempt: (attempt, turn) => {
+                  attempts.push(attempt);
+                  runtimeAttemptEvidence.push({ attempt, turn: TurnIdentitySchema.parse(turn) });
+                  writeNarrativeEvidenceSidecar(
+                    narrativeEvidencePath,
+                    attempts,
+                    narrativeCandidates,
+                    narrativeResponses,
+                    runtimeEvidenceStartAttemptIndex,
+                    runtimeAttemptEvidence,
+                    serviceTier,
+                    pricingVersion,
+                    sourceGitSha,
+                    liveRunId,
+                    supersededTurnIds,
+                    renarrationResults,
+                  );
+                  if (attempt.errorCode !== null) {
+                    console.log(
+                      `${attempt.model} attempt ${attempt.attempt + 1}: ${attempt.errorCode}, $${attempt.costUsd.toFixed(5)}`,
+                    );
+                  }
+                },
+                serviceTier,
+              });
+              let view = service.selectPov(povId);
+              const retainedPrefix = results
+                .filter((result) => result.povId === povId)
+                .sort((left, right) => left.chapter - right.chapter);
+              if (retainedPrefix.length === 1) {
+                const retainedChapter = retainedPrefix[0];
+                if (!retainedChapter) throw new Error("Retained chapter prefix disappeared");
+                restoreRetainedChapter(store, retainedChapter, view.chapter.choices[0]);
+              }
+              for (let turn = retainedPrefix.length; turn < turnsPerPov; turn += 1) {
+                const beforeTurn = store.loadWorldState("ashen-crown-v1");
+                if (!beforeTurn) throw new Error("World disappeared before live turn");
+                const streamedChunks: string[] = [];
+                const streamingStartedAt = performance.now();
+                view = await service.takeTurn(
+                  turn === 0
+                    ? {
+                        choiceId: view.chapter.choices[0]?.id ?? "missing-choice",
+                        expectedWorldVersion: beforeTurn.version,
+                        requestId: randomUUID(),
+                        type: "take_action",
+                      }
+                    : {
+                        description: "Investigate the immediate area for fresh tracks.",
+                        expectedWorldVersion: beforeTurn.version,
+                        requestId: randomUUID(),
+                        type: "custom_action",
+                      },
+                  (chunk) => {
+                    streamedChunks.push(chunk);
+                  },
+                );
+                const streamingLatencyMs = Math.max(
+                  0,
+                  Math.round(performance.now() - streamingStartedAt),
+                );
+                const state = store.loadWorldState("ashen-crown-v1");
+                if (!state || !validateWorldState(state).ok) {
+                  throw new Error("World is invalid after live chapter");
+                }
+                const chapter = store.loadChapter("ashen-crown-v1", state.chapter);
+                if (!chapter) throw new Error(`Committed chapter ${state.chapter} is missing`);
+                const trace = store.loadTrace(chapter.traceId);
+                if (!trace) throw new Error(`Trace ${chapter.traceId} is missing`);
+                const povContext = buildPovContext(state, povId);
+                const allowedFactIds = [...povContext.factIds].sort();
+                const allowedFactIdSet = new Set(allowedFactIds);
+                const result: LiveResult = {
+                  adapterMode: trace.adapterMode,
+                  audit: chapter.narrativeAudit,
+                  canonicalNarrativeInput: {
+                    allowedFactIds,
+                    chapterRecord: chapter,
+                    forbiddenFacts: state.facts
+                      .filter(({ id }) => !allowedFactIdSet.has(id))
+                      .map(({ claim, id }) => ({ claim, id })),
+                    frame: {
+                      choices: chapter.choices,
+                      terminal: chapter.terminal,
+                      title: chapter.title,
+                    },
+                    playerAction: chapter.playerAction,
+                    stateAfter: state,
+                    stateBefore: beforeTurn,
+                    worldVersionAfter: chapter.stateAfterVersion,
+                    worldVersionBefore: chapter.stateBeforeVersion,
+                  },
+                  chapter: chapter.chapter,
+                  costUsd: chapter.estimatedCostUsd,
+                  latencyMs: chapter.latencyMs,
+                  povId,
+                  prose: chapter.prose,
+                  streamChunkCount: streamedChunks.length,
+                  streamChunks: streamedChunks,
+                  streamingLatencyMs,
+                  streamReconstructed: streamedChunks.join("") === chapter.prose,
+                  trace,
+                  usage: chapter.usage,
+                  wordCount: wordCount(chapter.prose),
+                };
+                assertChapterResult(result, nativeRequested, perChapterCapUsd);
+                results.push(result);
+                resultChapterCaps.push({
+                  capUsd: perChapterCapUsd,
+                  chapter: result.chapter,
+                  povId,
+                });
+                writeAtomicJson(
+                  reportPath,
+                  buildLiveReport(null, ledger.snapshot(), {
+                    adapterMode,
+                    apiKey,
+                    attempts,
+                    auditRejections,
+                    chapterCostCapUsd: perChapterCapUsd,
+                    draftRejections,
+                    existingAttemptCostUsd,
+                    narrativeCandidates,
+                    narrativeResponses,
+                    pricingVersion,
+                    cleanPathProjection,
+                    runtimeEvidenceStartAttemptIndex,
+                    runtimeAttemptEvidence,
+                    nativeRequested,
+                    povFilter,
+                    priorSpendUsd,
+                    projectedMaximumCumulativeCostUsd,
+                    renarrations,
+                    resultChapterCaps,
+                    results,
+                    resumePreparation,
+                    resumeReport,
+                    resumeReportPath,
+                    resumeSource,
+                    resumeVerification,
+                    sourceGitSha,
+                    serviceTier,
+                    startedAt,
+                    supersededTurnIds,
+                    suite,
+                  }),
+                );
+                console.log(
+                  `${povId} chapter ${chapter.chapter}: ${result.wordCount} words, $${result.costUsd.toFixed(5)}, ${result.latencyMs}ms, ${result.adapterMode}`,
+                );
+              }
+            } finally {
+              store.close();
+            }
           }
         }
       } catch (error) {
@@ -2877,6 +3336,7 @@ async function main(): Promise<void> {
       povFilter,
       priorSpendUsd,
       projectedMaximumCumulativeCostUsd,
+      renarrations,
       resultChapterCaps,
       results,
       resumePreparation,
@@ -2946,6 +3406,7 @@ export interface BuildLiveReportInput {
   readonly priorSpendUsd: number;
   readonly pricingVersion: string;
   readonly projectedMaximumCumulativeCostUsd: number;
+  readonly renarrations?: RenarrationProvenance[];
   readonly resultChapterCaps: ResultChapterCap[];
   readonly results: LiveResult[];
   readonly resumePreparation: ResumePreparation | null;
@@ -2986,6 +3447,10 @@ export function buildLiveReport(
   const totalCostUsd = sum(input.attempts.map(({ costUsd }) => costUsd));
   const completeMatrix =
     input.suite === "full" ? hasExactFullMatrix(input.results) : input.results.length === 1;
+  const renarrations = input.renarrations ?? [];
+  const allRenarrationsCompleted = renarrations.every(
+    ({ replacementTurnId }) => replacementTurnId !== null,
+  );
   const caps = new Map(
     input.resultChapterCaps.map(({ capUsd, chapter, povId }) => [
       resultKey(povId, chapter),
@@ -2998,6 +3463,7 @@ export function buildLiveReport(
     allCommitsCompleted:
       failure === null &&
       completeMatrix &&
+      allRenarrationsCompleted &&
       input.results.every(
         ({ canonicalNarrativeInput, streamChunks }) =>
           canonicalNarrativeInput !== undefined && streamChunks !== undefined,
@@ -3090,6 +3556,8 @@ export function buildLiveReport(
             changedPaths: input.resumeVerification.changedPaths,
             discardedResultCount: input.resumePreparation.discardedResultCount,
             existingAttemptCostUsd: input.existingAttemptCostUsd,
+            renarrate: input.resumePreparation.renarrate,
+            renarrations,
             rerunFrom: input.resumePreparation.rerunFrom,
             retainedPovIds: input.resumePreparation.retainedPovIds,
             retainedResults: input.resumePreparation.retainedResults.map((result) => {
@@ -3252,6 +3720,7 @@ export function writeNarrativeEvidenceSidecar(
   sourceGitSha: string,
   liveRunId: string,
   supersededTurnIds: readonly string[] = [],
+  renarrationResults: readonly LiveResult[] = [],
 ): void {
   writeAtomicJson(
     path,
@@ -3263,6 +3732,7 @@ export function writeNarrativeEvidenceSidecar(
       promptVersion: PROMPT_VERSION,
       reportVersion: REPORT_VERSION,
       pricingVersion,
+      renarrationResults,
       runtimeEvidenceStartAttemptIndex,
       runtimeSchemaVersion: RUNTIME_SCHEMA_VERSION,
       runtimeAttemptEvidence,
@@ -3357,6 +3827,18 @@ export function assertCommittedReportMatchesSidecar(
   ) {
     throw new Error("Committed report evidence does not exactly match its narrative sidecar");
   }
+  const reportRenarrationResults = (report.resume?.renarrations ?? []).flatMap(
+    ({ chapter, povId, replacementTurnId }) => {
+      if (replacementTurnId === null) return [];
+      const result = report.results.find(
+        (entry) => entry.povId === povId && entry.chapter === chapter,
+      );
+      return result === undefined ? [] : [result];
+    },
+  );
+  if (!isDeepStrictEqual(evidence.renarrationResults, reportRenarrationResults)) {
+    throw new Error("Committed report re-narration WAL does not match its sidecar");
+  }
   const sourceAttemptCount = report.resume?.sourceEvidenceBoundary?.attemptCount ?? 0;
   if (report.resume !== null && report.resume.sourceEvidenceBoundary === null) {
     throw new Error("Committed resumed report lacks an authenticated source evidence boundary");
@@ -3405,10 +3887,63 @@ function assertChapterResult(
   }
 }
 
+export function buildRenarratedLiveResult(
+  source: LiveResult,
+  generated: CanonicalRenarrationResult,
+  streamingLatencyMs: number,
+): LiveResult {
+  const canonical = source.canonicalNarrativeInput;
+  if (canonical === undefined) {
+    throw new Error(`Re-narration source ${resultKey(source.povId, source.chapter)} lacks canon`);
+  }
+  const result = LiveResultSchema.parse({
+    adapterMode: generated.trace.adapterMode,
+    audit: generated.chapter.narrativeAudit,
+    canonicalNarrativeInput: {
+      ...canonical,
+      chapterRecord: generated.chapter,
+    },
+    chapter: generated.chapter.chapter,
+    costUsd: generated.chapter.estimatedCostUsd,
+    latencyMs: generated.chapter.latencyMs,
+    povId: generated.chapter.povCharacterId,
+    prose: generated.chapter.prose,
+    streamChunkCount: generated.streamChunks.length,
+    streamChunks: [...generated.streamChunks],
+    streamingLatencyMs,
+    streamReconstructed: generated.streamChunks.join("") === generated.chapter.prose,
+    trace: generated.trace,
+    usage: generated.chapter.usage,
+    wordCount: wordCount(generated.chapter.prose),
+  });
+  if (canonicalNarrationSourceHash(result) !== canonicalNarrationSourceHash(source)) {
+    throw new Error("Re-narration changed canonical narrative inputs");
+  }
+  return result;
+}
+
+export function assertRenarrationReplacement(source: LiveResult, replacement: LiveResult): void {
+  const sourceRequestId = source.canonicalNarrativeInput?.chapterRecord.requestId;
+  const replacementRequestId = replacement.canonicalNarrativeInput?.chapterRecord.requestId;
+  if (
+    source.povId !== replacement.povId ||
+    source.chapter !== replacement.chapter ||
+    sourceRequestId === undefined ||
+    replacementRequestId === undefined ||
+    source.trace.runId === replacement.trace.runId ||
+    sourceRequestId === replacementRequestId ||
+    source.audit.proseHash === replacement.audit.proseHash ||
+    canonicalNarrationSourceHash(source) !== canonicalNarrationSourceHash(replacement)
+  ) {
+    throw new Error("Re-narration replacement changed canon or retained source identity");
+  }
+}
+
 export function prepareResume(
   report: ResumableLiveReport,
   requirements: ResumeRequirements,
   rerunFrom: readonly RerunFrom[] = [],
+  renarrate: readonly RerunFrom[] = [],
 ): ResumePreparation {
   if (report.suite !== "full") {
     throw new Error("Resume report must be a version 5 through 9 full-suite report");
@@ -3438,6 +3973,12 @@ export function prepareResume(
   if (new Set(rerunFrom.map(({ povId }) => povId)).size !== rerunFrom.length) {
     throw new Error("Explicit rerun repeats a POV");
   }
+  if (new Set(renarrate.map(({ povId }) => povId)).size !== renarrate.length) {
+    throw new Error("Explicit re-narration repeats a POV");
+  }
+  if (rerunFrom.length > 0 && renarrate.length > 0) {
+    throw new Error("Rerun and re-narration are mutually exclusive");
+  }
   if (
     report.version === REPORT_VERSION &&
     report.settledFailure !== null &&
@@ -3446,17 +3987,22 @@ export function prepareResume(
     const expectedTargets = report.settledFailure.rerunFrom
       .map(({ chapter, povId }) => resultKey(povId, chapter))
       .sort();
-    const actualTargets = rerunFrom.map(({ chapter, povId }) => resultKey(povId, chapter)).sort();
+    const activeTargets = rerunFrom.length > 0 ? rerunFrom : renarrate;
+    const actualTargets = activeTargets
+      .map(({ chapter, povId }) => resultKey(povId, chapter))
+      .sort();
     if (!isDeepStrictEqual(actualTargets, expectedTargets)) {
       throw new Error("Settled failure requires its exact recorded rerun targets");
     }
   }
   const rerunStartByPovId = new Map(rerunFrom.map(({ chapter, povId }) => [povId, chapter]));
+  const renarrateKeys = new Set(renarrate.map(({ chapter, povId }) => resultKey(povId, chapter)));
 
   const retainedResults: LiveResult[] = [];
   const retainedResultCaps: ResultChapterCap[] = [];
   const retainedPovIds: CharacterId[] = [];
   const pendingPovIds: CharacterId[] = [];
+  const renarrationSources: RenarrationSource[] = [];
   let discardedResultCount = 0;
   for (const povId of CHARACTER_IDS) {
     const povResults = report.results.filter((result) => result.povId === povId);
@@ -3501,11 +4047,42 @@ export function prepareResume(
       }
       retainedResults.push(...chapters);
       retainedPovIds.push(povId);
-      if (chapters.length < 2) pendingPovIds.push(povId);
+      if (
+        chapters.length < 2 ||
+        chapters.some(({ chapter }) => renarrateKeys.has(resultKey(povId, chapter)))
+      ) {
+        pendingPovIds.push(povId);
+      }
     } else {
       discardedResultCount += chapters.length;
       pendingPovIds.push(povId);
     }
+  }
+  if (renarrate.length > 0) {
+    if (report.version !== REPORT_VERSION) {
+      throw new Error("Canon-only re-narration requires a current version 9 report");
+    }
+    for (const target of renarrate) {
+      const result = retainedResults.find(
+        (entry) => entry.povId === target.povId && entry.chapter === target.chapter,
+      );
+      if (result?.canonicalNarrativeInput === undefined) {
+        throw new Error(
+          `Re-narration target ${resultKey(target.povId, target.chapter)} lacks canon`,
+        );
+      }
+      if ((report.supersededTurnIds ?? []).includes(result.trace.runId)) {
+        throw new Error(
+          `Re-narration target ${resultKey(target.povId, target.chapter)} is superseded`,
+        );
+      }
+      renarrationSources.push({
+        result,
+        sourceCanonicalHash: canonicalNarrationSourceHash(result),
+        sourceChapterCapUsd: sourceResultChapterCap(report, result.povId, result.chapter),
+      });
+    }
+    discardedResultCount += renarrate.length;
   }
   const attempts = [...report.attempts];
   const hasRuntimeEvidence =
@@ -3544,6 +4121,8 @@ export function prepareResume(
       : report.attempts.length,
     runtimeAttemptEvidence: hasRuntimeEvidence ? [...report.runtimeAttemptEvidence] : [],
     pendingPovIds,
+    renarrate: [...renarrate],
+    renarrationSources,
     rerunFrom: [...rerunFrom],
     retainedPovIds,
     retainedResultCaps,
@@ -3578,6 +4157,34 @@ export function projectedCumulativeCostUsd(
   chapterCostCapUsd: number,
 ): number {
   return priorSpendUsd + existingAttemptCostUsd + pendingChapterCount * chapterCostCapUsd;
+}
+
+export function assertRenarrationPlanFits(
+  priorSpendUsd: number,
+  existingAttemptCostUsd: number,
+  targetCount: number,
+  chapterCostCapUsd: number,
+  totalCapUsd = TOTAL_CAP_USD,
+): ReturnType<typeof assertPrompt1411FullMatrixFits> {
+  if (!Number.isInteger(targetCount) || targetCount <= 0) {
+    throw new Error("Re-narration cost preflight requires at least one exact target");
+  }
+  const projectedMatrixCostUsd = roundNanoUsd(targetCount * chapterCostCapUsd);
+  const projectedFinalExposureUsd = roundNanoUsd(
+    projectedCumulativeCostUsd(
+      priorSpendUsd,
+      existingAttemptCostUsd,
+      targetCount,
+      chapterCostCapUsd,
+    ),
+  );
+  const headroomAfterProjectionUsd = roundNanoUsd(totalCapUsd - projectedFinalExposureUsd);
+  if (headroomAfterProjectionUsd < 0) {
+    throw new Error(
+      `Re-narration plan exceeds the live cap by $${Math.abs(headroomAfterProjectionUsd).toFixed(9)}`,
+    );
+  }
+  return { headroomAfterProjectionUsd, projectedFinalExposureUsd, projectedMatrixCostUsd };
 }
 
 export function hasExactFullMatrix(results: readonly LiveResult[]): boolean {
@@ -3750,24 +4357,35 @@ function parsePov(args: readonly string[]): CharacterId | null {
 }
 
 export function parseRerunFrom(args: readonly string[]): RerunFrom[] {
+  return parseChapterTargets(args, "--rerun-from");
+}
+
+export function parseRenarrate(args: readonly string[]): RerunFrom[] {
+  return parseChapterTargets(args, "--renarrate");
+}
+
+function parseChapterTargets(
+  args: readonly string[],
+  flag: "--renarrate" | "--rerun-from",
+): RerunFrom[] {
   const values: RerunFrom[] = [];
   for (let index = 0; index < args.length; index += 1) {
-    if (args[index] !== "--rerun-from") continue;
+    if (args[index] !== flag) continue;
     const value = args[index + 1];
     if (value === undefined || value.startsWith("--")) {
-      throw new Error("--rerun-from requires a value");
+      throw new Error(`${flag} requires a value`);
     }
     const match = /^(.*):([12])$/u.exec(value);
     if (match === null) {
-      throw new Error("--rerun-from requires <pov-id>:<chapter 1 or 2>");
+      throw new Error(`${flag} requires <pov-id>:<chapter 1 or 2>`);
     }
     const povId = match[1];
     const chapter = Number(match[2]) as 1 | 2;
     if (!CHARACTER_IDS.includes(povId as CharacterId)) {
-      throw new Error(`Unknown --rerun-from POV ${povId}`);
+      throw new Error(`Unknown ${flag} POV ${povId}`);
     }
     if (values.some((entry) => entry.povId === povId)) {
-      throw new Error(`--rerun-from repeats ${povId}`);
+      throw new Error(`${flag} repeats ${povId}`);
     }
     values.push({ chapter, povId: povId as CharacterId });
     index += 1;
@@ -3841,6 +4459,35 @@ function assertResultPayloadConsistency(result: LiveResult): void {
   if (result.trace.gateResult !== "passed") {
     throw new Error("Resume result trace gate did not pass");
   }
+}
+
+export function canonicalNarrationSourceHash(result: LiveResult): string {
+  const canonical = result.canonicalNarrativeInput;
+  if (canonical === undefined) {
+    throw new Error(`Result ${resultKey(result.povId, result.chapter)} lacks canonical evidence`);
+  }
+  return hashJson({
+    acceptedDelta: result.trace.acceptedDelta,
+    adapterMode: result.adapterMode,
+    allowedFactIds: canonical.allowedFactIds,
+    chapter: result.chapter,
+    chapterId: canonical.chapterRecord.id,
+    fixtureId: result.trace.fixtureId,
+    fixtureVersion: result.trace.fixtureVersion,
+    forbiddenFacts: canonical.forbiddenFacts,
+    frame: canonical.frame,
+    intents: result.trace.intents,
+    multiAgentOutputItems: result.trace.multiAgentOutputItems,
+    playerAction: canonical.playerAction,
+    povId: result.povId,
+    safeContextHash: canonical.chapterRecord.safeContextHash,
+    stateAfter: canonical.stateAfter,
+    stateAfterHash: result.trace.stateAfterHash,
+    stateBefore: canonical.stateBefore,
+    stateBeforeHash: result.trace.stateBeforeHash,
+    worldVersionAfter: canonical.worldVersionAfter,
+    worldVersionBefore: canonical.worldVersionBefore,
+  });
 }
 
 function hashText(value: string): string {

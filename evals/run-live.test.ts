@@ -32,13 +32,19 @@ import {
   Version6LiveReportSchema,
   Version7LiveReportSchema,
   Version8LiveReportSchema,
+  assertRenarrationPlanFits,
+  assertRenarrationReplacement,
   assertCommittedReportMatchesSidecar,
   assertRegisteredResumeCheckpoint,
   assertResumeHarnessPaths,
+  buildLiveReport,
+  buildRenarratedLiveResult,
+  canonicalNarrationSourceHash,
   createLiveRunFinalizationState,
   hasExactFullMatrix,
   isAppendOnlyEvidence,
   parseLiveReport,
+  parseRenarrate,
   parseRerunFrom,
   prepareResume,
   projectedCumulativeCostUsd,
@@ -48,6 +54,7 @@ import {
   writeNarrativeEvidenceSidecar,
   type LiveReport,
   type LiveResult,
+  type RenarrationProvenance,
   type ResumeRequirements,
   type Version7LiveReport,
 } from "./run-live";
@@ -136,9 +143,10 @@ describe("live report version 9", () => {
     const directory = mkdtempSync(join(tmpdir(), "infinite-litrpg-evidence-"));
     const filename = join(directory, "narrative-candidates.json");
     try {
+      const walResult = fakeResult("rowan-ashborn", 1, 0);
       writeNarrativeEvidenceSidecar(
         filename,
-        fakeResult("rowan-ashborn", 1, 0).trace.attempts,
+        walResult.trace.attempts,
         [NarrativeCandidateEvidenceSchema.parse(fakeNarrativeCandidate())],
         fakeNarrativeResponses([fakeNarrativeCandidate()]),
         0,
@@ -147,6 +155,8 @@ describe("live report version 9", () => {
         "openai-flex-explicit-no-cache-2026-07-20",
         GIT_SHA,
         "00000000-0000-4000-8000-000000000088",
+        [],
+        [walResult],
       );
       const sidecar = JSON.parse(readFileSync(filename, "utf8")) as {
         attempts: LiveReport["attempts"];
@@ -169,6 +179,15 @@ describe("live report version 9", () => {
           "openai-flex-explicit-no-cache-2026-07-20",
         ).narrativeResponses,
       ).toHaveLength(2);
+      expect(
+        readNarrativeEvidenceSidecar(
+          filename,
+          "00000000-0000-4000-8000-000000000088",
+          GIT_SHA,
+          "flex",
+          "openai-flex-explicit-no-cache-2026-07-20",
+        ).renarrationResults,
+      ).toEqual([walResult]);
       expect(() =>
         readNarrativeEvidenceSidecar(
           filename,
@@ -1013,6 +1032,121 @@ describe("live report version 9", () => {
     ).toThrow("repeats");
   });
 
+  it("prepares exact canon-only re-narration targets without discarding dependent chapters", () => {
+    const results = [
+      fakeResult("rowan-ashborn", 1, 0.01),
+      fakeResult("rowan-ashborn", 2, 0.01),
+      fakeResult("elara-voss", 1, 0.01),
+      fakeResult("elara-voss", 2, 0.01),
+    ];
+    const report = fakeReport(results, {
+      attempts: results.flatMap(({ trace }) => trace.attempts),
+      gates: {
+        ...(emptyReportData().gates as LiveReport["gates"]),
+        serviceTierEvidenceComplete: true,
+      },
+      narrativeCandidates: results.map((result) => fakeNarrativeCandidate(result)),
+      runtimeAttemptEvidence: fakeRuntimeAttemptEvidence(results),
+    });
+    report.narrativeResponses = fakeNarrativeResponses(report.narrativeCandidates);
+    report.settledFailure = {
+      checkpointId: "settled-test-1",
+      rerunFrom: [
+        { chapter: 2, povId: "rowan-ashborn" },
+        { chapter: 1, povId: "elara-voss" },
+      ],
+      runId: fakeUuid(920),
+      sidecarSha256: "a".repeat(64),
+      turnIds: [fakeUuid(921)],
+    };
+    const targets = [
+      { chapter: 2 as const, povId: "rowan-ashborn" as const },
+      { chapter: 1 as const, povId: "elara-voss" as const },
+    ];
+
+    const prepared = prepareResume(report, REQUIREMENTS, [], targets);
+
+    expect(prepared.retainedResults).toHaveLength(4);
+    expect(prepared.renarrate).toEqual(targets);
+    expect(prepared.renarrationSources.map(({ result }) => [result.povId, result.chapter])).toEqual(
+      [
+        ["rowan-ashborn", 2],
+        ["elara-voss", 1],
+      ],
+    );
+    expect(prepared.supersededTurnIds).toEqual([fakeUuid(921)]);
+    expect(prepared.supersededTurnIds).not.toContain(results[1]?.trace.runId);
+    expect(prepared.supersededTurnIds).not.toContain(results[2]?.trace.runId);
+    expect(() => prepareResume(report, REQUIREMENTS, targets, targets)).toThrow(
+      "mutually exclusive",
+    );
+  });
+
+  it("rebuilds only prose evidence and rejects any canonical replacement drift", () => {
+    const source = fakeResult("elara-voss", 1, 0.01);
+    const canonical = source.canonicalNarrativeInput;
+    if (canonical === undefined) throw new Error("Fake source lacks canon");
+    const prose = Array.from({ length: 900 }, () => "Ember").join(" ");
+    const proseHash = createHash("sha256").update(prose).digest("hex");
+    const turnId = fakeUuid(950);
+    const requestId = fakeUuid(951);
+    const generated = {
+      chapter: {
+        ...canonical.chapterRecord,
+        narrativeAudit: {
+          ...source.audit,
+          proseHash,
+        },
+        prose,
+        proseHash,
+        requestId,
+        traceId: turnId,
+      },
+      streamChunks: prose.match(/[\s\S]{1,512}/gu) ?? [],
+      trace: TraceEnvelopeSchema.parse({
+        ...source.trace,
+        calls: source.trace.calls.map((call) =>
+          call.phase === "audit" ? { ...call, reasoningEffort: "low" as const } : call,
+        ),
+        gitSha: "fedcba0",
+        runId: turnId,
+      }),
+    };
+
+    const replacement = buildRenarratedLiveResult(source, generated, 12);
+
+    expect(() => assertRenarrationReplacement(source, replacement)).not.toThrow();
+    expect(canonicalNarrationSourceHash(replacement)).toBe(canonicalNarrationSourceHash(source));
+    expect(replacement.trace.calls.find(({ phase }) => phase === "audit")?.reasoningEffort).toBe(
+      "low",
+    );
+    expect(replacement.canonicalNarrativeInput?.stateAfter).toEqual(canonical.stateAfter);
+    expect(replacement.canonicalNarrativeInput?.chapterRecord.requestId).toBe(requestId);
+
+    const tampered = structuredClone(replacement);
+    const actor = tampered.canonicalNarrativeInput?.stateAfter.characters.find(
+      ({ id }) => id === "elara-voss",
+    );
+    if (!actor) throw new Error("Fake replacement actor is missing");
+    actor.health.current -= 1;
+    expect(() => assertRenarrationReplacement(source, tampered)).toThrow("changed canon");
+    expect(() => assertRenarrationReplacement(source, source)).toThrow("source identity");
+  });
+
+  it("parses repeated canon-only re-narration flags strictly", () => {
+    expect(
+      parseRenarrate(["--renarrate", "rowan-ashborn:2", "--renarrate", "elara-voss:1"]),
+    ).toEqual([
+      { chapter: 2, povId: "rowan-ashborn" },
+      { chapter: 1, povId: "elara-voss" },
+    ]);
+    expect(() => parseRenarrate(["--renarrate"])).toThrow("requires a value");
+    expect(() => parseRenarrate(["--renarrate", "unknown:1"])).toThrow("Unknown");
+    expect(() =>
+      parseRenarrate(["--renarrate", "rowan-ashborn:1", "--renarrate", "rowan-ashborn:2"]),
+    ).toThrow("repeats");
+  });
+
   it("rejects checkpoint drift", () => {
     const report = fakeReport([]);
 
@@ -1634,6 +1768,120 @@ describe("live report version 9", () => {
       }).success,
     ).toBe(false);
   });
+
+  it("binds a replacement turn to source prose while preserving exact canon", () => {
+    const replacementReport = fakeSmokeReport();
+    const replacement = replacementReport.results[0]!;
+    const source = structuredClone(replacement);
+    const sourceProse = Array.from({ length: 900 }, () => "Source").join(" ");
+    const sourceProseHash = createHash("sha256").update(sourceProse).digest("hex");
+    const sourceTurnId = fakeUuid(930);
+    const sourceRequestId = fakeUuid(931);
+    source.prose = sourceProse;
+    source.audit.proseHash = sourceProseHash;
+    source.trace.gitSha = "1234567";
+    source.trace.runId = sourceTurnId;
+    source.trace.attempts = source.trace.attempts.map((attempt) => ({
+      ...attempt,
+      responseId: attempt.phase === "audit" ? "resp_source_audit" : "resp_source_narration",
+    }));
+    source.trace.calls = source.trace.calls.map((call) => ({
+      ...call,
+      responseId: call.phase === "audit" ? "resp_source_audit" : "resp_source_narration",
+    }));
+    if (source.canonicalNarrativeInput === undefined) throw new Error("Fake source lost canon");
+    source.canonicalNarrativeInput.chapterRecord.prose = sourceProse;
+    source.canonicalNarrativeInput.chapterRecord.proseHash = sourceProseHash;
+    source.canonicalNarrativeInput.chapterRecord.narrativeAudit.proseHash = sourceProseHash;
+    source.canonicalNarrativeInput.chapterRecord.requestId = sourceRequestId;
+    source.canonicalNarrativeInput.chapterRecord.traceId = sourceTurnId;
+    const sourceCandidate = fakeNarrativeCandidate(source);
+    const sourceResponses = fakeNarrativeResponses([sourceCandidate]);
+    const sourceReportSha256 = "f".repeat(64);
+    const candidate = {
+      ...replacementReport,
+      attempts: [...source.trace.attempts, ...replacementReport.attempts],
+      budgetLedger: {
+        ...replacementReport.budgetLedger,
+        baselineAttemptCostUsd: 0,
+        sourceReportSha256,
+      },
+      narrativeCandidates: [sourceCandidate, ...replacementReport.narrativeCandidates],
+      narrativeResponses: [...sourceResponses, ...replacementReport.narrativeResponses],
+      resume: {
+        bridgeFiles: [],
+        changedPaths: [],
+        discardedResultCount: 1,
+        existingAttemptCostUsd: 0,
+        renarrate: [{ chapter: 1 as const, povId: "rowan-ashborn" as const }],
+        renarrations: [
+          {
+            chapter: 1 as const,
+            povId: "rowan-ashborn" as const,
+            replacementProseHash: replacement.audit.proseHash,
+            replacementRequestId:
+              replacement.canonicalNarrativeInput?.chapterRecord.requestId ?? null,
+            replacementTurnId: replacement.trace.runId,
+            sourceCanonicalHash: canonicalNarrationSourceHash(source),
+            sourceProseHash,
+            sourceRequestId,
+            sourceTurnId,
+          },
+        ],
+        rerunFrom: [],
+        retainedPovIds: ["rowan-ashborn" as const],
+        retainedResults: [
+          {
+            chapter: 1,
+            povId: "rowan-ashborn" as const,
+            sourceChapterCapUsd: replacementReport.chapterCostCapUsd,
+            sourceGitSha: source.trace.gitSha,
+          },
+        ],
+        sourceChapterCostCapUsd: replacementReport.chapterCostCapUsd,
+        sourceEvidenceBoundary: {
+          attemptCount: source.trace.attempts.length,
+          narrativeCandidateCount: 1,
+          narrativeResponseCount: sourceResponses.length,
+          runtimeAttemptEvidenceCount: source.trace.attempts.length,
+        },
+        sourceGitSha: source.trace.gitSha,
+        sourceReportPath: "evals/reports/source.json",
+        sourceReportSha256,
+        sourceReportVersion: 9 as const,
+      },
+      runtimeAttemptEvidence: [
+        ...source.trace.attempts.map((attempt) => ({
+          attempt,
+          turn: fakeTurnIdentity(source),
+        })),
+        ...replacementReport.runtimeAttemptEvidence,
+      ],
+      supersededTurnIds: [sourceTurnId],
+    };
+
+    expect(LiveReportSchema.safeParse(candidate).success).toBe(true);
+    expect(LiveReportSchema.safeParse({ ...candidate, supersededTurnIds: [] }).success).toBe(false);
+    expect(
+      LiveReportSchema.safeParse({
+        ...candidate,
+        resume: {
+          ...candidate.resume,
+          renarrations: candidate.resume.renarrations.map((entry) => ({
+            ...entry,
+            replacementTurnId: sourceTurnId,
+          })),
+        },
+      }).success,
+    ).toBe(false);
+    const tampered = structuredClone(candidate);
+    const actor = tampered.results[0]?.canonicalNarrativeInput?.stateAfter.characters.find(
+      ({ id }) => id === "rowan-ashborn",
+    );
+    if (!actor) throw new Error("Fake result actor is missing");
+    actor.health.current -= 1;
+    expect(LiveReportSchema.safeParse(tampered).success).toBe(false);
+  });
 });
 
 describe("resumed live gates", () => {
@@ -1661,6 +1909,137 @@ describe("resumed live gates", () => {
       2.9997876,
       10,
     );
+    expect(assertRenarrationPlanFits(2.811082175, 0.1481945, 3, 0.0135)).toEqual({
+      headroomAfterProjectionUsd: 0.000223325,
+      projectedFinalExposureUsd: 2.999776675,
+      projectedMatrixCostUsd: 0.0405,
+    });
+    expect(() => assertRenarrationPlanFits(2.811082175, 0.1481945, 3, 0.0136)).toThrow(
+      "exceeds the live cap",
+    );
+  });
+
+  it("builds a strict full-suite report before three-target re-narration", () => {
+    const priorSpendUsd = 2.811082175;
+    const sourceChapterCapUsd = 0.0424;
+    const chapterCostCapUsd = 0.0135;
+    const sourceReportSha256 = "e".repeat(64);
+    const targets = [
+      { chapter: 2 as const, povId: "rowan-ashborn" as const },
+      { chapter: 1 as const, povId: "elara-voss" as const },
+      { chapter: 1 as const, povId: "lucan-aurelis" as const },
+    ] as const;
+    const sourceResults = CHARACTER_IDS.flatMap((povId) =>
+      ([1, 2] as const).map((chapter, index) =>
+        fakeResult(povId, chapter, CHARACTER_IDS.indexOf(povId) * 2 + index < 4 ? 0.037048625 : 0),
+      ),
+    );
+    const attempts = sourceResults.flatMap(({ trace }) => trace.attempts);
+    const narrativeCandidates = sourceResults.map(fakeNarrativeCandidate);
+    const narrativeResponses = fakeNarrativeResponses(narrativeCandidates);
+    const runtimeAttemptEvidence = fakeRuntimeAttemptEvidence(sourceResults);
+    const existingAttemptCostUsd = attempts.reduce((sum, attempt) => sum + attempt.costUsd, 0);
+    expect(existingAttemptCostUsd).toBeCloseTo(0.1481945, 10);
+    const sourceReport = fakeReport(sourceResults, {
+      attempts,
+      chapterCostCapUsd: sourceChapterCapUsd,
+      cumulativeCostUsd: priorSpendUsd + existingAttemptCostUsd,
+      gates: {
+        ...(emptyReportData().gates as LiveReport["gates"]),
+        serviceTierEvidenceComplete: true,
+      },
+      narrativeCandidates,
+      narrativeResponses,
+      priorSpendUsd,
+      resultChapterCaps: sourceResults.map(({ chapter, povId }) => ({
+        capUsd: sourceChapterCapUsd,
+        chapter,
+        povId,
+      })),
+      runtimeAttemptEvidence,
+      totalCostUsd: existingAttemptCostUsd,
+    });
+    const requirements: ResumeRequirements = {
+      adapterMode: "sequential",
+      chapterCostCapUsd,
+      priorSpendUsd,
+      promptVersion: PROMPT_VERSION,
+      serviceTier: "flex",
+      sourceGitSha: GIT_SHA,
+    };
+    const prepared = prepareResume(sourceReport, requirements, [], targets);
+    const projection = assertRenarrationPlanFits(
+      priorSpendUsd,
+      prepared.existingAttemptCostUsd,
+      targets.length,
+      chapterCostCapUsd,
+    );
+    const renarrations: RenarrationProvenance[] = targets.map((target, index) => {
+      const source = prepared.renarrationSources[index];
+      const requestId = source?.result.canonicalNarrativeInput?.chapterRecord.requestId;
+      if (!source || requestId === undefined)
+        throw new Error("Fake re-narration source is invalid");
+      return {
+        ...target,
+        replacementProseHash: null,
+        replacementRequestId: null,
+        replacementTurnId: null,
+        sourceCanonicalHash: source.sourceCanonicalHash,
+        sourceProseHash: source.result.audit.proseHash,
+        sourceRequestId: requestId,
+        sourceTurnId: source.result.trace.runId,
+      };
+    });
+    const report = buildLiveReport(
+      new Error("pre-provider checkpoint"),
+      {
+        activeReservationCount: 0,
+        baselineAttemptCostUsd: existingAttemptCostUsd,
+        headroomUsd: 0.040723325,
+        knownReservationCostUsd: 0,
+        priorSpendUsd,
+        sourceReportSha256,
+        totalCapUsd: 3,
+        totalExposureUsd: priorSpendUsd + existingAttemptCostUsd,
+        uncertainReservationCostUsd: 0,
+      },
+      {
+        adapterMode: "sequential",
+        apiKey: "test-key",
+        attempts: prepared.attempts,
+        auditRejections: prepared.auditRejections,
+        chapterCostCapUsd,
+        cleanPathProjection: projection,
+        draftRejections: prepared.draftRejections,
+        existingAttemptCostUsd: prepared.existingAttemptCostUsd,
+        narrativeCandidates: prepared.narrativeCandidates,
+        narrativeResponses: prepared.narrativeResponses,
+        nativeRequested: false,
+        povFilter: null,
+        pricingVersion: "openai-flex-explicit-no-cache-2026-07-20",
+        priorSpendUsd,
+        projectedMaximumCumulativeCostUsd: projection.projectedFinalExposureUsd,
+        renarrations,
+        resultChapterCaps: prepared.retainedResultCaps,
+        results: prepared.retainedResults,
+        resumePreparation: prepared,
+        resumeReport: sourceReport,
+        resumeReportPath: "evals/reports/source.json",
+        resumeSource: { report: sourceReport, sha256: sourceReportSha256 },
+        resumeVerification: { bridgeFiles: [], changedPaths: [] },
+        runtimeAttemptEvidence: prepared.runtimeAttemptEvidence,
+        runtimeEvidenceStartAttemptIndex: prepared.runtimeEvidenceStartAttemptIndex,
+        serviceTier: "flex",
+        sourceGitSha: GIT_SHA,
+        startedAt: "2026-07-20T00:00:00.000Z",
+        suite: "full",
+        supersededTurnIds: prepared.supersededTurnIds,
+      },
+    );
+
+    expect(LiveReportSchema.parse(report).cleanPathProjectedCostUsd).toBe(0.0405);
+    expect(report.projectedFinalExposureUsd).toBe(2.999776675);
+    expect(report.gates.allCommitsCompleted).toBe(false);
   });
 });
 

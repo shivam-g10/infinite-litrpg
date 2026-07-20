@@ -2,16 +2,20 @@ import { createHash, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 
 import {
   CONTRACT_VERSION,
   ChapterFrameModelCandidateSchema,
+  ChapterFrameSchema,
   NARRATIVE_AUDIT_DIMENSIONS,
   NarrativeAuditCandidateSchema,
   NarrativeAuditSchema,
   PlayerActionSchema,
   PROMPT_VERSION,
   RUNTIME_SCHEMA_VERSION,
+  WorldDeltaSchema,
+  WorldIntentSchema,
   type ChapterFrame,
   type ChapterRecord,
   type Choice,
@@ -49,6 +53,8 @@ import {
   type RuntimeAttempt,
   type RuntimeCallResult,
   type RuntimeCostHooks,
+  type RuntimePolicy,
+  type RuntimeReasoningEffort,
   type RuntimeUsage,
   type NarrationRawCandidateContext,
   pricingVersionForServiceTier,
@@ -165,6 +171,7 @@ type NarrativeCandidateOutcome = Pick<
 >;
 
 export interface StoryServiceOptions {
+  readonly auditReasoningEffort?: Extract<RuntimeReasoningEffort, "low" | "none">;
   readonly costHooks?: RuntimeCostHooks;
   readonly maxBackgroundAgents: number;
   readonly maxCostUsdPerChapter: number;
@@ -178,6 +185,23 @@ export interface StoryServiceOptions {
     turn: NarrativeTurnIdentity,
   ) => void;
   readonly serviceTier?: RuntimeServiceTier;
+}
+
+export interface CanonicalNarrationSource {
+  readonly adapterMode: TraceEnvelope["adapterMode"];
+  readonly delta: WorldDelta;
+  readonly frame: ChapterFrame;
+  readonly intents: readonly TraceEnvelope["intents"][number][];
+  readonly multiAgentOutputItems: readonly TraceEnvelope["multiAgentOutputItems"][number][];
+  readonly playerAction: PlayerAction;
+  readonly stateAfter: WorldState;
+  readonly stateBefore: WorldState;
+}
+
+export interface CanonicalRenarrationResult {
+  readonly chapter: ChapterRecord;
+  readonly streamChunks: readonly string[];
+  readonly trace: TraceEnvelope;
 }
 
 export interface TakeChoiceCommand {
@@ -261,6 +285,116 @@ export class StoryService {
     } finally {
       releaseTurn();
     }
+  }
+
+  async renarrateCanonicalTurn(
+    source: CanonicalNarrationSource,
+    requestId: string,
+    onNarrationChunk?: (chunk: string) => void | Promise<void>,
+  ): Promise<CanonicalRenarrationResult> {
+    const canonical = parseCanonicalNarrationSource(source);
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(requestId)
+    ) {
+      throw new StoryServiceError("Request ID must be a UUID");
+    }
+    const startedAt = performance.now();
+    const turnId = randomUUID();
+    const turnIdentity: NarrativeTurnIdentity = {
+      chapter: canonical.stateAfter.chapter,
+      povId: canonical.stateBefore.lockedPovId!,
+      requestId,
+      turnId,
+      worldVersionAfter: canonical.stateAfter.version,
+      worldVersionBefore: canonical.stateBefore.version,
+    };
+    const budget = new ChapterCostBudget(this.options.maxCostUsdPerChapter);
+    const serviceTier = this.options.serviceTier ?? "standard";
+    const pricingVersion = pricingVersionForServiceTier(serviceTier);
+    const attempts: TraceEnvelope["attempts"] = [];
+    let attemptPhase: TraceEnvelope["attempts"][number]["phase"] = "narration";
+    const policy: RuntimePolicy = {
+      budget,
+      ...(this.options.costHooks === undefined ? {} : { costHooks: this.options.costHooks }),
+      maxRetries: 2,
+      onAttempt: (attempt) => {
+        const tracedAttempt = { ...attempt, phase: attemptPhase };
+        attempts.push(tracedAttempt);
+        this.options.onRuntimeAttempt?.(tracedAttempt, turnIdentity);
+      },
+      serviceTier,
+      timeoutMs: 60_000,
+    };
+    const narration = await generateAuditedCanonicalNarration(this.client, canonical, {
+      auditReasoningEffort: this.options.auditReasoningEffort ?? "none",
+      onNarrativeAudit: this.options.onNarrativeAudit,
+      onNarrativeCandidate: this.options.onNarrativeCandidate,
+      onNarrativeDraftRejected: this.options.onNarrativeDraftRejected,
+      onNarrativeResponse: this.options.onNarrativeResponse,
+      policy,
+      setAttemptPhase: (phase) => {
+        attemptPhase = phase;
+      },
+      turn: turnIdentity,
+    });
+    const totalUsage = attempts.reduce<RuntimeUsage>(
+      (sum, attempt) => addUsage(sum, attempt.usage),
+      ZERO_USAGE,
+    );
+    const totalEstimatedCostUsd = attempts.reduce((sum, attempt) => sum + attempt.costUsd, 0);
+    const totalLatencyMs = Math.max(0, Math.round(performance.now() - startedAt));
+    const trace: TraceEnvelope = {
+      acceptedDelta: canonical.delta,
+      adapterMode: canonical.adapterMode,
+      attempts,
+      calls: [...narration.calls],
+      contractVersion: CONTRACT_VERSION,
+      fixtureId: canonical.stateBefore.id,
+      fixtureVersion: canonical.stateBefore.fixtureVersion,
+      gateResult: "passed",
+      gitSha: currentGitSha(),
+      intents: [...canonical.intents],
+      multiAgentOutputItems: [...canonical.multiAgentOutputItems],
+      pricingVersion,
+      promptVersion: PROMPT_VERSION,
+      runId: turnId,
+      schemaVersion: RUNTIME_SCHEMA_VERSION,
+      seed: canonical.stateBefore.chapter,
+      stateAfterHash: hashJson(canonical.stateAfter),
+      stateBeforeHash: hashJson(canonical.stateBefore),
+      totalEstimatedCostUsd,
+      totalLatencyMs,
+      totalUsage,
+      validationFailures: [],
+    };
+    const chapter: ChapterRecord = {
+      chapter: canonical.stateAfter.chapter,
+      choices: canonical.frame.choices,
+      estimatedCostUsd: totalEstimatedCostUsd,
+      id: `chapter-${String(canonical.stateAfter.chapter).padStart(3, "0")}`,
+      latencyMs: totalLatencyMs,
+      narrativeAudit: narration.audit,
+      playerAction: canonical.playerAction,
+      povCharacterId: canonical.stateBefore.lockedPovId!,
+      prose: narration.prose,
+      proseHash: hashText(narration.prose),
+      requestId,
+      safeContextHash: hashJson(
+        buildPovContext(canonical.stateAfter, canonical.stateBefore.lockedPovId!),
+      ),
+      stateAfterVersion: canonical.stateAfter.version,
+      stateBeforeVersion: canonical.stateBefore.version,
+      terminal: canonical.stateAfter.terminal,
+      title: canonical.frame.title,
+      traceId: turnId,
+      usage: totalUsage,
+    };
+    const streamChunks: string[] = [];
+    for await (const chunk of narration.replay) {
+      streamChunks.push(chunk);
+      await onNarrationChunk?.(chunk);
+    }
+    return { chapter, streamChunks, trace };
   }
 
   private async takeTurnUnlocked(
@@ -381,7 +515,7 @@ export class StoryService {
             },
           });
           playerAction = customCall.data;
-          calls.push(toModelCall(customCall, "gpt-5.6-terra", "intent", null));
+          calls.push(toModelCall(customCall, "gpt-5.6-terra", "intent", null, "none"));
         }
       }
 
@@ -456,7 +590,7 @@ export class StoryService {
         ...frameCandidateCall,
         data: frameValidation.data,
       };
-      calls.push(toModelCall(frameCall, "gpt-5.6-luna", "intent", null));
+      calls.push(toModelCall(frameCall, "gpt-5.6-luna", "intent", null, "none"));
 
       const auditCalls: RuntimeCallResult<NarrativeAudit>[] = [];
       const recoveryCalls: Array<Parameters<typeof toModelCall>[0]> = [];
@@ -780,15 +914,17 @@ export class StoryService {
         policy,
         reasoningEffort: "none",
       });
-      calls.push(toModelCall(narration, CHAPTER_NARRATION_MODEL, "narration", null));
+      calls.push(toModelCall(narration, CHAPTER_NARRATION_MODEL, "narration", null, "none"));
       calls.push(
-        ...recoveryCalls.map((call) => toModelCall(call, "gpt-5.6-luna", "recovery", null)),
+        ...recoveryCalls.map((call) => toModelCall(call, "gpt-5.6-luna", "recovery", null, "none")),
       );
       if (auditCalls.length === 0 || approvedAudit === null) {
         throw new StoryServiceError("Narrative audit did not complete", 502);
       }
       calls.push(
-        ...auditCalls.map((auditCall) => toModelCall(auditCall, "gpt-5.6-luna", "audit", null)),
+        ...auditCalls.map((auditCall) =>
+          toModelCall(auditCall, "gpt-5.6-luna", "audit", null, "none"),
+        ),
       );
 
       const totalUsage = attempts.reduce<RuntimeUsage>(
@@ -1057,6 +1193,429 @@ export interface StoryView {
   readonly world: Readonly<Record<string, unknown>>;
 }
 
+interface AuditedCanonicalNarrationOptions {
+  readonly auditReasoningEffort: Extract<RuntimeReasoningEffort, "low" | "none">;
+  readonly onNarrativeAudit?: StoryServiceOptions["onNarrativeAudit"];
+  readonly onNarrativeCandidate?: StoryServiceOptions["onNarrativeCandidate"];
+  readonly onNarrativeDraftRejected?: StoryServiceOptions["onNarrativeDraftRejected"];
+  readonly onNarrativeResponse?: StoryServiceOptions["onNarrativeResponse"];
+  readonly policy: RuntimePolicy;
+  readonly setAttemptPhase: (phase: "audit" | "narration" | "recovery") => void;
+  readonly turn: NarrativeTurnIdentity;
+}
+
+interface AuditedCanonicalNarrationResult {
+  readonly audit: NarrativeAudit;
+  readonly calls: readonly ModelCallTrace[];
+  readonly prose: string;
+  readonly replay: AsyncIterable<string>;
+}
+
+function parseCanonicalNarrationSource(source: CanonicalNarrationSource): CanonicalNarrationSource {
+  const beforeValidation = validateWorldState(source.stateBefore);
+  const afterValidation = validateWorldState(source.stateAfter);
+  if (!beforeValidation.ok || !afterValidation.ok) {
+    throw new StoryServiceError("Canonical re-narration state is invalid", 422);
+  }
+  const stateBefore = beforeValidation.data;
+  const stateAfter = afterValidation.data;
+  const playerAction = PlayerActionSchema.parse(source.playerAction);
+  const delta = WorldDeltaSchema.parse(source.delta);
+  if (source.intents.length < 1 || source.intents.length > 4) {
+    throw new StoryServiceError("Canonical re-narration intents are invalid", 422);
+  }
+  const intents = source.intents.map((intent) => WorldIntentSchema.parse(intent));
+  const frame = ChapterFrameSchema.parse(source.frame);
+  if (
+    stateBefore.lockedPovId === null ||
+    stateAfter.lockedPovId !== stateBefore.lockedPovId ||
+    stateAfter.version !== stateBefore.version + 1 ||
+    stateAfter.chapter !== stateBefore.chapter + 1 ||
+    playerAction.actorId !== stateBefore.lockedPovId ||
+    playerAction.stateVersion !== stateBefore.version ||
+    (!getClockPolicy(stateBefore.chapter).choicesRequireMilestone &&
+      playerAction.milestoneId !== null) ||
+    delta.expectedWorldVersion !== stateBefore.version ||
+    frame.terminal !== stateAfter.terminal
+  ) {
+    throw new StoryServiceError(
+      "Canonical re-narration versions, viewpoint, milestone, or frame disagree",
+      422,
+    );
+  }
+  const playerIntents = intents.filter(
+    ({ actorId, id }) => actorId === stateBefore.lockedPovId && id.startsWith("intent-player-"),
+  );
+  if (
+    playerIntents.length !== 1 ||
+    playerIntents[0]?.goal !== playerAction.description ||
+    !isDeepStrictEqual(playerIntents[0]?.action, playerAction.action)
+  ) {
+    throw new StoryServiceError("Canonical re-narration player intent disagrees", 422);
+  }
+  const resolved = resolveTurn(
+    stateBefore,
+    playerAction,
+    intents.filter(({ id }) => id !== playerIntents[0]?.id),
+  );
+  if (
+    !resolved.ok ||
+    !isDeepStrictEqual(resolved.data.intents, intents) ||
+    !isDeepStrictEqual(resolved.data.delta, delta)
+  ) {
+    throw new StoryServiceError("Canonical re-narration action does not resolve exactly", 422);
+  }
+  const staged = stageWorldDelta(stateBefore, intents, delta);
+  if (!staged.ok || !isDeepStrictEqual(staged.data.state, stateAfter)) {
+    throw new StoryServiceError("Canonical re-narration state does not restage exactly", 422);
+  }
+  const choices = validateSuggestedChoices(stateAfter, frame.choices);
+  if (!choices.ok || !isDeepStrictEqual(choices.data, frame.choices)) {
+    throw new StoryServiceError("Canonical re-narration frame is invalid", 422);
+  }
+  return {
+    adapterMode: source.adapterMode,
+    delta,
+    frame,
+    intents,
+    multiAgentOutputItems: source.multiAgentOutputItems.map(sanitizeOutputItem),
+    playerAction,
+    stateAfter,
+    stateBefore,
+  };
+}
+
+async function generateAuditedCanonicalNarration(
+  client: OpenAI,
+  source: CanonicalNarrationSource,
+  options: AuditedCanonicalNarrationOptions,
+): Promise<AuditedCanonicalNarrationResult> {
+  const auditCalls: RuntimeCallResult<NarrativeAudit>[] = [];
+  const recoveryCalls: Array<Parameters<typeof toModelCall>[0]> = [];
+  let approvedAudit: NarrativeAudit | null = null;
+  let retryDirective: string | null = null;
+  const allowedFactIds = new Set(
+    buildPovContext(source.stateAfter, source.stateBefore.lockedPovId!).factIds,
+  );
+  const forbiddenFacts = source.stateAfter.facts
+    .filter(({ id }) => !allowedFactIds.has(id))
+    .map(({ claim, id }) => ({ claim, id }));
+  const forbiddenFactsById = new Map(forbiddenFacts.map(({ claim, id }) => [id, claim] as const));
+  const narrationBrief = JSON.parse(
+    buildNarrationPrompt(source.stateBefore, source.stateAfter, source.playerAction, source.delta),
+  ) as unknown;
+  const validateDraft = (prose: string): ReturnType<typeof validateChapterDraft> => {
+    const structural = validateChapterDraft(source.stateAfter, {
+      choices: source.frame.choices,
+      contractVersion: CONTRACT_VERSION,
+      prose,
+      terminal: source.stateAfter.terminal,
+      title: source.frame.title,
+    });
+    const stateIssues = validateNarrativeStateClaims(source.stateBefore, source.stateAfter, prose);
+    if (stateIssues.length === 0) return structural;
+    return {
+      issues: [...(structural.ok ? [] : structural.issues), ...stateIssues],
+      ok: false,
+    };
+  };
+  const candidateBase = {
+    adapterMode: source.adapterMode,
+    allowedFactIds: [...allowedFactIds].sort(),
+    backgroundIntents: [...source.intents],
+    chapter: source.stateAfter.chapter,
+    delta: source.delta,
+    forbiddenFacts,
+    frame: source.frame,
+    multiAgentOutputItems: [...source.multiAgentOutputItems],
+    playerAction: source.playerAction,
+    povId: source.stateBefore.lockedPovId!,
+    promptVersion: PROMPT_VERSION,
+    schemaVersion: RUNTIME_SCHEMA_VERSION,
+    sourceGitSha: currentGitSha(),
+    stateAfter: source.stateAfter,
+    stateBefore: source.stateBefore,
+    turn: options.turn,
+    worldVersionAfter: source.stateAfter.version,
+    worldVersionBefore: source.stateBefore.version,
+  } satisfies Omit<NarrativeCandidateEvidence, keyof NarrativeCandidateOutcome>;
+  const emitCandidate = (outcome: NarrativeCandidateOutcome): void => {
+    try {
+      options.onNarrativeCandidate?.({ ...candidateBase, ...outcome });
+    } catch (error) {
+      throw new OpenAIRuntimeError("INVALID_POLICY", "Narrative evidence hook failed", {
+        cause: error,
+      });
+    }
+  };
+  const emitNarrativeResponse = (
+    phase: NarrativeResponseEvidence["phase"],
+    context: {
+      readonly attempt: number;
+      readonly bufferedOutputText?: string;
+      readonly rawOutputText: string;
+      readonly responseId: string;
+      readonly status: NarrationRawCandidateContext["status"];
+    },
+  ): void => {
+    try {
+      options.onNarrativeResponse?.({
+        attempt: context.attempt,
+        bufferedOutputText: context.bufferedOutputText ?? context.rawOutputText,
+        chapter: candidateBase.chapter,
+        phase,
+        povId: candidateBase.povId,
+        rawOutputText: context.rawOutputText,
+        responseId: context.responseId,
+        sourceGitSha: candidateBase.sourceGitSha,
+        status: context.status,
+        turn: candidateBase.turn,
+        worldVersionAfter: candidateBase.worldVersionAfter,
+        worldVersionBefore: candidateBase.worldVersionBefore,
+      });
+    } catch (error) {
+      throw new OpenAIRuntimeError("INVALID_POLICY", "Narrative response evidence hook failed", {
+        cause: error,
+      });
+    }
+  };
+
+  options.setAttemptPhase("narration");
+  const narration = await createAuditedNarrationReplay(client, {
+    audit: async (prose, narratorContext) => {
+      const rawWordCount = countWords(prose);
+      let recoveryEvidence: NarrativeRecoveryEvidence | null = null;
+      let auditedProse = prose;
+      let draft = validateDraft(auditedProse);
+      if (!draft.ok) {
+        options.onNarrativeDraftRejected?.(draft.issues);
+        if (canRecoverShortNarration(prose, draft.issues)) {
+          const initialIssues = [...draft.issues];
+          const recoveryPrompt = buildNarrationRecoveryPrompt(prose);
+          options.setAttemptPhase("recovery");
+          try {
+            const recoveryCall = await createAuditedNarrationReplay(client, {
+              audit: (continuation, recoveryContext) => {
+                const continuationWords = countWords(continuation);
+                const accepted =
+                  continuationWords >= recoveryPrompt.minimumAdditionalWords &&
+                  continuationWords <= recoveryPrompt.acceptanceMaximumAdditionalWords;
+                const rejectionReason = accepted
+                  ? null
+                  : `Continuation must contain ${recoveryPrompt.minimumAdditionalWords} to ${recoveryPrompt.acceptanceMaximumAdditionalWords} words`;
+                recoveryEvidence = {
+                  accepted,
+                  attempt: recoveryContext.attempt,
+                  maximumAdditionalWords: recoveryPrompt.acceptanceMaximumAdditionalWords,
+                  minimumAdditionalWords: recoveryPrompt.minimumAdditionalWords,
+                  prose: continuation,
+                  rejectionReason,
+                  responseId: recoveryContext.responseId,
+                  wordCount: continuationWords,
+                };
+                return accepted
+                  ? { accepted: true }
+                  : {
+                      accepted: false,
+                      reason: rejectionReason ?? "Continuation failed its word range",
+                    };
+              },
+              chunkCharacters: 512,
+              input: recoveryPrompt.input,
+              instructions: recoveryPrompt.instructions,
+              maxOutputTokens: recoveryPrompt.maxOutputTokens,
+              model: "gpt-5.6-luna",
+              onRawCandidate: (context) => emitNarrativeResponse("recovery", context),
+              policy: { ...options.policy, maxRetries: 0 },
+              reasoningEffort: "none",
+            });
+            recoveryCalls.push(recoveryCall);
+            auditedProse = `${prose.trim()} ${recoveryCall.prose.trim()}`;
+          } catch (error) {
+            retryDirective = `The prior draft had ${rawWordCount} words and its bounded continuation failed. Regenerate complete prose at 900 to 925 words. Remove unsupported facts and actions. Never repeat text absent from the supplied POV canon.`;
+            emitCandidate({
+              accepted: false,
+              audit: null,
+              auditAttempts: [],
+              auditResponseId: null,
+              deterministicIssues: initialIssues,
+              mergedProse: prose,
+              mergedWordCount: rawWordCount,
+              narratorAttempt: narratorContext.attempt,
+              narratorResponseId: narratorContext.responseId,
+              rawProse: prose,
+              rawWordCount,
+              recovery: recoveryEvidence,
+              rejectionStage: "recovery",
+            });
+            throw error;
+          } finally {
+            options.setAttemptPhase("narration");
+          }
+          draft = validateDraft(auditedProse);
+          if (!draft.ok) options.onNarrativeDraftRejected?.(draft.issues);
+        }
+      }
+      if (!draft.ok) {
+        const safeIssueCodes = [...new Set(draft.issues.map(({ code }) => code))].sort();
+        retryDirective = `The prior draft failed deterministic validation with issue codes: ${safeIssueCodes.join(", ")}. Write 900 to 925 words. Remove every unsupported fact or action. Never repeat prior text that is absent from the supplied POV canon.`;
+        emitCandidate({
+          accepted: false,
+          audit: null,
+          auditAttempts: [],
+          auditResponseId: null,
+          deterministicIssues: [...draft.issues],
+          mergedProse: auditedProse,
+          mergedWordCount: countWords(auditedProse),
+          narratorAttempt: narratorContext.attempt,
+          narratorResponseId: narratorContext.responseId,
+          rawProse: prose,
+          rawWordCount,
+          recovery: recoveryEvidence,
+          rejectionStage: "deterministic",
+        });
+        return { accepted: false, reason: formatIssues(draft.issues) };
+      }
+      const auditAttempts: NarrativeAuditAttemptEvidence[] = [];
+      options.setAttemptPhase("audit");
+      let auditCall: RuntimeCallResult<NarrativeAudit>;
+      try {
+        const candidateCall = await runStructuredResponse(client, {
+          input: buildAuditPrompt(
+            source.stateBefore,
+            source.stateAfter,
+            source.playerAction,
+            source.delta,
+            source.frame,
+            auditedProse,
+          ),
+          instructions: "Audit canon. Return schema JSON only.",
+          maxOutputTokens: 450,
+          model: "gpt-5.6-luna",
+          onCandidate: (candidate, context) => {
+            const index = auditAttempts.findLastIndex(
+              (entry) =>
+                entry.attempt === context.attempt && entry.responseId === context.responseId,
+            );
+            const raw = auditAttempts[index];
+            if (index < 0 || raw === undefined) {
+              throw new Error("Parsed audit candidate has no raw response evidence");
+            }
+            auditAttempts[index] = { ...raw, candidate };
+          },
+          onRawCandidate: (context) => {
+            auditAttempts.push({
+              attempt: context.attempt,
+              candidate: null,
+              rawOutputText: context.rawOutputText,
+              responseId: context.responseId,
+              status: context.status,
+            });
+            emitNarrativeResponse("audit", context);
+          },
+          policy: options.policy,
+          reasoningEffort: options.auditReasoningEffort,
+          schema: NarrativeAuditCandidateSchema,
+          schemaName: "narrative_audit",
+          validate: (audit) => {
+            canonicalizeNarrativeAuditOutput(audit, auditedProse, forbiddenFactsById);
+          },
+        });
+        auditCall = {
+          ...candidateCall,
+          data: canonicalizeNarrativeAuditOutput(
+            candidateCall.data,
+            auditedProse,
+            forbiddenFactsById,
+          ),
+        };
+      } catch (error) {
+        emitCandidate({
+          accepted: false,
+          audit: null,
+          auditAttempts,
+          auditResponseId: auditAttempts.at(-1)?.responseId ?? null,
+          deterministicIssues: [],
+          mergedProse: auditedProse,
+          mergedWordCount: countWords(auditedProse),
+          narratorAttempt: narratorContext.attempt,
+          narratorResponseId: narratorContext.responseId,
+          rawProse: prose,
+          rawWordCount,
+          recovery: recoveryEvidence,
+          rejectionStage: "audit-invalid",
+        });
+        if (error instanceof OpenAIRuntimeError && !error.retryable) throw error;
+        throw new OpenAIRuntimeError(
+          "INVALID_OUTPUT",
+          "Narrative audit exhausted retries for the fixed prose",
+          { cause: error },
+        );
+      } finally {
+        options.setAttemptPhase("narration");
+      }
+      auditCalls.push(auditCall);
+      approvedAudit = auditCall.data;
+      options.onNarrativeAudit?.(approvedAudit);
+      if (!approvedAudit.approved) {
+        const safeFailures = NARRATIVE_AUDIT_DIMENSIONS.flatMap((dimension, index) =>
+          approvedAudit?.scores[dimension] === 0
+            ? [`${dimension}: ${approvedAudit.evidence[index]?.issueCode ?? "failed"}`]
+            : [],
+        );
+        if (approvedAudit.leakedFactIds.length > 0) {
+          safeFailures.push("povSafety: hidden-knowledge");
+        }
+        retryDirective = `The prior draft failed fixed rubric checks: ${[...new Set(safeFailures)].join(", ") || "quality"}. Remove unsupported claims, durable facts, and extra actions. Keep only supplied viewpoint canon and canonical effects. Never repeat prior text that is absent from the supplied POV canon.`;
+      }
+      emitCandidate({
+        accepted: approvedAudit.approved,
+        audit: approvedAudit,
+        auditAttempts,
+        auditResponseId: auditCall.responseId,
+        deterministicIssues: [],
+        mergedProse: auditedProse,
+        mergedWordCount: countWords(auditedProse),
+        narratorAttempt: narratorContext.attempt,
+        narratorResponseId: narratorContext.responseId,
+        rawProse: prose,
+        rawWordCount,
+        recovery: recoveryEvidence,
+        rejectionStage: approvedAudit.approved ? "accepted" : "audit",
+      });
+      return {
+        accepted: approvedAudit.approved,
+        auditedProse,
+        reason: approvedAudit.evidence.map(({ detail }) => detail).join(" "),
+      };
+    },
+    chunkCharacters: 512,
+    input: () =>
+      JSON.stringify({
+        chapterBrief: narrationBrief,
+        ...(retryDirective === null ? {} : { retryDirective }),
+      }),
+    instructions:
+      "Write only complete close-third Ashen Crown chapter prose, 900 to 925 words. Never stop before 900. No meta commentary. Never mention prompts, fields, whitelists, canon rules, allowed facts, or supplied context. Obey supplied story facts exactly.",
+    maxOutputTokens: 1_400,
+    model: CHAPTER_NARRATION_MODEL,
+    onRawCandidate: (context) => emitNarrativeResponse("narration", context),
+    policy: options.policy,
+    reasoningEffort: "none",
+  });
+  if (auditCalls.length === 0 || approvedAudit === null) {
+    throw new StoryServiceError("Narrative audit did not complete", 502);
+  }
+  const calls = [
+    toModelCall(narration, CHAPTER_NARRATION_MODEL, "narration", null, "none"),
+    ...recoveryCalls.map((call) => toModelCall(call, "gpt-5.6-luna", "recovery", null, "none")),
+    ...auditCalls.map((auditCall) =>
+      toModelCall(auditCall, "gpt-5.6-luna", "audit", null, options.auditReasoningEffort),
+    ),
+  ];
+  return { audit: approvedAudit, calls, prose: narration.prose, replay: narration.replay };
+}
+
 function loadSeedWorld(): WorldState {
   const path = resolve(workspaceRoot(), "evals", "fixtures", "demon-king-world.json");
   const raw = JSON.parse(readFileSync(path, "utf8")) as unknown;
@@ -1128,6 +1687,7 @@ function toModelCall(
   model: ModelCallTrace["model"],
   phase: ModelCallTrace["phase"],
   agentId: string | null,
+  reasoningEffort: ModelCallTrace["reasoningEffort"],
 ): ModelCallTrace {
   return {
     agentId,
@@ -1136,7 +1696,7 @@ function toModelCall(
     latencyMs: call.latencyMs,
     model,
     phase,
-    reasoningEffort: "none",
+    reasoningEffort,
     refusal: false,
     requestedServiceTier: call.requestedServiceTier,
     responseId: call.responseId,
@@ -1148,7 +1708,7 @@ function toModelCall(
 }
 
 function toLunaModelCall(call: LunaCallSummary): ModelCallTrace {
-  return toModelCall(call, "gpt-5.6-luna", "intent", call.agentId);
+  return toModelCall(call, "gpt-5.6-luna", "intent", call.agentId, "none");
 }
 
 function sanitizeOutputItem(item: unknown): Record<string, unknown> {

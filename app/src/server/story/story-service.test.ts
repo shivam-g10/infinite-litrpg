@@ -2,7 +2,12 @@ import { createHash } from "node:crypto";
 
 import {
   CHARACTER_IDS,
+  PlayerActionSchema,
   RUNTIME_SCHEMA_VERSION,
+  buildChapterChoiceOptions,
+  canonicalizeChapterFrameCandidate,
+  resolveTurn,
+  stageWorldDelta,
   type BackgroundIntentCandidate,
   NARRATIVE_AUDIT_DIMENSIONS,
   type NarrativeAudit,
@@ -47,6 +52,108 @@ describe("StoryService", () => {
 
     expect(() => service.selectPov("elara-voss")).toThrowError(StoryServiceError);
     expect(service.getStory()?.pov.id).toBe("rowan-ashborn");
+    store.close();
+  });
+
+  it("re-narrates exact canon without intent, frame, or store mutation", async () => {
+    const store = new StoryStore();
+    const seedService = new StoryService(store, unusedClient(), options());
+    const view = seedService.selectPov("rowan-ashborn");
+    const before = store.loadWorldState("ashen-crown-v1");
+    const choice = view.chapter.choices[0];
+    if (!before || !choice) throw new Error("Test seed is incomplete");
+    const playerAction = PlayerActionSchema.parse({
+      action: choice.action,
+      actorId: "rowan-ashborn",
+      description: choice.description,
+      milestoneId: choice.milestoneId,
+      source: "suggested",
+      stateVersion: before.version,
+    });
+    const resolved = resolveTurn(before, playerAction, []);
+    if (!resolved.ok) throw new Error("Test action did not resolve");
+    const staged = stageWorldDelta(before, resolved.data.intents, resolved.data.delta);
+    if (!staged.ok) throw new Error("Test delta did not stage");
+    const optionsById = buildChapterChoiceOptions(staged.data.state);
+    const frame = canonicalizeChapterFrameCandidate(staged.data.state, {
+      optionIds: optionsById.slice(0, 2).map(({ id }) => id),
+      title: "The Canon Road",
+    });
+    if (!frame.ok) throw new Error("Test frame is invalid");
+    const prose = Array.from({ length: 900 }, (_, index) => `canon${index}`).join(" ");
+    const proseHash = createHash("sha256").update(prose).digest("hex");
+    const audit: NarrativeAudit = {
+      approved: true,
+      evidence: NARRATIVE_AUDIT_DIMENSIONS.map((dimension) => ({
+        detail: "pass",
+        dimension,
+        issueCode: "pass",
+      })),
+      leakedFactIds: [],
+      proseHash,
+      scores: {
+        arcProgress: 2,
+        characterAutonomy: 2,
+        choiceFulfillment: 2,
+        continuity: 2,
+        litrpgMechanics: 2,
+        povSafety: 2,
+        prose: 2,
+      },
+    };
+    const create = vi.fn().mockResolvedValue(parsedResponse(audit, "resp_renarration_audit"));
+    const stream = vi.fn().mockReturnValue(fakeStream(prose, "resp_renarration"));
+    const service = new StoryService(
+      store,
+      { responses: { create, stream } } as unknown as OpenAI,
+      { ...options(), auditReasoningEffort: "low" },
+    );
+    const source = {
+      adapterMode: "sequential" as const,
+      delta: resolved.data.delta,
+      frame: frame.data,
+      intents: resolved.data.intents,
+      multiAgentOutputItems: [],
+      playerAction,
+      stateAfter: staged.data.state,
+      stateBefore: before,
+    };
+    const beforeSnapshot = structuredClone(before);
+
+    const result = await service.renarrateCanonicalTurn(
+      source,
+      "00000000-0000-4000-8000-000000000088",
+    );
+
+    expect(store.loadWorldState("ashen-crown-v1")).toEqual(beforeSnapshot);
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(stream).toHaveBeenCalledTimes(1);
+    expect(create.mock.calls[0]?.[0]).toMatchObject({ reasoning: { effort: "low" } });
+    expect(stream.mock.calls[0]?.[0]).toMatchObject({ reasoning: { effort: "none" } });
+    expect(result.chapter.prose).toBe(prose);
+    expect(result.streamChunks.join("")).toBe(prose);
+    expect(
+      result.trace.calls.map(({ phase, reasoningEffort }) => [phase, reasoningEffort]),
+    ).toEqual([
+      ["narration", "none"],
+      ["audit", "low"],
+    ]);
+
+    const tampered = structuredClone(source);
+    const rowan = tampered.stateAfter.characters.find(({ id }) => id === "rowan-ashborn");
+    if (!rowan) throw new Error("Rowan is missing");
+    rowan.mana.current -= 1;
+    await expect(
+      service.renarrateCanonicalTurn(tampered, "00000000-0000-4000-8000-000000000089"),
+    ).rejects.toThrow("restage");
+
+    const tamperedAction = structuredClone(source);
+    tamperedAction.playerAction.milestoneId = "act-two-faction";
+    await expect(
+      service.renarrateCanonicalTurn(tamperedAction, "00000000-0000-4000-8000-000000000090"),
+    ).rejects.toThrow("milestone");
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(stream).toHaveBeenCalledTimes(1);
     store.close();
   });
 

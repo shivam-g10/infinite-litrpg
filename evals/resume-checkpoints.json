@@ -284,8 +284,16 @@
       "adapterMode": "sequential",
       "bridgeFiles": [
         {
+          "path": "app/src/server/story/story-service.ts",
+          "sha256": "0f0bc96370ff36f882f9475b2c788591b98161f2b00ac052db67fa41e1b85ea4"
+        },
+        {
           "path": "decisions/ADR-017-settled-live-run-reconciliation.md",
           "sha256": "6609dce67731738761b580b03808a3ba4d2a92871a9bb6ccc85db2ddf10bac15"
+        },
+        {
+          "path": "decisions/ADR-018-canon-preserving-renarration.md",
+          "sha256": "0c78cf2229e79a1ed3faf867d3366e37e86273c7b1067775c14536c66c312e51"
         },
         {
           "path": "evals/live-spend-ledger.ts",
@@ -305,7 +313,7 @@
         },
         {
           "path": "evals/run-live.ts",
-          "sha256": "674517a96368c736e2167c55348b862bbe942d9a3c6c38807aba2338a4b79c9c"
+          "sha256": "d7389aed254c2b4d8d38e4841a75880521ae22af5c75dbd31a462d828ed637a9"
         },
         {
           "path": "package.json",
