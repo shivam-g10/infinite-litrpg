@@ -357,6 +357,27 @@
       "reportVersion": 9,
       "serviceTier": "flex",
       "sourceGitSha": "ad140b23d4917f96562d919c32f7563c72f3b018"
+    },
+    {
+      "adapterMode": "sequential",
+      "bridgeFiles": [
+        {
+          "path": "app/src/server/story/story-service.ts",
+          "sha256": "fe19e6e4eed30a8e9709cb7280680b173ecc872d3b82e1b19ca29d58ba4986e6"
+        },
+        {
+          "path": "evals/run-live.ts",
+          "sha256": "cd36b7a16eb80a781c0df12029d8a7e8d50e110e49bdc2f864b6b282d1dede47"
+        }
+      ],
+      "chapterCostCapUsd": 0.0135,
+      "id": "prompt-1-4-11-flex-elara-renarration-settled-2",
+      "priorSpendUsd": 2.811082175,
+      "promptVersion": "1.4.11",
+      "reportSha256": "90374f2e4ca49fe390fc6c64cd9412579efa7cdaa2c7e291f1b8a772127ea1bc",
+      "reportVersion": 9,
+      "serviceTier": "flex",
+      "sourceGitSha": "44d79aecf8feb588d25bba1bb720e4f1ccd2f185"
     }
   ],
   "version": 2

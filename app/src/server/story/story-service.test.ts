@@ -106,7 +106,12 @@ describe("StoryService", () => {
     const service = new StoryService(
       store,
       { responses: { create, stream } } as unknown as OpenAI,
-      { ...options(), auditReasoningEffort: "low" },
+      {
+        ...options(),
+        auditReasoningEffort: "low",
+        canonicalAuditMaxOutputTokens: 64,
+        canonicalNarrationDirective: "Keep the exact canonical route.",
+      },
     );
     const source = {
       adapterMode: "sequential" as const,
@@ -128,8 +133,14 @@ describe("StoryService", () => {
     expect(store.loadWorldState("ashen-crown-v1")).toEqual(beforeSnapshot);
     expect(create).toHaveBeenCalledTimes(1);
     expect(stream).toHaveBeenCalledTimes(1);
-    expect(create.mock.calls[0]?.[0]).toMatchObject({ reasoning: { effort: "low" } });
+    expect(create.mock.calls[0]?.[0]).toMatchObject({
+      max_output_tokens: 64,
+      reasoning: { effort: "low" },
+    });
     expect(stream.mock.calls[0]?.[0]).toMatchObject({ reasoning: { effort: "none" } });
+    expect(JSON.parse(String(stream.mock.calls[0]?.[0].input))).toMatchObject({
+      retryDirective: "Keep the exact canonical route.",
+    });
     expect(result.chapter.prose).toBe(prose);
     expect(result.streamChunks.join("")).toBe(prose);
     expect(

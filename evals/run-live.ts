@@ -71,6 +71,9 @@ const MONEY_EPSILON_USD = 0.000_000_1;
 const MAX_RESUME_BRIDGE_FILES = 30;
 const MAX_RESUME_CHANGED_PATHS = 50;
 export const RENARRATION_AUDIT_REASONING_EFFORT = "none" as const;
+export const RENARRATION_AUDIT_MAX_OUTPUT_TOKENS = 64 as const;
+export const RENARRATION_NARRATION_DIRECTIVE =
+  "Movement lock: beforeValues.locationId is departed; currentEffects set_location ends at afterCanon.povCharacter.locationId. Never put the departed location ahead or make it the destination. Write a complete 900 to 925 words now; do not stop short or rely on a continuation." as const;
 const RESUME_NON_RUNTIME_PATHS = new Set([
   "app/src/server/openai/stable.test.ts",
   "app/src/server/story/story-service.test.ts",
@@ -2956,6 +2959,8 @@ async function main(): Promise<void> {
             try {
               const service = new StoryService(store, client, {
                 auditReasoningEffort: RENARRATION_AUDIT_REASONING_EFFORT,
+                canonicalAuditMaxOutputTokens: RENARRATION_AUDIT_MAX_OUTPUT_TOKENS,
+                canonicalNarrationDirective: RENARRATION_NARRATION_DIRECTIVE,
                 costHooks,
                 maxBackgroundAgents: 0,
                 maxCostUsdPerChapter: perChapterCapUsd,

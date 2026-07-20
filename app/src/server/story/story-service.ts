@@ -172,6 +172,8 @@ type NarrativeCandidateOutcome = Pick<
 
 export interface StoryServiceOptions {
   readonly auditReasoningEffort?: Extract<RuntimeReasoningEffort, "low" | "none">;
+  readonly canonicalAuditMaxOutputTokens?: number;
+  readonly canonicalNarrationDirective?: string;
   readonly costHooks?: RuntimeCostHooks;
   readonly maxBackgroundAgents: number;
   readonly maxCostUsdPerChapter: number;
@@ -326,7 +328,9 @@ export class StoryService {
       timeoutMs: 60_000,
     };
     const narration = await generateAuditedCanonicalNarration(this.client, canonical, {
+      auditMaxOutputTokens: this.options.canonicalAuditMaxOutputTokens ?? 450,
       auditReasoningEffort: this.options.auditReasoningEffort ?? "none",
+      initialNarrationDirective: this.options.canonicalNarrationDirective ?? null,
       onNarrativeAudit: this.options.onNarrativeAudit,
       onNarrativeCandidate: this.options.onNarrativeCandidate,
       onNarrativeDraftRejected: this.options.onNarrativeDraftRejected,
@@ -1194,7 +1198,9 @@ export interface StoryView {
 }
 
 interface AuditedCanonicalNarrationOptions {
+  readonly auditMaxOutputTokens: number;
   readonly auditReasoningEffort: Extract<RuntimeReasoningEffort, "low" | "none">;
+  readonly initialNarrationDirective: string | null;
   readonly onNarrativeAudit?: StoryServiceOptions["onNarrativeAudit"];
   readonly onNarrativeCandidate?: StoryServiceOptions["onNarrativeCandidate"];
   readonly onNarrativeDraftRejected?: StoryServiceOptions["onNarrativeDraftRejected"];
@@ -1293,7 +1299,12 @@ async function generateAuditedCanonicalNarration(
   const auditCalls: RuntimeCallResult<NarrativeAudit>[] = [];
   const recoveryCalls: Array<Parameters<typeof toModelCall>[0]> = [];
   let approvedAudit: NarrativeAudit | null = null;
-  let retryDirective: string | null = null;
+  const initialNarrationDirective = options.initialNarrationDirective?.trim() || null;
+  let retryDirective: string | null = initialNarrationDirective;
+  const updateRetryDirective = (specific: string): void => {
+    retryDirective =
+      initialNarrationDirective === null ? specific : `${initialNarrationDirective} ${specific}`;
+  };
   const allowedFactIds = new Set(
     buildPovContext(source.stateAfter, source.stateBefore.lockedPovId!).factIds,
   );
@@ -1432,7 +1443,9 @@ async function generateAuditedCanonicalNarration(
             recoveryCalls.push(recoveryCall);
             auditedProse = `${prose.trim()} ${recoveryCall.prose.trim()}`;
           } catch (error) {
-            retryDirective = `The prior draft had ${rawWordCount} words and its bounded continuation failed. Regenerate complete prose at 900 to 925 words. Remove unsupported facts and actions. Never repeat text absent from the supplied POV canon.`;
+            updateRetryDirective(
+              `The prior draft had ${rawWordCount} words and its bounded continuation failed. Regenerate complete prose at 900 to 925 words. Remove unsupported facts and actions. Never repeat text absent from the supplied POV canon.`,
+            );
             emitCandidate({
               accepted: false,
               audit: null,
@@ -1458,7 +1471,9 @@ async function generateAuditedCanonicalNarration(
       }
       if (!draft.ok) {
         const safeIssueCodes = [...new Set(draft.issues.map(({ code }) => code))].sort();
-        retryDirective = `The prior draft failed deterministic validation with issue codes: ${safeIssueCodes.join(", ")}. Write 900 to 925 words. Remove every unsupported fact or action. Never repeat prior text that is absent from the supplied POV canon.`;
+        updateRetryDirective(
+          `The prior draft failed deterministic validation with issue codes: ${safeIssueCodes.join(", ")}. Write 900 to 925 words. Remove every unsupported fact or action. Never repeat prior text that is absent from the supplied POV canon.`,
+        );
         emitCandidate({
           accepted: false,
           audit: null,
@@ -1490,7 +1505,7 @@ async function generateAuditedCanonicalNarration(
             auditedProse,
           ),
           instructions: "Audit canon. Return schema JSON only.",
-          maxOutputTokens: 450,
+          maxOutputTokens: options.auditMaxOutputTokens,
           model: "gpt-5.6-luna",
           onCandidate: (candidate, context) => {
             const index = auditAttempts.findLastIndex(
@@ -1566,7 +1581,9 @@ async function generateAuditedCanonicalNarration(
         if (approvedAudit.leakedFactIds.length > 0) {
           safeFailures.push("povSafety: hidden-knowledge");
         }
-        retryDirective = `The prior draft failed fixed rubric checks: ${[...new Set(safeFailures)].join(", ") || "quality"}. Remove unsupported claims, durable facts, and extra actions. Keep only supplied viewpoint canon and canonical effects. Never repeat prior text that is absent from the supplied POV canon.`;
+        updateRetryDirective(
+          `The prior draft failed fixed rubric checks: ${[...new Set(safeFailures)].join(", ") || "quality"}. Remove unsupported claims, durable facts, and extra actions. Keep only supplied viewpoint canon and canonical effects. Never repeat prior text that is absent from the supplied POV canon.`,
+        );
       }
       emitCandidate({
         accepted: approvedAudit.approved,

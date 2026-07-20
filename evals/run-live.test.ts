@@ -29,7 +29,9 @@ import {
   LegacyLiveReportSchema,
   LiveReportSchema,
   NarrativeCandidateEvidenceSchema,
+  RENARRATION_AUDIT_MAX_OUTPUT_TOKENS,
   RENARRATION_AUDIT_REASONING_EFFORT,
+  RENARRATION_NARRATION_DIRECTIVE,
   Version6LiveReportSchema,
   Version7LiveReportSchema,
   Version8LiveReportSchema,
@@ -74,6 +76,8 @@ const STANDARD_REQUIREMENTS: ResumeRequirements = { ...REQUIREMENTS, serviceTier
 describe("live report version 9", () => {
   it("uses no reasoning for budgeted re-narration audits", () => {
     expect(RENARRATION_AUDIT_REASONING_EFFORT).toBe("none");
+    expect(RENARRATION_AUDIT_MAX_OUTPUT_TOKENS).toBe(64);
+    expect(RENARRATION_NARRATION_DIRECTIVE).toContain("beforeValues.locationId is departed");
   });
 
   it("keeps the submitted Rowan trace strict and internally totaled", () => {
