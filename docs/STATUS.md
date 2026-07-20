@@ -1,8 +1,8 @@
 # Status
 
-- Updated: 2026-07-19
+- Updated: 2026-07-20
 - Layer: Release evaluation
-- Current phase: Phase 5 prompt `1.4.9` checkpoint ready for the final sequential matrix
+- Current phase: Phase 5 report version 6 resume bridge under verification
 - Repository: initialized on `main`
 - Remote: `git@github.com:shivam-g10/infinite-litrpg.git`
 - Initial commit: `39b19a2` (`chore: scaffold agent workflow`)
@@ -21,11 +21,11 @@
 
 ## Current Blockers
 
-- The final twelve-cycle sequential report has not passed on prompt `1.4.8`.
+- The final twelve-cycle sequential report has not passed on prompt `1.4.9`; two Rowan chapters are valid and ten chapters remain.
 
 ## Next Action
 
-Commit the prompt `1.4.9` checkpoint. Then run the final suite with prior spend `$2.49105695` and chapter cap `$0.0424`.
+Finish non-live verification and commit the report version 6 harness. Then resume the exact archived prompt `1.4.9` report with prior spend `$2.49105695` and chapter cap `$0.0405`.
 
 ## Evidence Log
 
@@ -99,5 +99,9 @@ Commit the prompt `1.4.9` checkpoint. Then run the final suite with prior spend 
 - 2026-07-19 counted-reservation prompt `1.4.8` full run command `npm run evals:live:full -- --prior-spend-usd 2.46416855 --chapter-cap-usd 0.0446` exited 1 with zero commits. Rowan used one background agent, Luna frame ranking, valid 1,326-output-token Terra narration, and a Luna audit retry. The final audit scored only POV safety zero, called Rowan's explicitly supplied reincarnation canon hidden, and named no leaked fact ID. A safe Terra retry could not fit the chapter. Run exposure was `$0.0268884`; cumulative conservative exposure is `$2.49105695`, leaving `$0.50894305`. Archived report: `evals/reports/live-full-sequential-prompt-1.4.8-counted-1.json`. A fresh twelve-chapter cap is at most `$0.042411920833`; `$0.0424` projects `$2.99985695`.
 - 2026-07-19 prompt `1.4.9` baseline fix: selected-POV private facts are explicitly allowed in internal close-third narration, but transfer to another character still requires allowed current effects or visible events. Detection-only remote context never licenses prose. The fact map is named as allowed POV canon, and faithful single-field paraphrases cannot fail POV safety merely because the fact is secret from other characters. The paired regression uses explicit Rowan-reincarnation prose: it is allowed for Rowan, remains forbidden for Elara, and does not expose Rowan's hidden Void history. Targeted Vitest passed 42 prompt, story-service, and cost tests; strict typecheck, lint, and diff check passed. The strongest three-agent recovery path passes at `$0.0424` with conservative counted-input mocks.
 - 2026-07-19 prompt `1.4.9` non-live gate: `npm run check` and `npm audit` exited 0. Vitest passed 120 tests. Offline eval passed 14 invariant cases, 12 POV attacks, 1,000 simulations, 35 checkpoints, and the 350/no-351 horizon. Production build, 17 E2E tests with one intentional desktop skip, secret scan across 146 working files, client-bundle scan, 526 package licenses, and zero-vulnerability audit passed.
+- 2026-07-20 prompt `1.4.9` full run command `npm run evals:live:full -- --prior-spend-usd 2.49105695 --chapter-cap-usd 0.0424` exited 1 after two of twelve chapters. Rowan chapters 1 and 2 passed at 979 and 1,144 words, `$0.029751275` and `$0.038406625`, 25,894 and 26,257 ms, exact replay, approved audits, and empty leak lists. Elara chapter 1 narration and audit cost `$0.0222775`; its audit scored continuity and POV safety zero, named no leaked fact ID, and included evidence saying supplied POV canon was used. The strict gate rejected it; `$0.006827` remained against a `$0.026791` Terra retry reservation. Run exposure was `$0.10373065`; cumulative conservative exposure is `$2.5947876`. Archived report: `evals/reports/live-full-sequential-prompt-1.4.9.json`.
+- 2026-07-20 spend reconciliation check: the configured project key received HTTP 403 from the organization Costs endpoint because it lacks `api.usage.read`; both available browser profiles reached the OpenAI Platform login page. No lower provider-bill figure is claimed. The conservative local generation ledger remains authoritative for this release eval.
+- 2026-07-20 report version 6 bridge: tracked `evals/resume-checkpoints.json` pins the exact legacy report SHA-256 `2e83070e4edfeef14fc9e91c2683090d78636551f736f63898b7521ad32f093a`, source SHA `8ceac05c57960388238cb1161ac140178c6e335a`, prompt, adapter, prior spend, cap, and report version. Every future version 6 source must be inspected and registered before reuse. Resume permits cap decrease only, rejects model-facing source drift, preserves all 15 prior attempts and complete Rowan results, and records mixed per-result Git provenance. The strongest three-agent, two-frame-retry, recovery, and full-audit regression passes at the reduced `$0.0405` cap. Focused strict gates passed 33 tests plus lint, typecheck, format check, and diff check.
+- 2026-07-20 report version 6 full non-live gate: `npm run check` and `npm audit` exited 0. Vitest passed 124 tests. Offline eval passed 14 invariant cases, 12 POV attacks, 1,000 simulations, 35 checkpoints, and the 350/no-351 horizon. Production build, 17 E2E tests with one intentional desktop skip, secret scan across 148 working files, client-bundle scan, 526 package licenses, and zero-vulnerability audit passed. Independent read-only review found no remaining resume, provenance, or cost-projection blocker.
 
 Add exact command, date, exit code, cost, and report path after every future milestone gate.

@@ -351,7 +351,7 @@ describe("StoryService", () => {
       { responses: { inputTokens: { count }, parse, stream } } as unknown as OpenAI,
       {
         maxBackgroundAgents: 3,
-        maxCostUsdPerChapter: 0.0424,
+        maxCostUsdPerChapter: 0.0405,
         nativeMultiAgent: false,
       },
     );
@@ -371,7 +371,7 @@ describe("StoryService", () => {
     );
 
     expect(result.world).toMatchObject({ chapter: 1, version: 2 });
-    expect(result.estimatedCostUsd).toBeLessThanOrEqual(0.0424);
+    expect(result.estimatedCostUsd).toBeLessThanOrEqual(0.0405);
     expect(result.chapter.prose).toBe(prose);
     expect(parse).toHaveBeenCalledTimes(7);
     expect(stream).toHaveBeenCalledTimes(2);

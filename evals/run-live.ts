@@ -28,13 +28,73 @@ import { StoryStore } from "../app/src/server/storage/story-store";
 const ROOT = process.cwd();
 const REPORT_DIRECTORY = resolve(ROOT, "evals", "reports");
 const REVIEW_DIRECTORY = resolve(ROOT, "docs", "review-packets");
+const RESUME_CHECKPOINTS_PATH = resolve(ROOT, "evals", "resume-checkpoints.json");
 const DEFAULT_PER_CHAPTER_CAP_USD = 0.1;
 const TOTAL_CAP_USD = 3;
-const REPORT_VERSION = 5;
+const REPORT_VERSION = 6;
+const LEGACY_REPORT_VERSION = 5;
 const MONEY_EPSILON_USD = 0.000_000_1;
+const RESUME_NON_RUNTIME_PATHS = new Set([
+  "app/src/server/story/story-service.test.ts",
+  "docs/PLAN.md",
+  "docs/STATUS.md",
+  "evals/README.md",
+  "evals/resume-checkpoints.json",
+  "evals/run-live.test.ts",
+]);
 
 const PovIdSchema = z.enum(CHARACTER_IDS);
 const AdapterModeSchema = z.enum(["native-multi-agent", "sequential"]);
+const GitShaSchema = z.string().regex(/^[a-f0-9]{7,40}$/u);
+const Sha256Schema = z.string().regex(/^[a-f0-9]{64}$/u);
+const ResumeCheckpointRegistrySchema = z
+  .object({
+    checkpoints: z
+      .array(
+        z
+          .object({
+            adapterMode: AdapterModeSchema,
+            bridgeRunnerSha256: Sha256Schema.nullable(),
+            chapterCostCapUsd: z.number().positive().max(DEFAULT_PER_CHAPTER_CAP_USD),
+            id: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/u),
+            priorSpendUsd: z.number().min(0).max(TOTAL_CAP_USD),
+            promptVersion: z.string().min(1).max(240),
+            reportSha256: Sha256Schema,
+            reportVersion: z.union([z.literal(LEGACY_REPORT_VERSION), z.literal(REPORT_VERSION)]),
+            sourceGitSha: GitShaSchema,
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(100),
+    version: z.literal(1),
+  })
+  .strict()
+  .superRefine(({ checkpoints }, context) => {
+    const ids = new Set<string>();
+    const hashes = new Set<string>();
+    for (const [index, checkpoint] of checkpoints.entries()) {
+      if (ids.has(checkpoint.id) || hashes.has(checkpoint.reportSha256)) {
+        context.addIssue({
+          code: "custom",
+          message: "Resume checkpoint IDs and report hashes must be unique",
+          path: ["checkpoints", index],
+        });
+      }
+      ids.add(checkpoint.id);
+      hashes.add(checkpoint.reportSha256);
+      if (
+        (checkpoint.reportVersion === LEGACY_REPORT_VERSION) !==
+        (checkpoint.bridgeRunnerSha256 !== null)
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: "Only legacy checkpoints require a bridge runner hash",
+          path: ["checkpoints", index, "bridgeRunnerSha256"],
+        });
+      }
+    }
+  });
 const ValidationIssueSchema = z
   .object({
     code: z.enum(VALIDATION_CODES),
@@ -95,7 +155,7 @@ const GateSchema = z
   })
   .strict();
 
-export const LiveReportSchema = z
+const BaseLiveReportSchema = z
   .object({
     adapterMode: AdapterModeSchema,
     attempts: z.array(RuntimeAttemptTraceSchema).max(1_000),
@@ -122,71 +182,217 @@ export const LiveReportSchema = z
     projectedMaximumCumulativeCostUsd: z.number().min(0),
     promptVersion: z.string().min(1).max(240),
     results: z.array(LiveResultSchema).max(12),
-    resume: z
-      .object({
-        discardedResultCount: z.number().int().min(0).max(12),
-        existingAttemptCostUsd: z.number().min(0).max(TOTAL_CAP_USD),
-        retainedPovIds: z.array(PovIdSchema).max(6),
-        sourceReportPath: z.string().min(1).max(4_000),
-      })
-      .strict()
-      .nullable(),
-    sourceGitSha: z.string().regex(/^[a-f0-9]{7,40}$/u),
     startedAt: z.string().datetime(),
     suite: z.enum(["full", "smoke"]),
     totalCostCapUsd: z.literal(TOTAL_CAP_USD),
     totalCostUsd: z.number().min(0).max(TOTAL_CAP_USD),
-    version: z.literal(REPORT_VERSION),
   })
-  .strict()
-  .superRefine((report, context) => {
-    const attemptCostUsd = sum(report.attempts.map(({ costUsd }) => costUsd));
-    if (!costsMatch(attemptCostUsd, report.totalCostUsd)) {
-      context.addIssue({ code: "custom", message: "Report total cost does not match attempts" });
-    }
-    if (!costsMatch(report.priorSpendUsd + attemptCostUsd, report.cumulativeCostUsd)) {
-      context.addIssue({ code: "custom", message: "Report cumulative cost is inconsistent" });
-    }
-    if (report.completedChapters !== report.results.length) {
+  .strict();
+
+const LegacyResumeSchema = z
+  .object({
+    discardedResultCount: z.number().int().min(0).max(12),
+    existingAttemptCostUsd: z.number().min(0).max(TOTAL_CAP_USD),
+    retainedPovIds: z.array(PovIdSchema).max(6),
+    sourceReportPath: z.string().min(1).max(4_000),
+  })
+  .strict();
+
+const RetainedResultGitShaSchema = z
+  .object({
+    chapter: z.number().int().min(1).max(2),
+    povId: PovIdSchema,
+    sourceGitSha: GitShaSchema,
+  })
+  .strict();
+
+const ResumeSchema = z
+  .object({
+    changedPaths: z.array(z.string().min(1).max(1_000)).max(20),
+    discardedResultCount: z.number().int().min(0).max(12),
+    existingAttemptCostUsd: z.number().min(0).max(TOTAL_CAP_USD),
+    retainedPovIds: z.array(PovIdSchema).max(6),
+    retainedResultGitShas: z.array(RetainedResultGitShaSchema).max(12),
+    sourceChapterCostCapUsd: z.number().positive().max(DEFAULT_PER_CHAPTER_CAP_USD),
+    sourceGitSha: GitShaSchema,
+    sourceReportPath: z.string().min(1).max(4_000),
+    sourceReportSha256: Sha256Schema,
+    sourceReportVersion: z.union([z.literal(LEGACY_REPORT_VERSION), z.literal(REPORT_VERSION)]),
+  })
+  .strict();
+
+export const LegacyLiveReportSchema = BaseLiveReportSchema.extend({
+  resume: LegacyResumeSchema.nullable(),
+  sourceGitSha: GitShaSchema,
+  version: z.literal(LEGACY_REPORT_VERSION),
+}).superRefine((report, context) => {
+  refineReportCommon(report, context);
+  for (const [index, result] of report.results.entries()) {
+    if (result.trace.gitSha !== report.sourceGitSha) {
       context.addIssue({
         code: "custom",
-        message: "Report completed chapter count is inconsistent",
+        message: `Result ${index} Git SHA does not match report`,
+        path: ["results", index, "trace", "gitSha"],
       });
     }
-    const wantedAdapter = report.nativeRequested ? "native-multi-agent" : "sequential";
-    if (report.adapterMode !== wantedAdapter) {
-      context.addIssue({ code: "custom", message: "Report adapter fields disagree" });
+  }
+});
+
+export const LiveReportSchema = BaseLiveReportSchema.extend({
+  resume: ResumeSchema.nullable(),
+  sourceGitSha: GitShaSchema,
+  version: z.literal(REPORT_VERSION),
+}).superRefine((report, context) => {
+  refineReportCommon(report, context);
+  if (report.resume !== null) {
+    if (report.chapterCostCapUsd > report.resume.sourceChapterCostCapUsd) {
+      context.addIssue({ code: "custom", message: "Resumed chapter cap increased" });
     }
-    for (const [index, result] of report.results.entries()) {
-      if (
-        result.adapterMode !== report.adapterMode ||
-        result.trace.adapterMode !== report.adapterMode
-      ) {
-        context.addIssue({
-          code: "custom",
-          message: `Result ${index} adapter does not match report`,
-          path: ["results", index, "adapterMode"],
-        });
-      }
-      if (result.trace.promptVersion !== report.promptVersion) {
-        context.addIssue({
-          code: "custom",
-          message: `Result ${index} prompt version does not match report`,
-          path: ["results", index, "trace", "promptVersion"],
-        });
-      }
-      if (result.trace.gitSha !== report.sourceGitSha) {
-        context.addIssue({
-          code: "custom",
-          message: `Result ${index} Git SHA does not match report`,
-          path: ["results", index, "trace", "gitSha"],
-        });
-      }
+    if (report.resume.existingAttemptCostUsd > report.totalCostUsd + MONEY_EPSILON_USD) {
+      context.addIssue({ code: "custom", message: "Resume attempt cost exceeds report total" });
     }
-  });
+    try {
+      assertResumeHarnessPaths(
+        report.resume.changedPaths,
+        report.resume.sourceReportVersion === LEGACY_REPORT_VERSION,
+      );
+    } catch (error) {
+      context.addIssue({
+        code: "custom",
+        message: error instanceof Error ? error.message : "Resume provenance path is invalid",
+        path: ["resume", "changedPaths"],
+      });
+    }
+    if (new Set(report.resume.retainedPovIds).size !== report.resume.retainedPovIds.length) {
+      context.addIssue({ code: "custom", message: "Resume repeats a retained POV" });
+    }
+  }
+  const retainedByResult = new Map<string, string>();
+  for (const [index, retained] of (report.resume?.retainedResultGitShas ?? []).entries()) {
+    const key = resultKey(retained.povId, retained.chapter);
+    if (retainedByResult.has(key)) {
+      context.addIssue({
+        code: "custom",
+        message: `Retained result ${key} has duplicate Git provenance`,
+        path: ["resume", "retainedResultGitShas", index],
+      });
+    }
+    retainedByResult.set(key, retained.sourceGitSha);
+    if (!report.resume?.retainedPovIds.includes(retained.povId)) {
+      context.addIssue({
+        code: "custom",
+        message: `Retained result ${key} has no retained POV`,
+        path: ["resume", "retainedResultGitShas", index],
+      });
+    }
+  }
+  for (const [index, result] of report.results.entries()) {
+    const key = resultKey(result.povId, result.chapter);
+    const expectedGitSha = retainedByResult.get(key) ?? report.sourceGitSha;
+    if (result.trace.gitSha !== expectedGitSha) {
+      context.addIssue({
+        code: "custom",
+        message: `Result ${index} Git SHA has no matching provenance`,
+        path: ["results", index, "trace", "gitSha"],
+      });
+    }
+    retainedByResult.delete(key);
+  }
+  for (const key of retainedByResult.keys()) {
+    context.addIssue({
+      code: "custom",
+      message: `Retained Git provenance ${key} has no result`,
+      path: ["resume", "retainedResultGitShas"],
+    });
+  }
+  for (const povId of report.resume?.retainedPovIds ?? []) {
+    const chapters = report.resume?.retainedResultGitShas
+      .filter((entry) => entry.povId === povId)
+      .map(({ chapter }) => chapter)
+      .sort((left, right) => left - right);
+    if (chapters?.length !== 2 || chapters[0] !== 1 || chapters[1] !== 2) {
+      context.addIssue({
+        code: "custom",
+        message: `Retained POV ${povId} lacks an exact chapter pair`,
+        path: ["resume", "retainedPovIds"],
+      });
+    }
+  }
+  const pendingChapterCount =
+    report.suite === "smoke"
+      ? 1
+      : CHARACTER_IDS.length * 2 - (report.resume?.retainedResultGitShas.length ?? 0);
+  const projected = projectedCumulativeCostUsd(
+    report.priorSpendUsd,
+    report.resume?.existingAttemptCostUsd ?? 0,
+    pendingChapterCount,
+    report.chapterCostCapUsd,
+  );
+  if (!costsMatch(projected, report.projectedMaximumCumulativeCostUsd)) {
+    context.addIssue({ code: "custom", message: "Report projected maximum is inconsistent" });
+  }
+});
 
 export type LiveResult = z.infer<typeof LiveResultSchema>;
+export type LegacyLiveReport = z.infer<typeof LegacyLiveReportSchema>;
 export type LiveReport = z.infer<typeof LiveReportSchema>;
+export type ResumableLiveReport = LegacyLiveReport | LiveReport;
+
+function refineReportCommon(
+  report: z.infer<typeof BaseLiveReportSchema>,
+  context: z.RefinementCtx,
+): void {
+  const attemptCostUsd = sum(report.attempts.map(({ costUsd }) => costUsd));
+  if (!costsMatch(attemptCostUsd, report.totalCostUsd)) {
+    context.addIssue({ code: "custom", message: "Report total cost does not match attempts" });
+  }
+  if (!costsMatch(report.priorSpendUsd + attemptCostUsd, report.cumulativeCostUsd)) {
+    context.addIssue({ code: "custom", message: "Report cumulative cost is inconsistent" });
+  }
+  if (report.completedChapters !== report.results.length) {
+    context.addIssue({
+      code: "custom",
+      message: "Report completed chapter count is inconsistent",
+    });
+  }
+  const wantedAdapter = report.nativeRequested ? "native-multi-agent" : "sequential";
+  if (report.adapterMode !== wantedAdapter) {
+    context.addIssue({ code: "custom", message: "Report adapter fields disagree" });
+  }
+  const resultKeys = new Set<string>();
+  for (const [index, result] of report.results.entries()) {
+    const key = resultKey(result.povId, result.chapter);
+    if (resultKeys.has(key)) {
+      context.addIssue({
+        code: "custom",
+        message: `Report repeats result ${key}`,
+        path: ["results", index],
+      });
+    }
+    resultKeys.add(key);
+    if (
+      result.adapterMode !== report.adapterMode ||
+      result.trace.adapterMode !== report.adapterMode
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: `Result ${index} adapter does not match report`,
+        path: ["results", index, "adapterMode"],
+      });
+    }
+    if (result.trace.promptVersion !== report.promptVersion) {
+      context.addIssue({
+        code: "custom",
+        message: `Result ${index} prompt version does not match report`,
+        path: ["results", index, "trace", "promptVersion"],
+      });
+    }
+  }
+}
+
+function resultKey(povId: CharacterId, chapter: number): string {
+  return `${povId}:${chapter}`;
+}
 
 export interface ResumeRequirements {
   readonly adapterMode: z.infer<typeof AdapterModeSchema>;
@@ -231,9 +437,15 @@ async function main(): Promise<void> {
   if (suite === "full") assertCleanGitCheckpoint();
   config({ path: resolve(ROOT, ".env"), quiet: true });
   const sourceGitSha = currentGitSha();
+  process.env.GIT_SHA = sourceGitSha;
   const resumeReportPath =
     resumeReportArgument === null ? null : resolve(ROOT, resumeReportArgument);
-  const resumeReport = resumeReportPath === null ? null : readLiveReport(resumeReportPath);
+  const resumeSource = resumeReportPath === null ? null : readLiveReport(resumeReportPath);
+  const resumeReport = resumeSource?.report ?? null;
+  const resumeChangedPaths =
+    resumeSource === null
+      ? []
+      : verifyResumeCheckpoint(resumeSource.report, resumeSource.sha256, sourceGitSha);
   const resumePreparation =
     resumeReport === null
       ? null
@@ -242,7 +454,7 @@ async function main(): Promise<void> {
           chapterCostCapUsd: perChapterCapUsd,
           priorSpendUsd,
           promptVersion: PROMPT_VERSION,
-          sourceGitSha,
+          sourceGitSha: resumeReport.sourceGitSha,
         });
   const plannedPovIds =
     suite === "smoke"
@@ -426,13 +638,26 @@ async function main(): Promise<void> {
     promptVersion: PROMPT_VERSION,
     results,
     resume:
-      resumeReportPath === null || resumePreparation === null
+      resumeReportPath === null ||
+      resumeSource === null ||
+      resumeReport === null ||
+      resumePreparation === null
         ? null
         : {
+            changedPaths: resumeChangedPaths,
             discardedResultCount: resumePreparation.discardedResultCount,
             existingAttemptCostUsd,
             retainedPovIds: resumePreparation.retainedPovIds,
+            retainedResultGitShas: resumePreparation.retainedResults.map((result) => ({
+              chapter: result.chapter,
+              povId: result.povId,
+              sourceGitSha: result.trace.gitSha,
+            })),
+            sourceChapterCostCapUsd: resumeReport.chapterCostCapUsd,
+            sourceGitSha: resumeReport.sourceGitSha,
             sourceReportPath: resumeReportPath,
+            sourceReportSha256: resumeSource.sha256,
+            sourceReportVersion: resumeReport.version,
           },
     sourceGitSha,
     startedAt,
@@ -534,17 +759,17 @@ function writeReviewPackets(results: readonly LiveResult[]): void {
 }
 
 export function prepareResume(
-  report: LiveReport,
+  report: ResumableLiveReport,
   requirements: ResumeRequirements,
 ): ResumePreparation {
-  if (report.version !== REPORT_VERSION || report.suite !== "full") {
-    throw new Error("Resume report must be a version 5 full-suite report");
+  if (report.suite !== "full") {
+    throw new Error("Resume report must be a version 5 or 6 full-suite report");
   }
   if (report.priorSpendUsd !== requirements.priorSpendUsd) {
     throw new Error("Resume report prior spend does not match this run");
   }
-  if (report.chapterCostCapUsd !== requirements.chapterCostCapUsd) {
-    throw new Error("Resume report chapter cap does not match this run");
+  if (requirements.chapterCostCapUsd > report.chapterCostCapUsd) {
+    throw new Error("Resume report chapter cap cannot increase");
   }
   if (report.adapterMode !== requirements.adapterMode) {
     throw new Error("Resume report adapter does not match this run");
@@ -618,24 +843,120 @@ export function resultTraceCostMatches(result: LiveResult): boolean {
   return costsMatch(result.costUsd, sum(result.trace.attempts.map(({ costUsd }) => costUsd)));
 }
 
-function readLiveReport(path: string): LiveReport {
+interface ResumeSource {
+  readonly report: ResumableLiveReport;
+  readonly sha256: string;
+}
+
+function readLiveReport(path: string): ResumeSource {
+  let raw: string;
   let candidate: unknown;
   try {
-    candidate = JSON.parse(readFileSync(path, "utf8")) as unknown;
+    raw = readFileSync(path, "utf8");
+    candidate = JSON.parse(raw) as unknown;
   } catch (error) {
     throw new Error(
       `Cannot read resume report: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
-  const parsed = LiveReportSchema.safeParse(candidate);
-  if (!parsed.success) {
-    const details = parsed.error.issues
-      .slice(0, 5)
-      .map((issue) => `${issue.path.join(".") || "report"}: ${issue.message}`)
-      .join("; ");
-    throw new Error(`Resume report is not valid version 5 data: ${details}`);
+  const current = LiveReportSchema.safeParse(candidate);
+  if (current.success) return { report: current.data, sha256: hashText(raw) };
+  const legacy = LegacyLiveReportSchema.safeParse(candidate);
+  if (legacy.success) return { report: legacy.data, sha256: hashText(raw) };
+  const details = [...current.error.issues, ...legacy.error.issues]
+    .slice(0, 5)
+    .map((issue) => `${issue.path.join(".") || "report"}: ${issue.message}`)
+    .join("; ");
+  throw new Error(`Resume report is not valid version 5 or 6 data: ${details}`);
+}
+
+function verifyResumeCheckpoint(
+  report: ResumableLiveReport,
+  reportSha256: string,
+  currentSourceGitSha: string,
+): string[] {
+  assertRegisteredResumeCheckpoint(report, reportSha256);
+  if (report.sourceGitSha === currentSourceGitSha) return [];
+  try {
+    execFileSync("git", ["merge-base", "--is-ancestor", report.sourceGitSha, currentSourceGitSha], {
+      cwd: ROOT,
+      encoding: "utf8",
+      timeout: 2_000,
+      windowsHide: true,
+    });
+  } catch {
+    throw new Error("Resume report Git SHA is not an ancestor of current HEAD");
   }
-  return parsed.data;
+  const changedPaths = execFileSync(
+    "git",
+    ["diff", "--name-only", `${report.sourceGitSha}..${currentSourceGitSha}`],
+    {
+      cwd: ROOT,
+      encoding: "utf8",
+      timeout: 2_000,
+      windowsHide: true,
+    },
+  )
+    .split(/\r?\n/u)
+    .map((path) => path.trim())
+    .filter(Boolean);
+  assertResumeHarnessPaths(changedPaths, report.version === LEGACY_REPORT_VERSION);
+  return changedPaths;
+}
+
+export function assertRegisteredResumeCheckpoint(
+  report: ResumableLiveReport,
+  reportSha256: string,
+  registryCandidate?: unknown,
+  currentRunnerSha256?: string,
+): void {
+  let candidate = registryCandidate;
+  if (candidate === undefined) {
+    try {
+      candidate = JSON.parse(readFileSync(RESUME_CHECKPOINTS_PATH, "utf8")) as unknown;
+    } catch (error) {
+      throw new Error(
+        `Cannot read resume checkpoint registry: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+  const registry = ResumeCheckpointRegistrySchema.parse(candidate);
+  const registered = registry.checkpoints.find(
+    (checkpoint) =>
+      checkpoint.adapterMode === report.adapterMode &&
+      checkpoint.chapterCostCapUsd === report.chapterCostCapUsd &&
+      checkpoint.priorSpendUsd === report.priorSpendUsd &&
+      checkpoint.promptVersion === report.promptVersion &&
+      checkpoint.reportSha256 === reportSha256 &&
+      checkpoint.reportVersion === report.version &&
+      checkpoint.sourceGitSha === report.sourceGitSha,
+  );
+  if (!registered) {
+    throw new Error("Resume report is not present in the committed checkpoint registry");
+  }
+  if (registered.bridgeRunnerSha256 !== null) {
+    const runnerSha256 =
+      currentRunnerSha256 ?? hashText(readFileSync(resolve(ROOT, "evals", "run-live.ts"), "utf8"));
+    if (runnerSha256 !== registered.bridgeRunnerSha256) {
+      throw new Error("Legacy resume bridge runner does not match its audited content hash");
+    }
+  }
+}
+
+export function assertResumeHarnessPaths(
+  paths: readonly string[],
+  allowLegacyRunnerChange = false,
+): void {
+  const forbidden = paths.find((path) => {
+    const normalized = path.replaceAll("\\", "/");
+    return (
+      !RESUME_NON_RUNTIME_PATHS.has(normalized) &&
+      !(allowLegacyRunnerChange && normalized === "evals/run-live.ts")
+    );
+  });
+  if (forbidden !== undefined) {
+    throw new Error(`Resume checkpoint changed runtime path ${forbidden}`);
+  }
 }
 
 function parseSuite(args: readonly string[]): "full" | "smoke" {
@@ -726,8 +1047,6 @@ function hashText(value: string): string {
 }
 
 function currentGitSha(): string {
-  const configured = process.env.GIT_SHA;
-  if (configured && /^[a-f0-9]{7,40}$/u.test(configured)) return configured;
   try {
     return execFileSync("git", ["rev-parse", "HEAD"], {
       cwd: ROOT,

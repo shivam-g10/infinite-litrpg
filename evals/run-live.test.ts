@@ -1,10 +1,18 @@
 import { createHash } from "node:crypto";
 
-import { CHARACTER_IDS, PROMPT_VERSION } from "@infinite-litrpg/shared";
+import {
+  CHARACTER_IDS,
+  CONTRACT_VERSION,
+  NARRATIVE_AUDIT_DIMENSIONS,
+  PROMPT_VERSION,
+} from "@infinite-litrpg/shared";
 import { describe, expect, it } from "vitest";
 
 import {
+  LegacyLiveReportSchema,
   LiveReportSchema,
+  assertRegisteredResumeCheckpoint,
+  assertResumeHarnessPaths,
   hasExactFullMatrix,
   prepareResume,
   projectedCumulativeCostUsd,
@@ -23,12 +31,14 @@ const REQUIREMENTS: ResumeRequirements = {
   sourceGitSha: GIT_SHA,
 };
 
-describe("live report version 5", () => {
-  it("strictly parses an empty resumable full report", () => {
+describe("live report version 6", () => {
+  it("strictly parses current data and keeps a strict legacy parser", () => {
     const candidate = emptyReportData();
 
     expect(LiveReportSchema.safeParse(candidate).success).toBe(true);
     expect(LiveReportSchema.safeParse({ ...candidate, unexpected: true }).success).toBe(false);
+    expect(LiveReportSchema.safeParse({ ...candidate, version: 5 }).success).toBe(false);
+    expect(LegacyLiveReportSchema.safeParse({ ...candidate, version: 5 }).success).toBe(true);
     expect(LiveReportSchema.safeParse({ ...candidate, version: 4 }).success).toBe(false);
   });
 
@@ -77,8 +87,9 @@ describe("live report version 5", () => {
     expect(() => prepareResume(report, { ...REQUIREMENTS, priorSpendUsd: 2.01 })).toThrow(
       "prior spend",
     );
-    expect(() => prepareResume(report, { ...REQUIREMENTS, chapterCostCapUsd: 0.05 })).toThrow(
-      "chapter cap",
+    expect(prepareResume(report, { ...REQUIREMENTS, chapterCostCapUsd: 0.05 })).toBeDefined();
+    expect(() => prepareResume(report, { ...REQUIREMENTS, chapterCostCapUsd: 0.07 })).toThrow(
+      "cannot increase",
     );
     expect(() =>
       prepareResume(report, { ...REQUIREMENTS, adapterMode: "native-multi-agent" }),
@@ -100,6 +111,150 @@ describe("live report version 5", () => {
     const report = fakeReport([corrupt, fakeResult("rowan-ashborn", 2, 0.01)]);
 
     expect(() => prepareResume(report, REQUIREMENTS)).toThrow("prose hash");
+  });
+
+  it("revalidates retained results under a decreased cap", () => {
+    const report = fakeReport([
+      fakeResult("rowan-ashborn", 1, 0.029751275),
+      fakeResult("rowan-ashborn", 2, 0.038406625),
+    ]);
+
+    expect(
+      prepareResume(report, { ...REQUIREMENTS, chapterCostCapUsd: 0.0405 }).retainedPovIds,
+    ).toEqual(["rowan-ashborn"]);
+    expect(() => prepareResume(report, { ...REQUIREMENTS, chapterCostCapUsd: 0.0384 })).toThrow(
+      "exceeded cap",
+    );
+  });
+
+  it("allows only audited harness and documentation drift", () => {
+    expect(() =>
+      assertResumeHarnessPaths([
+        "evals/run-live.test.ts",
+        "app/src/server/story/story-service.test.ts",
+        "docs/PLAN.md",
+      ]),
+    ).not.toThrow();
+    expect(() => assertResumeHarnessPaths(["evals/run-live.ts"])).toThrow("runtime path");
+    expect(() => assertResumeHarnessPaths(["evals/run-live.ts"], true)).not.toThrow();
+    expect(() => assertResumeHarnessPaths(["app/src/server/story/prompts.ts"])).toThrow(
+      "runtime path",
+    );
+  });
+
+  it("pins every resume artifact to the committed checkpoint registry", () => {
+    const reportSha256 = "2e83070e4edfeef14fc9e91c2683090d78636551f736f63898b7521ad32f093a";
+    const bridgeRunnerSha256 = "d".repeat(64);
+    const sourceGitSha = "8ceac05c57960388238cb1161ac140178c6e335a";
+    const legacy = LegacyLiveReportSchema.parse({
+      ...emptyReportData(),
+      chapterCostCapUsd: 0.0424,
+      cumulativeCostUsd: 2.49105695,
+      priorSpendUsd: 2.49105695,
+      sourceGitSha,
+      version: 5,
+    });
+    const registry = {
+      checkpoints: [
+        {
+          adapterMode: "sequential",
+          bridgeRunnerSha256,
+          chapterCostCapUsd: 0.0424,
+          id: "prompt-1-4-9-rowan-pair",
+          priorSpendUsd: 2.49105695,
+          promptVersion: PROMPT_VERSION,
+          reportSha256,
+          reportVersion: 5,
+          sourceGitSha,
+        },
+      ],
+      version: 1,
+    };
+
+    expect(() => assertRegisteredResumeCheckpoint(legacy, reportSha256)).not.toThrow();
+    expect(() =>
+      assertRegisteredResumeCheckpoint(legacy, reportSha256, registry, bridgeRunnerSha256),
+    ).not.toThrow();
+    expect(() =>
+      assertRegisteredResumeCheckpoint(legacy, "0".repeat(64), registry, bridgeRunnerSha256),
+    ).toThrow("committed checkpoint registry");
+    const versionFlip = LiveReportSchema.parse({
+      ...legacy,
+      projectedMaximumCumulativeCostUsd: 2.99985695,
+      version: 6,
+    });
+    expect(() =>
+      assertRegisteredResumeCheckpoint(versionFlip, reportSha256, registry, bridgeRunnerSha256),
+    ).toThrow("committed checkpoint registry");
+    expect(() =>
+      assertRegisteredResumeCheckpoint(
+        legacy,
+        reportSha256,
+        {
+          ...registry,
+          checkpoints: [{ ...registry.checkpoints[0], sourceGitSha: GIT_SHA }],
+        },
+        bridgeRunnerSha256,
+      ),
+    ).toThrow("committed checkpoint registry");
+    expect(() =>
+      assertRegisteredResumeCheckpoint(
+        legacy,
+        reportSha256,
+        {
+          ...registry,
+          checkpoints: [...registry.checkpoints, registry.checkpoints[0]],
+        },
+        bridgeRunnerSha256,
+      ),
+    ).toThrow("Resume checkpoint IDs and report hashes must be unique");
+    expect(() =>
+      assertRegisteredResumeCheckpoint(legacy, reportSha256, registry, "e".repeat(64)),
+    ).toThrow("audited content hash");
+  });
+
+  it("parses declared mixed Git provenance and rejects an unlisted result SHA", () => {
+    const currentGitSha = "1234567";
+    const results = [
+      fakeResult("rowan-ashborn", 1, 0.01),
+      fakeResult("rowan-ashborn", 2, 0.01),
+      fakeResult("elara-voss", 1, 0.01, [0.01], currentGitSha),
+    ];
+    const attempts = results.flatMap(({ trace }) => trace.attempts);
+    const candidate = {
+      ...emptyReportData(),
+      attempts,
+      completedChapters: results.length,
+      cumulativeCostUsd: 2.03,
+      projectedMaximumCumulativeCostUsd: 2.62,
+      results,
+      resume: {
+        changedPaths: ["evals/run-live.ts"],
+        discardedResultCount: 0,
+        existingAttemptCostUsd: 0.02,
+        retainedPovIds: ["rowan-ashborn"],
+        retainedResultGitShas: [
+          { chapter: 1, povId: "rowan-ashborn", sourceGitSha: GIT_SHA },
+          { chapter: 2, povId: "rowan-ashborn", sourceGitSha: GIT_SHA },
+        ],
+        sourceChapterCostCapUsd: 0.06,
+        sourceGitSha: GIT_SHA,
+        sourceReportPath: "legacy.json",
+        sourceReportSha256: "c".repeat(64),
+        sourceReportVersion: 5,
+      },
+      sourceGitSha: currentGitSha,
+      totalCostUsd: 0.03,
+    };
+
+    expect(LiveReportSchema.safeParse(candidate).success).toBe(true);
+    const tampered = {
+      ...candidate,
+      results: candidate.results.map((result, index) =>
+        index === 2 ? { ...result, trace: { ...result.trace, gitSha: GIT_SHA } } : result,
+      ),
+    };
+    expect(LiveReportSchema.safeParse(tampered).success).toBe(false);
   });
 });
 
@@ -124,6 +279,10 @@ describe("resumed live gates", () => {
   it("preflights prior spend, all old attempt cost, and only pending chapter caps", () => {
     expect(projectedCumulativeCostUsd(2, 0.19, 10, 0.06)).toBeCloseTo(2.79, 10);
     expect(projectedCumulativeCostUsd(2.3, 0.19, 10, 0.06)).toBeGreaterThan(3);
+    expect(projectedCumulativeCostUsd(2.49105695, 0.10373065, 10, 0.0405)).toBeCloseTo(
+      2.9997876,
+      10,
+    );
   });
 });
 
@@ -161,7 +320,7 @@ function emptyReportData(): Record<string, unknown> {
     suite: "full",
     totalCostCapUsd: 3,
     totalCostUsd: 0,
-    version: 5,
+    version: 6,
   };
 }
 
@@ -179,6 +338,7 @@ function fakeResult(
   chapter: 1 | 2,
   costUsd: number,
   attemptCosts: number[] = [costUsd],
+  gitSha = GIT_SHA,
 ): LiveResult {
   const prose = Array.from({ length: 900 }, () => "Ash").join(" ");
   const proseHash = createHash("sha256").update(prose).digest("hex");
@@ -192,7 +352,25 @@ function fakeResult(
   };
   return {
     adapterMode: "sequential",
-    audit: { approved: true, leakedFactIds: [], proseHash },
+    audit: {
+      approved: true,
+      evidence: NARRATIVE_AUDIT_DIMENSIONS.map((dimension) => ({
+        detail: "Passes fixed release rubric.",
+        dimension,
+        issueCode: "pass" as const,
+      })),
+      leakedFactIds: [],
+      proseHash,
+      scores: {
+        arcProgress: 2,
+        characterAutonomy: 2,
+        choiceFulfillment: 2,
+        continuity: 2,
+        litrpgMechanics: 2,
+        povSafety: 2,
+        prose: 2,
+      },
+    },
     chapter,
     costUsd,
     latencyMs: 1,
@@ -202,12 +380,86 @@ function fakeResult(
     streamingLatencyMs: 1,
     streamReconstructed: true,
     trace: {
+      acceptedDelta: {
+        acceptedIntentIds: [],
+        clock: {
+          convergencePressure: false,
+          fromAct: 1,
+          fromChapter: 0,
+          terminal: false,
+          toAct: 1,
+          toChapter: 1,
+          transitionRequired: false,
+        },
+        contractVersion: CONTRACT_VERSION,
+        events: [],
+        expectedWorldVersion: 1,
+        knowledgeMutations: [],
+        promptVersion: PROMPT_VERSION,
+        rejectedIntents: [],
+        stateMutations: [],
+        surfacedClueFactIds: [],
+      },
       adapterMode: "sequential",
-      attempts: attemptCosts.map((attemptCost) => ({ costUsd: attemptCost })),
-      calls: [{ phase: "narration" }, { phase: "audit" }],
+      attempts: attemptCosts.map((attemptCost, index) => ({
+        agentId: null,
+        attempt: index,
+        costUsd: attemptCost,
+        errorCode: null,
+        latencyMs: 1,
+        model: "gpt-5.6-terra" as const,
+        phase: "narration" as const,
+        responseId: `resp_attempt_${chapter}_${index}`,
+        usage,
+      })),
+      calls: [
+        {
+          agentId: null,
+          errorCode: null,
+          estimatedCostUsd: costUsd,
+          latencyMs: 1,
+          model: "gpt-5.6-terra",
+          phase: "narration",
+          reasoningEffort: "none",
+          refusal: false,
+          responseId: `resp_narration_${chapter}`,
+          retries: 0,
+          timedOut: false,
+          usage,
+        },
+        {
+          agentId: null,
+          errorCode: null,
+          estimatedCostUsd: 0,
+          latencyMs: 1,
+          model: "gpt-5.6-luna",
+          phase: "audit",
+          reasoningEffort: "none",
+          refusal: false,
+          responseId: `resp_audit_${chapter}`,
+          retries: 0,
+          timedOut: false,
+          usage,
+        },
+      ],
+      contractVersion: CONTRACT_VERSION,
+      fixtureId: "test-fixture",
+      fixtureVersion: "1.1.0",
       gateResult: "passed",
+      gitSha,
+      intents: [],
+      multiAgentOutputItems: [],
+      pricingVersion: "test-pricing",
+      promptVersion: PROMPT_VERSION,
+      runId: "00000000-0000-4000-8000-000000000001",
+      schemaVersion: CONTRACT_VERSION,
+      seed: 0,
+      stateAfterHash: "a".repeat(64),
+      stateBeforeHash: "b".repeat(64),
       totalEstimatedCostUsd: costUsd,
+      totalLatencyMs: 1,
       totalUsage: usage,
+      validationFailures: [],
     },
     usage,
     wordCount: 900,

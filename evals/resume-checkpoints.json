@@ -1,0 +1,16 @@
+{
+  "checkpoints": [
+    {
+      "adapterMode": "sequential",
+      "bridgeRunnerSha256": "e91a2f958841468a96410183af1037a1bfeb7e359c24a7f00fd06ca26805549f",
+      "chapterCostCapUsd": 0.0424,
+      "id": "prompt-1-4-9-rowan-pair",
+      "priorSpendUsd": 2.49105695,
+      "promptVersion": "1.4.9",
+      "reportSha256": "2e83070e4edfeef14fc9e91c2683090d78636551f736f63898b7521ad32f093a",
+      "reportVersion": 5,
+      "sourceGitSha": "8ceac05c57960388238cb1161ac140178c6e335a"
+    }
+  ],
+  "version": 1
+}
