@@ -24,6 +24,7 @@
     "evals:live:smoke": "tsx evals/run-live.ts --suite smoke",
     "evals:live:full": "tsx evals/run-live.ts --suite full --confirm-cost --service-tier flex",
     "evals:live:reconcile": "tsx evals/reconcile-live-interruption.ts",
+    "evals:live:reconcile-settled": "tsx evals/reconcile-settled-live-run.ts",
     "evals:review-packets": "tsx evals/review-packets.ts",
     "demo:seed": "tsx scripts/seed-demo-evidence.ts",
     "build": "npm run build --workspace @infinite-litrpg/app",

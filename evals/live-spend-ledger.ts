@@ -78,6 +78,11 @@ export interface InterruptedRunExpectation {
   readonly unknownReservations: readonly InterruptedUnknownReservation[];
 }
 
+export interface SettledRunExpectation {
+  readonly baseline: LiveSpendBaseline;
+  readonly knownReservations: readonly InterruptedKnownReservation[];
+}
+
 interface SumRow {
   readonly value: number;
 }
@@ -301,6 +306,119 @@ export class LiveSpendLedger {
     transaction.immediate();
   }
 
+  claimSettledRunForReport(runId: string, expectation: SettledRunExpectation): LiveSpendSnapshot {
+    validateRunId(runId);
+    const transaction = this.db.transaction(() => {
+      const existing = this.readRunLock();
+      if (existing !== undefined) {
+        if (existing.run_id !== runId) {
+          throw new Error(`Live spend ledger is locked by run ${existing.run_id}`);
+        }
+        if (isProcessRunning(existing.pid)) {
+          throw new Error(`Live spend run ${runId} still has a running owner process`);
+        }
+        if (this.countReservations("active") !== 0) {
+          throw new Error("Active provider reservations require external reconciliation");
+        }
+        this.assertSettledRunExpectation(runId, expectation);
+        const update = this.db
+          .prepare(
+            `UPDATE run_lock
+                SET pid = ?, started_at = ?
+              WHERE id = 1 AND run_id = ?`,
+          )
+          .run(process.pid, new Date().toISOString(), runId);
+        if (update.changes !== 1) {
+          throw new Error("Settled report lock changed during recovery");
+        }
+        return;
+      }
+      this.assertSettledRunExpectation(runId, expectation);
+      this.db
+        .prepare("INSERT INTO run_lock (id, run_id, pid, started_at) VALUES (1, ?, ?, ?)")
+        .run(runId, process.pid, new Date().toISOString());
+    });
+    transaction.immediate();
+    return this.snapshot();
+  }
+
+  completeSettledRunAfterReport(
+    runId: string,
+    expectation: SettledRunExpectation,
+  ): LiveSpendSnapshot {
+    validateRunId(runId);
+    const transaction = this.db.transaction(() => {
+      const lock = this.readRunLock();
+      if (lock !== undefined && lock.run_id !== runId) {
+        throw new Error(`Live spend ledger is locked by run ${lock.run_id}`);
+      }
+      this.assertSettledRunExpectation(runId, expectation);
+      if (lock !== undefined) {
+        this.db.prepare("DELETE FROM run_lock WHERE id = 1 AND run_id = ?").run(runId);
+      }
+    });
+    transaction.immediate();
+    return this.snapshot();
+  }
+
+  completeRunAfterCommittedReport(
+    runId: string,
+    expectedSnapshot: LiveSpendSnapshot,
+    expectedKnownReservationCount: number,
+    expectedUncertainReservationCount: number,
+  ): LiveSpendSnapshot {
+    validateRunId(runId);
+    if (
+      !Number.isSafeInteger(expectedKnownReservationCount) ||
+      expectedKnownReservationCount < 0 ||
+      !Number.isSafeInteger(expectedUncertainReservationCount) ||
+      expectedUncertainReservationCount < 0
+    ) {
+      throw new Error("Committed report reservation counts are invalid");
+    }
+    const transaction = this.db.transaction(() => {
+      const lock = this.readRunLock();
+      if (lock !== undefined) {
+        if (lock.run_id !== runId) {
+          throw new Error(`Live spend ledger is locked by run ${lock.run_id}`);
+        }
+        if (isProcessRunning(lock.pid)) {
+          throw new Error(`Live spend run ${runId} still has a running owner process`);
+        }
+      }
+      if (this.countReservations("active") !== 0) {
+        throw new Error("Committed report cannot release active provider reservations");
+      }
+      const reservations = this.readAllReservations();
+      if (reservations.some(({ run_id }) => run_id !== runId)) {
+        throw new Error("Committed report contains reservations owned by another run");
+      }
+      if (
+        reservations.filter(({ status }) => status === "known").length !==
+        expectedKnownReservationCount
+      ) {
+        throw new Error("Committed report known reservation count does not match durable rows");
+      }
+      if (
+        reservations.filter(({ status }) => status === "uncertain").length !==
+        expectedUncertainReservationCount
+      ) {
+        throw new Error("Committed report uncertain reservation count does not match durable rows");
+      }
+      this.assertSnapshotExactly(expectedSnapshot);
+      if (lock !== undefined) {
+        const deletion = this.db
+          .prepare("DELETE FROM run_lock WHERE id = 1 AND run_id = ?")
+          .run(runId);
+        if (deletion.changes !== 1) {
+          throw new Error("Committed report lock changed during recovery");
+        }
+      }
+    });
+    transaction.immediate();
+    return this.snapshot();
+  }
+
   synchronizeBaseline(runId: string, baseline: LiveSpendBaseline): void {
     validateRunId(runId);
     validateShaOrFreshId(baseline.sourceReportSha256);
@@ -455,6 +573,77 @@ export class LiveSpendLedger {
 
   close(): void {
     this.db.close();
+  }
+
+  private assertSettledRunExpectation(runId: string, expectation: SettledRunExpectation): void {
+    validateShaOrFreshId(expectation.baseline.sourceReportSha256);
+    if (expectation.knownReservations.length === 0) {
+      throw new Error("Settled run reconciliation requires known reservations");
+    }
+    const priorSpendNano = usdToNano(expectation.baseline.priorSpendUsd, "prior spend");
+    const baselineAttemptNano = usdToNano(expectation.baseline.attemptCostUsd, "attempt cost");
+    const known = expectation.knownReservations.map((reservation) => ({
+      ...reservation,
+      actualNano: usdToNano(reservation.actualCostUsd, "known reservation actual cost"),
+      maximumNano: usdToNano(reservation.maximumCostUsd, "known reservation maximum cost"),
+      serviceTier: reservation.serviceTier ?? "standard",
+    }));
+    const expectedIds = new Set(known.map(({ id }) => id));
+    if (expectedIds.size !== known.length) {
+      throw new Error("Settled reservation IDs must be unique");
+    }
+    for (const reservation of known) validateInterruptedReservation(reservation);
+    const meta = this.readMeta();
+    if (
+      meta.prior_spend_nano !== priorSpendNano ||
+      meta.baseline_attempt_nano !== baselineAttemptNano ||
+      meta.source_report_sha256 !== expectation.baseline.sourceReportSha256
+    ) {
+      throw new Error("Settled ledger baseline does not exactly match registered checkpoint");
+    }
+    const rows = this.readAllReservations();
+    const rowsById = new Map(rows.map((row) => [row.id, row]));
+    const knownMatch = known.every((expected) => {
+      const row = rowsById.get(expected.id);
+      return (
+        row !== undefined &&
+        row.run_id === runId &&
+        row.status === "known" &&
+        row.agent_id === expected.agentId &&
+        row.attempt === expected.attempt &&
+        row.model === expected.model &&
+        row.service_tier === expected.serviceTier &&
+        row.max_nano === expected.maximumNano &&
+        row.actual_nano === expected.actualNano
+      );
+    });
+    if (rows.length !== expectedIds.size || !knownMatch) {
+      throw new Error("Settled reservation rows do not exactly match registered checkpoint");
+    }
+  }
+
+  private assertSnapshotExactly(expected: LiveSpendSnapshot): void {
+    const actual = this.snapshot();
+    const moneyFields = [
+      "baselineAttemptCostUsd",
+      "headroomUsd",
+      "knownReservationCostUsd",
+      "priorSpendUsd",
+      "totalCapUsd",
+      "totalExposureUsd",
+      "uncertainReservationCostUsd",
+    ] as const;
+    if (
+      actual.activeReservationCount !== expected.activeReservationCount ||
+      actual.sourceReportSha256 !== expected.sourceReportSha256 ||
+      moneyFields.some(
+        (field) =>
+          usdToNano(actual[field], `actual ${field}`) !==
+          usdToNano(expected[field], `expected ${field}`),
+      )
+    ) {
+      throw new Error("Committed report snapshot does not exactly match durable exposure");
+    }
   }
 
   private assertRunOwner(runId: string): void {

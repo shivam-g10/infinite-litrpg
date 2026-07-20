@@ -333,6 +333,179 @@ describe("narrative gates", () => {
     ).toEqual([]);
   });
 
+  it("rejects Rowan's uncommitted mana transition without a slash snapshot", () => {
+    const before = seedState();
+    before.characters.find(({ id }) => id === "rowan-ashborn")!.locationId = "ash-road";
+    const after = structuredClone(before);
+    after.chapter = 2;
+    after.version = 3;
+
+    expect(
+      validateNarrativeStateClaims(
+        before,
+        after,
+        "The skill answered with a small expenditure of mana, and Rowan felt his reserve lessen from eighteen to sixteen.",
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        code: "INVALID_SCHEMA",
+        message: expect.stringContaining("mana transition 18 to 16"),
+        path: "prose",
+      }),
+    ]);
+    expect(
+      validateNarrativeStateClaims(
+        before,
+        after,
+        "If he used Ember Sense, his mana reserve could fall from eighteen to sixteen.",
+      ),
+    ).toEqual([]);
+
+    after.characters.find(({ id }) => id === "rowan-ashborn")!.mana.current = 16;
+    expect(
+      validateNarrativeStateClaims(
+        before,
+        after,
+        "His mana reserve fell from eighteen to sixteen.",
+      ),
+    ).toEqual([]);
+  });
+
+  it("rejects explicit resource transitions with trailing resource names and drain verbs", () => {
+    const before = seedState();
+    before.characters.find(({ id }) => id === "rowan-ashborn")!.health.current = 24;
+    const after = structuredClone(before);
+    after.chapter = 1;
+    after.version = 2;
+
+    for (const prose of [
+      "His reserve fell from eighteen to sixteen mana.",
+      "His mana reserve drained from eighteen to sixteen.",
+      "His health drained from 24 to 20.",
+      "He spent mana from 18 to 16.",
+    ]) {
+      expect(validateNarrativeStateClaims(before, after, prose)).toEqual([
+        expect.objectContaining({ code: "INVALID_SCHEMA", path: "prose" }),
+      ]);
+    }
+
+    after.characters.find(({ id }) => id === "rowan-ashborn")!.health.current = 20;
+    expect(
+      validateNarrativeStateClaims(before, after, "His health drained from 24 to 20."),
+    ).toEqual([]);
+    expect(
+      validateNarrativeStateClaims(
+        before,
+        after,
+        "He spent time comparing mana from eighteen to sixteen on the training chart.",
+      ),
+    ).toEqual([]);
+  });
+
+  it("catches common POV transitions without treating denials or remote resources as canon", () => {
+    const before = seedState();
+    const after = structuredClone(before);
+    after.chapter = 1;
+    after.version = 2;
+
+    for (const prose of [
+      "His mana dwindled from eighteen to sixteen.",
+      "His mana went from eighteen to sixteen.",
+      "His mana dropped from eighteen down to sixteen.",
+      "His mana was now sixteen, down from eighteen.",
+    ]) {
+      expect(validateNarrativeStateClaims(before, after, prose)).toEqual([
+        expect.objectContaining({ code: "INVALID_SCHEMA", path: "prose" }),
+      ]);
+    }
+
+    for (const prose of [
+      "His mana did not fall from eighteen to sixteen.",
+      "His mana didn't fall from eighteen to sixteen.",
+      "He kept his mana from falling from eighteen to sixteen.",
+      "His mana refused to fall from eighteen to sixteen.",
+      "His mana remained steady, not falling from eighteen to sixteen.",
+      "His reserve did not fall from eighteen to sixteen mana.",
+      "Rather than let his reserve fall from eighteen to sixteen mana, Rowan held back.",
+      "If his reserve fell from eighteen to sixteen mana, he would stagger.",
+      "Rather than let his mana fall from eighteen to sixteen, Rowan held back.",
+      "Nyra's mana fell from twelve to ten.",
+      "Her mana fell from twelve to ten.",
+      "Nyra's mana remained 12/84.",
+      "Nyra's reserve fell from twelve to ten mana.",
+    ]) {
+      expect(validateNarrativeStateClaims(before, after, prose)).toEqual([]);
+    }
+
+    const elaraBefore = seedState();
+    elaraBefore.lockedPovId = "elara-voss";
+    const elaraAfter = structuredClone(elaraBefore);
+    elaraAfter.chapter = 1;
+    elaraAfter.version = 2;
+    expect(
+      validateNarrativeStateClaims(
+        elaraBefore,
+        elaraAfter,
+        "Her mana fell from ninety-six to ninety-four.",
+      ),
+    ).toEqual([expect.objectContaining({ code: "INVALID_SCHEMA", path: "prose" })]);
+  });
+
+  it("scopes resource owners and denials to the claimed transition", () => {
+    const before = seedState();
+    const after = structuredClone(before);
+    after.chapter = 1;
+    after.version = 2;
+
+    for (const prose of [
+      "He did not hesitate as his mana fell from eighteen to sixteen.",
+      "He could feel his mana fall from eighteen to sixteen.",
+      "Never had his mana fallen from eighteen to sixteen so quickly.",
+      "Rowan left Nyra behind as his mana fell from eighteen to sixteen.",
+      "Rowan watched Nyra as his mana fell from eighteen to sixteen.",
+      "He fought without hesitation as his mana fell from eighteen to sixteen.",
+      "He asked if Nyra was safe as his mana fell from eighteen to sixteen.",
+      "He refused to retreat as his mana fell from eighteen to sixteen.",
+      "He avoided Nyra as his mana fell from eighteen to sixteen.",
+      "Rowan left Varek behind as his mana fell from eighteen to sixteen.",
+      "He could feel his mana settle at sixteen of eighteen.",
+      "His mana was sixteen, down from eighteen.",
+      "His mana stood at sixteen, down from eighteen.",
+      "His mana dropped to sixteen.",
+      "His mana decreased by two to sixteen.",
+      "His mana slipped from eighteen to sixteen.",
+      "His mana declined from eighteen to sixteen.",
+    ]) {
+      expect(validateNarrativeStateClaims(before, after, prose)).toEqual([
+        expect.objectContaining({ code: "INVALID_SCHEMA", path: "prose" }),
+      ]);
+    }
+
+    expect(
+      validateNarrativeStateClaims(
+        before,
+        after,
+        "Nyra warned Rowan as her mana fell from twelve to ten.",
+      ),
+    ).toEqual([]);
+    expect(
+      validateNarrativeStateClaims(
+        before,
+        after,
+        "Varek warned Rowan as his mana fell from twelve to ten.",
+      ),
+    ).toEqual([]);
+    for (const prose of [
+      "His mana almost fell from eighteen to sixteen.",
+      "His mana will fall from eighteen to sixteen.",
+      "He imagined his mana falling from eighteen to sixteen.",
+      "The mana drill changed from 18 to 16 rounds.",
+      "His mana cost changed from 18 to 16 gold.",
+    ]) {
+      expect(validateNarrativeStateClaims(before, after, prose)).toEqual([]);
+    }
+  });
+
   it("rejects Elara's exact arrival beyond the committed destination", () => {
     const before = seedState();
     before.lockedPovId = "elara-voss";

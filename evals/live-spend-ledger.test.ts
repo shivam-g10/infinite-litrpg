@@ -372,6 +372,203 @@ describe("durable live spend ledger", () => {
     recovered.close();
   });
 
+  it("reclaims an exact released settled run only while its report commits", () => {
+    const filename = temporaryLedgerPath();
+    const settledRun = randomUUID();
+    const first = new LiveSpendLedger(filename, 3);
+    first.acquireRun(settledRun);
+    first.synchronizeBaseline(settledRun, RECOVERY_BASELINE);
+    const hooks = first.createCostHooks(settledRun);
+    hooks.reserve(reservation("known-before-report-failure", 0.1));
+    hooks.settle({ actualCostUsd: 0.04, id: "known-before-report-failure" });
+    first.releaseRun(settledRun);
+    first.close();
+
+    const reconciler = new LiveSpendLedger(filename, 3);
+    expect(
+      reconciler.claimSettledRunForReport(settledRun, {
+        baseline: RECOVERY_BASELINE,
+        knownReservations: [expectedKnownReservation("known-before-report-failure", 0.1, 0.04)],
+      }),
+    ).toMatchObject({
+      activeReservationCount: 0,
+      baselineAttemptCostUsd: 0.2,
+      knownReservationCostUsd: 0.04,
+      totalExposureUsd: 2.74,
+    });
+    expect(() => reconciler.acquireRun(randomUUID())).toThrow("locked by run");
+    reconciler.releaseRun(settledRun);
+    reconciler.close();
+  });
+
+  it("finishes an authenticated settled report after a crash and stays idempotent", () => {
+    const filename = temporaryLedgerPath();
+    const settledRun = randomUUID();
+    const expectation = {
+      baseline: RECOVERY_BASELINE,
+      knownReservations: [expectedKnownReservation("known-before-crash", 0.1, 0.04)],
+    };
+    const first = new LiveSpendLedger(filename, 3);
+    first.acquireRun(settledRun);
+    first.synchronizeBaseline(settledRun, RECOVERY_BASELINE);
+    const hooks = first.createCostHooks(settledRun);
+    hooks.reserve(reservation("known-before-crash", 0.1));
+    hooks.settle({ actualCostUsd: 0.04, id: "known-before-crash" });
+    first.releaseRun(settledRun);
+    first.claimSettledRunForReport(settledRun, expectation);
+    first.close();
+    markOwnerProcessDead(filename);
+
+    const retry = new LiveSpendLedger(filename, 3);
+    expect(retry.claimSettledRunForReport(settledRun, expectation)).toMatchObject({
+      activeReservationCount: 0,
+      knownReservationCostUsd: 0.04,
+      totalExposureUsd: 2.74,
+    });
+    expect(retry.completeSettledRunAfterReport(settledRun, expectation)).toMatchObject({
+      activeReservationCount: 0,
+      knownReservationCostUsd: 0.04,
+      totalExposureUsd: 2.74,
+    });
+    expect(retry.completeSettledRunAfterReport(settledRun, expectation)).toMatchObject({
+      totalExposureUsd: 2.74,
+    });
+    const proofRun = randomUUID();
+    retry.acquireRun(proofRun);
+    retry.releaseRun(proofRun);
+    retry.close();
+  });
+
+  it("does not reclaim a live or mismatched settled-report lock", () => {
+    const filename = temporaryLedgerPath();
+    const settledRun = randomUUID();
+    const exact = {
+      baseline: RECOVERY_BASELINE,
+      knownReservations: [expectedKnownReservation("known-for-report-lock", 0.1, 0.04)],
+    } as const;
+    const first = new LiveSpendLedger(filename, 3);
+    first.acquireRun(settledRun);
+    first.synchronizeBaseline(settledRun, RECOVERY_BASELINE);
+    const hooks = first.createCostHooks(settledRun);
+    hooks.reserve(reservation("known-for-report-lock", 0.1));
+    hooks.settle({ actualCostUsd: 0.04, id: "known-for-report-lock" });
+    first.releaseRun(settledRun);
+    first.claimSettledRunForReport(settledRun, exact);
+    expect(() => first.claimSettledRunForReport(settledRun, exact)).toThrow("running owner");
+    first.close();
+    markOwnerProcessDead(filename);
+
+    const retry = new LiveSpendLedger(filename, 3);
+    expect(() =>
+      retry.claimSettledRunForReport(settledRun, {
+        ...exact,
+        knownReservations: [expectedKnownReservation("known-for-report-lock", 0.1, 0.03)],
+      }),
+    ).toThrow("do not exactly match");
+    expect(() => retry.acquireRun(randomUUID())).toThrow(`locked by run ${settledRun}`);
+    retry.claimSettledRunForReport(settledRun, exact);
+    retry.completeSettledRunAfterReport(settledRun, exact);
+    retry.close();
+  });
+
+  it("releases a dead run only after its committed report snapshot matches exactly", () => {
+    const filename = temporaryLedgerPath();
+    const runId = randomUUID();
+    const first = new LiveSpendLedger(filename, 3);
+    first.acquireRun(runId);
+    first.synchronizeBaseline(runId, RECOVERY_BASELINE);
+    const hooks = first.createCostHooks(runId);
+    hooks.reserve(reservation("known-in-committed-report", 0.1));
+    hooks.settle({ actualCostUsd: 0.04, id: "known-in-committed-report" });
+    hooks.reserve(reservation("uncertain-in-committed-report", 0.05));
+    hooks.markUncertain("uncertain-in-committed-report");
+    const committedSnapshot = first.snapshot();
+    expect(() => first.completeRunAfterCommittedReport(runId, committedSnapshot, 1, 1)).toThrow(
+      "running owner",
+    );
+    first.close();
+    markOwnerProcessDead(filename);
+
+    const recovered = new LiveSpendLedger(filename, 3);
+    expect(recovered.completeRunAfterCommittedReport(runId, committedSnapshot, 1, 1)).toStrictEqual(
+      committedSnapshot,
+    );
+    expect(recovered.completeRunAfterCommittedReport(runId, committedSnapshot, 1, 1)).toStrictEqual(
+      committedSnapshot,
+    );
+    const proofRun = randomUUID();
+    recovered.acquireRun(proofRun);
+    recovered.releaseRun(proofRun);
+    recovered.close();
+  });
+
+  it("keeps a dead committed-report lock on snapshot or reservation-owner mismatch", () => {
+    const filename = temporaryLedgerPath();
+    const runId = randomUUID();
+    const first = new LiveSpendLedger(filename, 3);
+    first.acquireRun(runId);
+    first.synchronizeBaseline(runId, RECOVERY_BASELINE);
+    const hooks = first.createCostHooks(runId);
+    hooks.reserve(reservation("known-before-committed-report-check", 0.1));
+    hooks.settle({ actualCostUsd: 0.04, id: "known-before-committed-report-check" });
+    const committedSnapshot = first.snapshot();
+    first.close();
+    markOwnerProcessDead(filename);
+
+    const recovered = new LiveSpendLedger(filename, 3);
+    expect(() =>
+      recovered.completeRunAfterCommittedReport(
+        runId,
+        {
+          ...committedSnapshot,
+          knownReservationCostUsd: 0.03,
+        },
+        1,
+        0,
+      ),
+    ).toThrow("snapshot does not exactly match");
+    expect(() => recovered.completeRunAfterCommittedReport(runId, committedSnapshot, 0, 0)).toThrow(
+      "known reservation count",
+    );
+    expect(() => recovered.completeRunAfterCommittedReport(runId, committedSnapshot, 1, 1)).toThrow(
+      "uncertain reservation count",
+    );
+    recovered.close();
+    setReservationOwner(filename, "known-before-committed-report-check", randomUUID());
+
+    const wrongOwner = new LiveSpendLedger(filename, 3);
+    expect(() =>
+      wrongOwner.completeRunAfterCommittedReport(runId, committedSnapshot, 1, 0),
+    ).toThrow("another run");
+    expect(() => wrongOwner.acquireRun(randomUUID())).toThrow(`locked by run ${runId}`);
+    wrongOwner.close();
+  });
+
+  it("rejects mismatched settled evidence without taking the ledger lock", () => {
+    const filename = temporaryLedgerPath();
+    const settledRun = randomUUID();
+    const first = new LiveSpendLedger(filename, 3);
+    first.acquireRun(settledRun);
+    first.synchronizeBaseline(settledRun, RECOVERY_BASELINE);
+    const hooks = first.createCostHooks(settledRun);
+    hooks.reserve(reservation("known-settled-mismatch", 0.1));
+    hooks.settle({ actualCostUsd: 0.04, id: "known-settled-mismatch" });
+    first.releaseRun(settledRun);
+    first.close();
+
+    const reconciler = new LiveSpendLedger(filename, 3);
+    expect(() =>
+      reconciler.claimSettledRunForReport(settledRun, {
+        baseline: RECOVERY_BASELINE,
+        knownReservations: [expectedKnownReservation("known-settled-mismatch", 0.1, 0.03)],
+      }),
+    ).toThrow("do not exactly match");
+    const proofRun = randomUUID();
+    reconciler.acquireRun(proofRun);
+    reconciler.releaseRun(proofRun);
+    reconciler.close();
+  });
+
   it("rejects recovered totals that omit or invent settled spend", () => {
     const filename = temporaryLedgerPath();
     const staleRun = randomUUID();

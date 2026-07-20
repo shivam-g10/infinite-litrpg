@@ -359,6 +359,10 @@ export function validateNarrativeStateClaims(
   const beforePov = beforeState.characters.find(({ id }) => id === povId);
   const afterPov = prospectiveState.characters.find(({ id }) => id === povId);
   if (!beforePov || !afterPov) return [];
+  const resourceContext = {
+    characters: prospectiveState.characters.map(({ id, name }) => ({ id, name })),
+    povId,
+  };
 
   const issues: ValidationIssue[] = [];
   for (const resource of ["health", "mana"] as const) {
@@ -366,11 +370,30 @@ export function validateNarrativeStateClaims(
       `${beforePov[resource].current}/${beforePov[resource].maximum}`,
       `${afterPov[resource].current}/${afterPov[resource].maximum}`,
     ]);
-    for (const [current, maximum] of resourceSnapshotsInText(prose, resource)) {
+    for (const [current, maximum] of resourceSnapshotsInText(prose, resource, resourceContext)) {
       if (allowed.has(`${current}/${maximum}`)) continue;
       issues.push({
         code: "INVALID_SCHEMA",
         message: `Narration gives ${resource} as ${current}/${maximum}, but canon permits ${[...allowed].join(" or ")}`,
+        path: "prose",
+      });
+      break;
+    }
+    const canonicalTransition = `${beforePov[resource].current}->${afterPov[resource].current}`;
+    for (const [from, to] of resourceTransitionsInText(prose, resource, resourceContext)) {
+      if (`${from}->${to}` === canonicalTransition) continue;
+      issues.push({
+        code: "INVALID_SCHEMA",
+        message: `Narration gives ${resource} transition ${from} to ${to}, but canon permits ${beforePov[resource].current} to ${afterPov[resource].current}`,
+        path: "prose",
+      });
+      break;
+    }
+    for (const to of resourceTransitionTargetsInText(prose, resource, resourceContext)) {
+      if (to === afterPov[resource].current) continue;
+      issues.push({
+        code: "INVALID_SCHEMA",
+        message: `Narration gives ${resource} transition target ${to}, but canon permits ${afterPov[resource].current}`,
         path: "prose",
       });
       break;
@@ -511,10 +534,13 @@ const NUMBER_VALUES = new Map<string, number>([
 ]);
 const NUMBER_TOKEN = `(?:\\d{1,4}|${[...NUMBER_VALUES.keys()].join("|")}|hundred|thousand|and)`;
 const NUMBER_PHRASE = `${NUMBER_TOKEN}(?:[-\\s]+${NUMBER_TOKEN}){0,5}`;
+const RESOURCE_TRANSITION_VERB =
+  "(?:change(?:d|s|ing)?|declin(?:e|ed|es|ing)|decreas(?:e|ed|es|ing)|drain(?:ed|ing|s)?|drop(?:ped|s|ping)?|dwindl(?:e|ed|es|ing)|fall(?:en|ing|s)?|fell|go|goes|going|lessen(?:ed|ing|s)?|reduc(?:e|ed|es|ing)|sink(?:ing|s)?|sank|slip(?:ped|s|ping)?|spen(?:d|ds|ding|t)|went)";
 
 function resourceSnapshotsInText(
   prose: string,
   resource: "health" | "mana",
+  context: NarrativeResourceContext,
 ): readonly (readonly [number, number])[] {
   const results: Array<readonly [number, number]> = [];
   const patterns = [
@@ -529,12 +555,224 @@ function resourceSnapshotsInText(
   ];
   for (const pattern of patterns) {
     for (const match of prose.matchAll(pattern)) {
+      if (!resourceClaimBelongsToPov(prose, match, context, resource)) continue;
       const current = parseNarrativeInteger(match[1]);
       const maximum = parseNarrativeInteger(match[2]);
       if (current !== null && maximum !== null) results.push([current, maximum]);
     }
   }
   return results;
+}
+
+function resourceTransitionsInText(
+  prose: string,
+  resource: "health" | "mana",
+  context: NarrativeResourceContext,
+): readonly (readonly [number, number])[] {
+  const results: Array<readonly [number, number]> = [];
+  const fromTo = `\\bfrom\\s+(${NUMBER_PHRASE})\\s+(?:down\\s+|up\\s+)?to\\s+(${NUMBER_PHRASE})\\b`;
+  const patterns: readonly { readonly pattern: RegExp; readonly reversed?: boolean }[] = [
+    {
+      pattern: new RegExp(
+        `\\b${resource}\\b[^.!?\\n]{0,96}?\\b(?:${resource}\\s+)?(?:reserve|pool)\\b[^.!?\\n]{0,48}?\\b${RESOURCE_TRANSITION_VERB}\\b[^.!?\\n]{0,24}?${fromTo}`,
+        "giu",
+      ),
+    },
+    {
+      pattern: new RegExp(
+        `\\b${resource}\\b[^.!?\\n]{0,48}?\\b${RESOURCE_TRANSITION_VERB}\\b[^.!?\\n]{0,24}?${fromTo}`,
+        "giu",
+      ),
+    },
+    {
+      pattern: new RegExp(
+        `\\b(?:reserve|pool)\\b[^.!?\\n]{0,48}?\\b${RESOURCE_TRANSITION_VERB}\\b[^.!?\\n]{0,24}?${fromTo}[^.!?\\n]{0,24}?\\b${resource}\\b`,
+        "giu",
+      ),
+    },
+    {
+      pattern: new RegExp(
+        `\\b${RESOURCE_TRANSITION_VERB}\\b\\s+(?:(?:his|her|their|some)\\s+)?${resource}\\b[^.!?\\n]{0,24}?${fromTo}`,
+        "giu",
+      ),
+    },
+    {
+      pattern: new RegExp(
+        `\\b${resource}\\b[^.!?\\n]{0,32}?\\b(?:is|rested|sat|stood|was)\\s+(?:now\\s+)?(?:at\\s+)?(${NUMBER_PHRASE})\\b[^.!?\\n]{0,16}?\\bdown\\s+from\\s+(${NUMBER_PHRASE})\\b`,
+        "giu",
+      ),
+      reversed: true,
+    },
+  ];
+  for (const { pattern, reversed = false } of patterns) {
+    for (const match of prose.matchAll(pattern)) {
+      if (!resourceClaimBelongsToPov(prose, match, context, resource)) continue;
+      const first = parseNarrativeInteger(match[1]);
+      const second = parseNarrativeInteger(match[2]);
+      const from = reversed ? second : first;
+      const to = reversed ? first : second;
+      if (from !== null && to !== null) results.push([from, to]);
+    }
+  }
+  return results;
+}
+
+function resourceTransitionTargetsInText(
+  prose: string,
+  resource: "health" | "mana",
+  context: NarrativeResourceContext,
+): readonly number[] {
+  const results: number[] = [];
+  const targetVerb =
+    "(?:declin(?:e|ed|es|ing)|decreas(?:e|ed|es|ing)|drain(?:ed|ing|s)?|drop(?:ped|s|ping)?|dwindl(?:e|ed|es|ing)|fall(?:en|ing|s)?|fell|lessen(?:ed|ing|s)?|reduc(?:e|ed|es|ing)|sink(?:ing|s)?|sank|slip(?:ped|s|ping)?)";
+  const pattern = new RegExp(
+    `\\b${resource}\\b[^.!?\\n]{0,24}?\\b${targetVerb}\\b(?:\\s+by\\s+${NUMBER_PHRASE})?\\s+to\\s+(${NUMBER_PHRASE})\\b`,
+    "giu",
+  );
+  for (const match of prose.matchAll(pattern)) {
+    if (!resourceClaimBelongsToPov(prose, match, context, resource)) continue;
+    const target = parseNarrativeInteger(match[1]);
+    if (target !== null) results.push(target);
+  }
+  return results;
+}
+
+interface NarrativeResourceContext {
+  readonly characters: readonly { readonly id: string; readonly name: string }[];
+  readonly povId: string;
+}
+
+function resourceClaimBelongsToPov(
+  prose: string,
+  match: RegExpMatchArray,
+  context: NarrativeResourceContext,
+  resource: "health" | "mana",
+): boolean {
+  const matchIndex = match.index ?? 0;
+  const normalizedMatch = match[0].toLocaleLowerCase("en-US");
+  const anchorMatch = new RegExp(`\\b(?:${resource}|pool|reserve)\\b`, "u").exec(normalizedMatch);
+  if (anchorMatch?.index === undefined) return true;
+  const claimAnchor = anchorMatch[0]!;
+  const resourceIndex = matchIndex + anchorMatch.index;
+  const sentenceStart = Math.max(
+    prose.lastIndexOf(".", resourceIndex - 1),
+    prose.lastIndexOf("!", resourceIndex - 1),
+    prose.lastIndexOf("?", resourceIndex - 1),
+    prose.lastIndexOf("\n", resourceIndex - 1),
+  );
+  const sentencePrefix = prose.slice(sentenceStart + 1, resourceIndex).toLowerCase();
+  const resourceTail = prose.slice(resourceIndex, matchIndex + match[0].length).toLowerCase();
+  if (new RegExp(`^${escapeRegExp(claimAnchor)}\\s+(?:cost|drill)\\b`, "iu").test(resourceTail)) {
+    return false;
+  }
+  if (resourceClaimIsDeniedOrHypothetical(sentencePrefix, resourceTail, claimAnchor)) return false;
+
+  const ownerCandidates: Array<
+    | { readonly characterId: string; readonly index: number; readonly kind: "character" }
+    | { readonly index: number; readonly kind: "pronoun"; readonly pronoun: string }
+  > = [];
+  for (const character of context.characters) {
+    const variants = [character.name, character.name.split(/\s+/u)[0]!];
+    for (const variant of variants) {
+      const expression = new RegExp(`\\b${escapeRegExp(variant)}[\u2019']s\\b`, "giu");
+      for (const ownerMatch of sentencePrefix.matchAll(expression)) {
+        ownerCandidates.push({
+          characterId: character.id,
+          index: ownerMatch.index,
+          kind: "character",
+        });
+      }
+    }
+  }
+  for (const possessive of sentencePrefix.matchAll(/\b(his|her|their)\b/giu)) {
+    ownerCandidates.push({
+      index: possessive.index,
+      kind: "pronoun",
+      pronoun: possessive[1]!.toLowerCase(),
+    });
+  }
+  const owner = ownerCandidates.sort((left, right) => right.index - left.index)[0];
+  if (owner?.kind === "character") return owner.characterId === context.povId;
+  if (owner?.kind === "pronoun") {
+    if (owner.pronoun === "their") return false;
+    const femaleIds = new Set(["elara-voss", "nyra-vale"]);
+    const expectsFemale = owner.pronoun === "her";
+    const leadingPronoun = sentencePrefix
+      .trimStart()
+      .match(/^(he|she)\b/iu)?.[1]
+      ?.toLowerCase();
+    if (leadingPronoun !== undefined) {
+      return (
+        (leadingPronoun === "she") === expectsFemale &&
+        femaleIds.has(context.povId) === expectsFemale
+      );
+    }
+    let firstCompatibleName: { readonly characterId: string; readonly index: number } | null = null;
+    for (const character of context.characters) {
+      if (femaleIds.has(character.id) !== expectsFemale) continue;
+      for (const variant of [character.name, character.name.split(/\s+/u)[0]!]) {
+        const expression = new RegExp(`\\b${escapeRegExp(variant)}\\b`, "giu");
+        for (const nameMatch of sentencePrefix.matchAll(expression)) {
+          if (
+            nameMatch.index < owner.index &&
+            (firstCompatibleName === null || nameMatch.index < firstCompatibleName.index)
+          ) {
+            firstCompatibleName = { characterId: character.id, index: nameMatch.index };
+          }
+        }
+      }
+    }
+    if (firstCompatibleName !== null) {
+      return firstCompatibleName.characterId === context.povId;
+    }
+    return femaleIds.has(context.povId) === expectsFemale;
+  }
+
+  let firstNamedCharacter: { readonly characterId: string; readonly index: number } | null = null;
+  for (const character of context.characters) {
+    for (const variant of [character.name, character.name.split(/\s+/u)[0]!]) {
+      const expression = new RegExp(`\\b${escapeRegExp(variant)}\\b`, "giu");
+      for (const nameMatch of sentencePrefix.matchAll(expression)) {
+        if (firstNamedCharacter === null || nameMatch.index < firstNamedCharacter.index) {
+          firstNamedCharacter = { characterId: character.id, index: nameMatch.index };
+        }
+      }
+    }
+  }
+  return firstNamedCharacter === null || firstNamedCharacter.characterId === context.povId;
+}
+
+function resourceClaimIsDeniedOrHypothetical(
+  sentencePrefix: string,
+  resourceTail: string,
+  claimAnchor: string,
+): boolean {
+  const escapedResource = escapeRegExp(claimAnchor);
+  const denialAfterResource = new RegExp(
+    `^${escapedResource}\\b[^.!?\\n]{0,40}?\\b(?:did|do|does|had|has|have|is|was|were)(?:\\s+not|n['\u2019]t)\\b|^${escapedResource}\\b[^.!?\\n]{0,24}?\\bnever\\b`,
+    "iu",
+  );
+  const modalAfterResource = new RegExp(
+    `^${escapedResource}\\b[^.!?\\n]{0,32}?\\b(?:almost|can|could|may|might|nearly|shall|should|will|would)\\b`,
+    "iu",
+  );
+  const preventionAfterResource = new RegExp(
+    `^${escapedResource}\\b(?:\\s+(?:pool|reserve))?\\s+(?:from\\s+${RESOURCE_TRANSITION_VERB}\\b|refus(?:e|ed|es|ing)\\s+to\\s+${RESOURCE_TRANSITION_VERB}\\b)|^${escapedResource}\\b[^.!?\\n]{0,40}?\\bnot\\s+${RESOURCE_TRANSITION_VERB}\\b`,
+    "iu",
+  );
+  if (
+    denialAfterResource.test(resourceTail) ||
+    modalAfterResource.test(resourceTail) ||
+    preventionAfterResource.test(resourceTail)
+  ) {
+    return true;
+  }
+
+  const owner = `(?:(?:his|her|their|some|\\p{L}+[\u2019']s)\\s+)?`;
+  return new RegExp(
+    `(?:\\b(?:if|unless)\\s+${owner}|\\b(?:instead\\s+of|rather\\s+than|without)\\s+(?:allow(?:ing)?|drain(?:ing)?|let(?:ting)?|spend(?:ing)?)\\s+${owner}|\\brefus(?:e|ed|es|ing)\\s+to\\s+(?:allow|drain|let|spend)\\s+${owner}|\\bavoid(?:ed|s|ing)?\\s+(?:allowing|draining|letting|spending)\\s+${owner}|\\bimagin(?:e|ed|es|ing)\\s+${owner})$`,
+    "iu",
+  ).test(sentencePrefix);
 }
 
 function parseNarrativeInteger(value: string | undefined): number | null {

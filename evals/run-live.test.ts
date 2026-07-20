@@ -32,8 +32,10 @@ import {
   Version6LiveReportSchema,
   Version7LiveReportSchema,
   Version8LiveReportSchema,
+  assertCommittedReportMatchesSidecar,
   assertRegisteredResumeCheckpoint,
   assertResumeHarnessPaths,
+  createLiveRunFinalizationState,
   hasExactFullMatrix,
   isAppendOnlyEvidence,
   parseLiveReport,
@@ -201,6 +203,97 @@ describe("live report version 9", () => {
         ),
       ).toThrow("mixed service-tier attempts");
       expect(readdirSync(directory).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
+  it("authenticates an already committed report against its exact sidecar", () => {
+    const directory = mkdtempSync(join(tmpdir(), "infinite-litrpg-committed-report-"));
+    const filename = join(directory, "narrative-candidates.json");
+    const runId = "00000000-0000-4000-8000-000000000091";
+    try {
+      const report = fakeSmokeReport();
+      writeNarrativeEvidenceSidecar(
+        filename,
+        report.attempts,
+        report.narrativeCandidates,
+        report.narrativeResponses,
+        report.runtimeEvidenceStartAttemptIndex,
+        report.runtimeAttemptEvidence,
+        report.serviceTier,
+        report.pricingVersion,
+        report.sourceGitSha,
+        runId,
+        report.supersededTurnIds,
+      );
+      const evidence = readNarrativeEvidenceSidecar(
+        filename,
+        runId,
+        report.sourceGitSha,
+        report.serviceTier,
+        report.pricingVersion,
+      );
+
+      expect(assertCommittedReportMatchesSidecar(report, evidence, runId)).toEqual({
+        knownReservationCount: report.attempts.length,
+        uncertainReservationCount: 0,
+      });
+      expect(() =>
+        assertCommittedReportMatchesSidecar(report, { ...evidence, candidates: [] }, runId),
+      ).toThrow("does not exactly match");
+      expect(() =>
+        assertCommittedReportMatchesSidecar(
+          report,
+          evidence,
+          "00000000-0000-4000-8000-000000000092",
+        ),
+      ).toThrow("metadata does not match");
+
+      const uncertainAttempts = report.attempts.map((attempt) => ({
+        ...attempt,
+        serviceTier: null,
+      }));
+      const uncertainRuntimeEvidence = report.runtimeAttemptEvidence.map(({ attempt, turn }) => ({
+        attempt: { ...attempt, serviceTier: null },
+        turn,
+      }));
+      const uncertainReport = {
+        ...report,
+        attempts: uncertainAttempts,
+        runtimeAttemptEvidence: uncertainRuntimeEvidence,
+      } as LiveReport;
+      const uncertainEvidence = {
+        ...evidence,
+        attempts: uncertainAttempts,
+        runtimeAttemptEvidence: uncertainRuntimeEvidence,
+      };
+      expect(
+        assertCommittedReportMatchesSidecar(uncertainReport, uncertainEvidence, runId),
+      ).toEqual({
+        knownReservationCount: 0,
+        uncertainReservationCount: report.attempts.length,
+      });
+      writeAtomicJson(filename, uncertainEvidence);
+      expect(() =>
+        readNarrativeEvidenceSidecar(
+          filename,
+          runId,
+          report.sourceGitSha,
+          report.serviceTier,
+          report.pricingVersion,
+        ),
+      ).toThrow("mixed service-tier attempts");
+      expect(
+        readNarrativeEvidenceSidecar(
+          filename,
+          runId,
+          report.sourceGitSha,
+          report.serviceTier,
+          report.pricingVersion,
+          true,
+        ).attempts,
+      ).toHaveLength(report.attempts.length);
     } finally {
       rmSync(directory, { force: true, recursive: true });
     }
@@ -830,6 +923,39 @@ describe("live report version 9", () => {
     expect(prepared.existingAttemptCostUsd).toBeCloseTo(report.totalCostUsd, 10);
   });
 
+  it("marks discarded source turns superseded without deleting paid evidence", () => {
+    const results = [fakeResult("rowan-ashborn", 1, 0.01), fakeResult("rowan-ashborn", 2, 0.01)];
+    const narrativeCandidates = results.map((result) => fakeNarrativeCandidate(result));
+    const report = fakeReport(results, {
+      attempts: results.flatMap(({ trace }) => trace.attempts),
+      gates: {
+        ...(emptyReportData().gates as LiveReport["gates"]),
+        serviceTierEvidenceComplete: true,
+      },
+      narrativeCandidates,
+      narrativeResponses: fakeNarrativeResponses(narrativeCandidates),
+      runtimeAttemptEvidence: fakeRuntimeAttemptEvidence(results),
+    });
+
+    const prepared = prepareResume(report, REQUIREMENTS, [{ chapter: 2, povId: "rowan-ashborn" }]);
+
+    expect(prepared.attempts).toHaveLength(report.attempts.length);
+    expect(prepared.narrativeCandidates).toHaveLength(report.narrativeCandidates.length);
+    expect(prepared.narrativeResponses).toHaveLength(report.narrativeResponses.length);
+    expect(prepared.runtimeAttemptEvidence).toHaveLength(report.runtimeAttemptEvidence.length);
+    expect(prepared.supersededTurnIds).toEqual([results[1]!.trace.runId]);
+  });
+
+  it("holds the ledger lock until the final report commits", () => {
+    const normalRun = createLiveRunFinalizationState();
+    const recoveryRun = createLiveRunFinalizationState();
+
+    expect(normalRun.reportCommitted).toBe(false);
+    expect(recoveryRun.reportCommitted).toBe(false);
+    normalRun.reportCommitted = true;
+    expect(normalRun.reportCommitted).toBe(true);
+  });
+
   it("rejects duplicate or incomplete explicit chapter suffix reruns", () => {
     const complete = fakeReport([
       fakeResult("rowan-ashborn", 1, 0.01),
@@ -846,6 +972,30 @@ describe("live report version 9", () => {
         { chapter: 2, povId: "rowan-ashborn" },
       ]),
     ).toThrow("complete chapter pair");
+  });
+
+  it("cannot clear a settled failure without its exact recorded rerun targets", () => {
+    const report = fakeReport([
+      fakeResult("rowan-ashborn", 1, 0.01),
+      fakeResult("rowan-ashborn", 2, 0.01),
+    ]);
+    report.settledFailure = {
+      checkpointId: "settled-test-1",
+      rerunFrom: [{ chapter: 2, povId: "rowan-ashborn" }],
+      runId: fakeUuid(910),
+      sidecarSha256: "a".repeat(64),
+      turnIds: [fakeUuid(911)],
+    };
+
+    expect(() => prepareResume(report, REQUIREMENTS)).toThrow(
+      "requires its exact recorded rerun targets",
+    );
+    expect(() =>
+      prepareResume(report, REQUIREMENTS, [{ chapter: 1, povId: "rowan-ashborn" }]),
+    ).toThrow("requires its exact recorded rerun targets");
+    expect(
+      prepareResume(report, REQUIREMENTS, [{ chapter: 2, povId: "rowan-ashborn" }]).retainedResults,
+    ).toHaveLength(1);
   });
 
   it("parses repeated explicit chapter suffix rerun flags strictly", () => {
@@ -1314,6 +1464,173 @@ describe("live report version 9", () => {
       LiveReportSchema.safeParse({
         ...candidate,
         budgetLedger: { ...candidate.budgetLedger, sourceReportSha256: "e".repeat(64) },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("keeps superseded rerun turns as authenticated historical evidence", () => {
+    const report = fakeSmokeReport();
+    const currentCandidate = report.narrativeCandidates[0]!;
+    const historicalTurn = {
+      ...currentCandidate.turn,
+      requestId: fakeUuid(901),
+      turnId: fakeUuid(902),
+    };
+    const historicalNarratorResponseId = "resp_historical_narration";
+    const historicalAuditResponseId = "resp_historical_audit";
+    const historicalCandidate = NarrativeCandidateEvidenceSchema.parse({
+      ...currentCandidate,
+      auditAttempts: currentCandidate.auditAttempts.map((attempt) => ({
+        ...attempt,
+        responseId: historicalAuditResponseId,
+      })),
+      auditResponseId: historicalAuditResponseId,
+      narratorResponseId: historicalNarratorResponseId,
+      turn: historicalTurn,
+    });
+    const historicalAttempts = report.attempts.map((attempt) => ({
+      ...attempt,
+      responseId:
+        attempt.phase === "audit" ? historicalAuditResponseId : historicalNarratorResponseId,
+    }));
+    const historicalResponses = fakeNarrativeResponses([historicalCandidate]);
+    const sourceReportSha256 = "f".repeat(64);
+    const candidate = {
+      ...report,
+      attempts: [...historicalAttempts, ...report.attempts],
+      budgetLedger: { ...report.budgetLedger, sourceReportSha256 },
+      narrativeCandidates: [historicalCandidate, currentCandidate],
+      narrativeResponses: [...historicalResponses, ...report.narrativeResponses],
+      resume: {
+        bridgeFiles: [],
+        changedPaths: [],
+        discardedResultCount: 1,
+        existingAttemptCostUsd: 0,
+        rerunFrom: [],
+        retainedPovIds: [],
+        retainedResults: [],
+        sourceChapterCostCapUsd: report.chapterCostCapUsd,
+        sourceEvidenceBoundary: {
+          attemptCount: historicalAttempts.length,
+          narrativeCandidateCount: 1,
+          narrativeResponseCount: historicalResponses.length,
+          runtimeAttemptEvidenceCount: historicalAttempts.length,
+        },
+        sourceGitSha: report.sourceGitSha,
+        sourceReportPath: "evals/reports/source.json",
+        sourceReportSha256,
+        sourceReportVersion: 9 as const,
+      },
+      runtimeAttemptEvidence: [
+        ...historicalAttempts.map((attempt) => ({ attempt, turn: historicalTurn })),
+        ...report.runtimeAttemptEvidence,
+      ],
+      supersededTurnIds: [historicalTurn.turnId],
+    };
+
+    expect(LiveReportSchema.safeParse(candidate).success).toBe(true);
+    expect(LiveReportSchema.safeParse({ ...candidate, supersededTurnIds: [] }).success).toBe(false);
+    expect(
+      LiveReportSchema.safeParse({
+        ...candidate,
+        supersededTurnIds: [currentCandidate.turn.turnId],
+      }).success,
+    ).toBe(false);
+    expect(
+      LiveReportSchema.safeParse({ ...candidate, supersededTurnIds: [fakeUuid(999)] }).success,
+    ).toBe(false);
+    const forgedCurrentTurn = {
+      ...currentCandidate.turn,
+      requestId: fakeUuid(903),
+      turnId: fakeUuid(904),
+    };
+    const forgedCurrentCandidate = {
+      ...historicalCandidate,
+      turn: forgedCurrentTurn,
+    };
+    const forgedCurrentAttempts = historicalAttempts.map((attempt, index) => ({
+      ...attempt,
+      responseId: `resp_forged_current_${index}`,
+    }));
+    const forged = LiveReportSchema.safeParse({
+      ...candidate,
+      attempts: [...candidate.attempts, ...forgedCurrentAttempts],
+      narrativeCandidates: [...candidate.narrativeCandidates, forgedCurrentCandidate],
+      narrativeResponses: [
+        ...candidate.narrativeResponses,
+        ...fakeNarrativeResponses([forgedCurrentCandidate]),
+      ],
+      runtimeAttemptEvidence: [
+        ...candidate.runtimeAttemptEvidence,
+        ...forgedCurrentAttempts.map((attempt) => ({ attempt, turn: forgedCurrentTurn })),
+      ],
+      supersededTurnIds: [historicalTurn.turnId, forgedCurrentTurn.turnId],
+    });
+    expect(forged.success).toBe(false);
+    if (!forged.success) {
+      expect(forged.error.issues.map(({ message }) => message)).toContain(
+        "Superseded narrative turn is outside authenticated source evidence",
+      );
+    }
+
+    const settledNarratorResponseId = "resp_settled_narration";
+    const settledAuditResponseId = "resp_settled_audit";
+    const settledCandidate = NarrativeCandidateEvidenceSchema.parse({
+      ...currentCandidate,
+      auditAttempts: currentCandidate.auditAttempts.map((attempt) => ({
+        ...attempt,
+        responseId: settledAuditResponseId,
+      })),
+      auditResponseId: settledAuditResponseId,
+      narratorResponseId: settledNarratorResponseId,
+      turn: forgedCurrentTurn,
+    });
+    const settledAttempts = report.attempts.map((attempt) => ({
+      ...attempt,
+      responseId: attempt.phase === "audit" ? settledAuditResponseId : settledNarratorResponseId,
+    }));
+    const settledReport = {
+      ...candidate,
+      attempts: [...candidate.attempts, ...settledAttempts],
+      error: { code: "LIVE_EVAL_FAILED", message: "settled failure" },
+      gates: { ...candidate.gates, allCommitsCompleted: false },
+      narrativeCandidates: [...candidate.narrativeCandidates, settledCandidate],
+      narrativeResponses: [
+        ...candidate.narrativeResponses,
+        ...fakeNarrativeResponses([settledCandidate]),
+      ],
+      resume: {
+        ...candidate.resume,
+        sourceEvidenceBoundary: {
+          attemptCount: candidate.attempts.length,
+          narrativeCandidateCount: candidate.narrativeCandidates.length,
+          narrativeResponseCount: candidate.narrativeResponses.length,
+          runtimeAttemptEvidenceCount: candidate.runtimeAttemptEvidence.length,
+        },
+      },
+      runtimeAttemptEvidence: [
+        ...candidate.runtimeAttemptEvidence,
+        ...settledAttempts.map((attempt) => ({ attempt, turn: forgedCurrentTurn })),
+      ],
+      settledFailure: {
+        checkpointId: "settled-test-1",
+        rerunFrom: [{ chapter: 1 as const, povId: "rowan-ashborn" as const }],
+        runId: fakeUuid(905),
+        sidecarSha256: "a".repeat(64),
+        turnIds: [forgedCurrentTurn.turnId],
+      },
+    };
+    expect(LiveReportSchema.safeParse(settledReport).success).toBe(true);
+    expect(
+      LiveReportSchema.safeParse({
+        ...settledReport,
+        settledFailure: {
+          ...settledReport.settledFailure,
+          rerunFrom: [
+            settledReport.settledFailure.rerunFrom[0],
+            settledReport.settledFailure.rerunFrom[0],
+          ],
+        },
       }).success,
     ).toBe(false);
   });

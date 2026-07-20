@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -881,6 +881,7 @@ const NarrativeEvidenceSidecarSchema = z
     runtimeAttemptEvidence: z.array(CurrentRuntimeAttemptEvidenceSchema).max(1_000),
     serviceTier: RuntimeServiceTierSchema,
     sourceGitSha: GitShaSchema,
+    supersededTurnIds: z.array(z.string().uuid()).max(100).default([]),
     updatedAt: z.string().datetime(),
   })
   .strict();
@@ -908,9 +909,37 @@ export const Version8LiveReportSchema = BaseLiveReportSchema.extend({
   version: z.literal(VERSION_8_REPORT_VERSION),
 }).superRefine(refineDurableReport);
 
+const SourceEvidenceBoundarySchema = z
+  .object({
+    attemptCount: z.number().int().min(0).max(1_000),
+    narrativeCandidateCount: z.number().int().min(0).max(100),
+    narrativeResponseCount: z.number().int().min(0).max(500),
+    runtimeAttemptEvidenceCount: z.number().int().min(0).max(1_000),
+  })
+  .strict();
+
+const SettledFailureSchema = z
+  .object({
+    checkpointId: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/u),
+    rerunFrom: z.array(RerunFromSchema).min(1).max(CHARACTER_IDS.length),
+    runId: z.string().uuid(),
+    sidecarSha256: Sha256Schema,
+    turnIds: z
+      .array(z.string().uuid())
+      .min(1)
+      .max(CHARACTER_IDS.length * 2),
+  })
+  .strict()
+  .superRefine(({ rerunFrom }, context) => {
+    if (new Set(rerunFrom.map(({ povId }) => povId)).size !== rerunFrom.length) {
+      context.addIssue({ code: "custom", message: "Settled failure rerun POVs repeat" });
+    }
+  });
+
 const Version9ResumeSchema = Version8ResumeSchema.omit({ sourceReportVersion: true })
   .extend({
     rerunFrom: z.array(RerunFromSchema).max(CHARACTER_IDS.length).default([]),
+    sourceEvidenceBoundary: SourceEvidenceBoundarySchema.nullable().default(null),
     sourceReportVersion: z.union([
       z.literal(LEGACY_REPORT_VERSION),
       z.literal(VERSION_6_REPORT_VERSION),
@@ -937,7 +966,9 @@ export const LiveReportSchema = BaseLiveReportSchema.extend({
   results: z.array(CurrentLiveResultSchema).max(12),
   resume: Version9ResumeSchema.nullable(),
   serviceTier: RuntimeServiceTierSchema,
+  settledFailure: SettledFailureSchema.nullable().default(null),
   sourceGitSha: GitShaSchema,
+  supersededTurnIds: z.array(z.string().uuid()).max(100).default([]),
   version: z.literal(REPORT_VERSION),
 }).superRefine(refineDurableReport);
 
@@ -961,13 +992,136 @@ type DurableReportForRefinement = z.infer<typeof BaseLiveReportSchema> & {
     | z.infer<typeof Version9ResumeSchema>
     | null;
   readonly serviceTier?: RuntimeServiceTier;
+  readonly settledFailure?: z.infer<typeof SettledFailureSchema> | null;
   readonly sourceGitSha: string;
+  readonly supersededTurnIds?: string[];
   readonly version:
     typeof VERSION_7_REPORT_VERSION | typeof VERSION_8_REPORT_VERSION | typeof REPORT_VERSION;
 };
 
 function refineDurableReport(report: DurableReportForRefinement, context: z.RefinementCtx): void {
   refineReportCommon(report, context);
+  const supersededTurnIds = new Set(report.supersededTurnIds ?? []);
+  if (supersededTurnIds.size !== (report.supersededTurnIds?.length ?? 0)) {
+    context.addIssue({
+      code: "custom",
+      message: "Superseded narrative turn IDs repeat",
+      path: ["supersededTurnIds"],
+    });
+  }
+  if (report.version === REPORT_VERSION) {
+    const candidates = report.narrativeCandidates ?? [];
+    const responses = report.narrativeResponses ?? [];
+    const runtimeEvidence = report.runtimeAttemptEvidence ?? [];
+    const boundary =
+      report.resume !== null && "sourceEvidenceBoundary" in report.resume
+        ? report.resume.sourceEvidenceBoundary
+        : null;
+    const boundaryFits =
+      boundary !== null &&
+      boundary.attemptCount <= report.attempts.length &&
+      boundary.narrativeCandidateCount <= candidates.length &&
+      boundary.narrativeResponseCount <= responses.length &&
+      boundary.runtimeAttemptEvidenceCount <= runtimeEvidence.length;
+    if (boundary !== null && !boundaryFits) {
+      context.addIssue({
+        code: "custom",
+        message: "Resume source evidence boundary exceeds report evidence",
+        path: ["resume", "sourceEvidenceBoundary"],
+      });
+    }
+    const sourceTurnIds = boundaryFits
+      ? new Set([
+          ...candidates.slice(0, boundary.narrativeCandidateCount).map(({ turn }) => turn.turnId),
+          ...responses.slice(0, boundary.narrativeResponseCount).map(({ turn }) => turn.turnId),
+          ...runtimeEvidence
+            .slice(0, boundary.runtimeAttemptEvidenceCount)
+            .map(({ turn }) => turn.turnId),
+        ])
+      : new Set<string>();
+    if (
+      boundaryFits &&
+      report.resume !== null &&
+      !costsMatch(
+        sum(report.attempts.slice(0, boundary.attemptCount).map(({ costUsd }) => costUsd)),
+        report.resume.existingAttemptCostUsd,
+      )
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Resume source attempt boundary does not match existing cost",
+        path: ["resume", "sourceEvidenceBoundary"],
+      });
+    }
+    for (const turnId of supersededTurnIds) {
+      if (!sourceTurnIds.has(turnId)) {
+        context.addIssue({
+          code: "custom",
+          message: "Superseded narrative turn is outside authenticated source evidence",
+          path: ["supersededTurnIds"],
+        });
+      }
+      if (report.results.some(({ trace }) => trace.runId === turnId)) {
+        context.addIssue({
+          code: "custom",
+          message: "Committed result cannot use a superseded narrative turn",
+          path: ["supersededTurnIds"],
+        });
+      }
+    }
+    const settledTurnIds = new Set(report.settledFailure?.turnIds ?? []);
+    if (settledTurnIds.size !== (report.settledFailure?.turnIds.length ?? 0)) {
+      context.addIssue({
+        code: "custom",
+        message: "Settled failure turn IDs repeat",
+        path: ["settledFailure", "turnIds"],
+      });
+    }
+    if (report.settledFailure !== null && report.settledFailure !== undefined) {
+      if (
+        !boundaryFits ||
+        report.resume === null ||
+        report.error === null ||
+        report.gates.allCommitsCompleted
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: "Settled failure lacks failed resumed-run provenance",
+          path: ["settledFailure"],
+        });
+      } else {
+        const suffixTurns = [
+          ...candidates.slice(boundary.narrativeCandidateCount).map(({ turn }) => turn),
+          ...responses.slice(boundary.narrativeResponseCount).map(({ turn }) => turn),
+          ...runtimeEvidence.slice(boundary.runtimeAttemptEvidenceCount).map(({ turn }) => turn),
+        ];
+        const suffixTurnIds = new Set(suffixTurns.map(({ turnId }) => turnId));
+        const targetKeys = new Set(
+          report.settledFailure.rerunFrom.map(({ chapter, povId }) => resultKey(povId, chapter)),
+        );
+        if (
+          suffixTurns.length === 0 ||
+          !isDeepStrictEqual([...suffixTurnIds].sort(), [...settledTurnIds].sort()) ||
+          report.attempts.length - boundary.attemptCount !==
+            runtimeEvidence.length - boundary.runtimeAttemptEvidenceCount ||
+          suffixTurns.some(
+            ({ chapter, povId, turnId }) =>
+              sourceTurnIds.has(turnId) || !targetKeys.has(resultKey(povId, chapter)),
+          ) ||
+          [...settledTurnIds].some((turnId) =>
+            report.results.some(({ trace }) => trace.runId === turnId),
+          )
+        ) {
+          context.addIssue({
+            code: "custom",
+            message: "Settled failure evidence suffix is inconsistent",
+            path: ["settledFailure"],
+          });
+        }
+      }
+    }
+    for (const turnId of settledTurnIds) supersededTurnIds.add(turnId);
+  }
   if (report.resume !== null) {
     if (report.resume.existingAttemptCostUsd > report.totalCostUsd + MONEY_EPSILON_USD) {
       context.addIssue({ code: "custom", message: "Resume attempt cost exceeds report total" });
@@ -1117,11 +1271,14 @@ function refineDurableReport(report: DurableReportForRefinement, context: z.Refi
     report.suite === "smoke"
       ? 1
       : CHARACTER_IDS.length * 2 - (report.resume?.retainedResults.length ?? 0);
-  const projected = projectedCumulativeCostUsd(
-    report.priorSpendUsd,
-    report.resume?.existingAttemptCostUsd ?? 0,
-    pendingChapterCount,
-    report.chapterCostCapUsd,
+  const projected = Math.max(
+    projectedCumulativeCostUsd(
+      report.priorSpendUsd,
+      report.resume?.existingAttemptCostUsd ?? 0,
+      pendingChapterCount,
+      report.chapterCostCapUsd,
+    ),
+    report.cumulativeCostUsd,
   );
   if (!costsMatch(projected, report.projectedMaximumCumulativeCostUsd)) {
     context.addIssue({ code: "custom", message: "Report projected maximum is inconsistent" });
@@ -1175,6 +1332,7 @@ function refineDurableReport(report: DurableReportForRefinement, context: z.Refi
       responses,
       runtimeEvidenceStartAttemptIndex,
       runtimeAttemptEvidence,
+      supersededTurnIds,
       context,
     );
     const expectedComplete = narrativeEvidenceIsComplete(
@@ -1185,6 +1343,7 @@ function refineDurableReport(report: DurableReportForRefinement, context: z.Refi
       runtimeEvidenceStartAttemptIndex,
       runtimeAttemptEvidence,
       report.suite,
+      supersededTurnIds,
     );
     if (
       !("narrativeEvidenceComplete" in report.gates) ||
@@ -1294,6 +1453,7 @@ function refineNarrativeEvidence(
   responses: readonly z.infer<typeof NarrativeResponseEvidenceSchema>[],
   runtimeEvidenceStartAttemptIndex: number,
   runtimeAttemptEvidence: readonly z.infer<typeof RuntimeAttemptEvidenceSchema>[],
+  supersededTurnIds: ReadonlySet<string>,
   context: z.RefinementCtx,
 ): void {
   const legacyEvidenceGap = runtimeEvidenceStartAttemptIndex > 0;
@@ -1392,11 +1552,13 @@ function refineNarrativeEvidence(
     }
     const key = resultKey(candidate.povId, candidate.chapter);
     const expectedStateBefore = expectedStateBeforeByResult.get(key);
+    const isSuperseded = supersededTurnIds.has(candidate.turn.turnId);
     const existingTurn = turnIdentityById.get(candidate.turn.turnId);
     const existingTurnId = turnIdByRequestId.get(candidate.turn.requestId);
     if (
-      expectedStateBefore === undefined ||
-      !isDeepStrictEqual(candidate.stateBefore, expectedStateBefore) ||
+      (!isSuperseded &&
+        (expectedStateBefore === undefined ||
+          !isDeepStrictEqual(candidate.stateBefore, expectedStateBefore))) ||
       (existingTurn !== undefined && !isDeepStrictEqual(existingTurn, candidate.turn)) ||
       (existingTurnId !== undefined && existingTurnId !== candidate.turn.turnId)
     ) {
@@ -1412,6 +1574,7 @@ function refineNarrativeEvidence(
       (result) => result.povId === candidate.povId && result.chapter === candidate.chapter,
     );
     if (
+      !isSuperseded &&
       candidate.accepted &&
       committedResult?.canonicalNarrativeInput !== undefined &&
       !candidateMatchesCanonicalInput(candidate, committedResult.canonicalNarrativeInput)
@@ -1627,6 +1790,7 @@ function refineNarrativeEvidence(
     }
     const matches = candidates.filter(
       (candidate) =>
+        !supersededTurnIds.has(candidate.turn.turnId) &&
         candidate.accepted &&
         candidate.povId === result.povId &&
         candidate.chapter === result.chapter &&
@@ -1933,6 +2097,7 @@ function narrativeEvidenceIsComplete(
   runtimeEvidenceStartAttemptIndex: number,
   runtimeAttemptEvidence: readonly z.infer<typeof RuntimeAttemptEvidenceSchema>[],
   suite: "full" | "smoke",
+  supersededTurnIds: ReadonlySet<string> = new Set(),
 ): boolean {
   const expected = suite === "smoke" ? 1 : CHARACTER_IDS.length * 2;
   if (
@@ -1946,6 +2111,7 @@ function narrativeEvidenceIsComplete(
     return false;
   }
   const narrativeAttemptsCovered = runtimeAttemptEvidence.every(({ attempt, turn }) => {
+    if (supersededTurnIds.has(turn.turnId)) return true;
     if (
       (attempt.phase !== "narration" && attempt.phase !== "recovery") ||
       attempt.responseId === null
@@ -1963,6 +2129,7 @@ function narrativeEvidenceIsComplete(
     );
   });
   const auditAttemptsCovered = runtimeAttemptEvidence.every(({ attempt, turn }) => {
+    if (supersededTurnIds.has(turn.turnId)) return true;
     if (attempt.phase !== "audit" || attempt.responseId === null) return true;
     return (
       candidates
@@ -1988,6 +2155,7 @@ function narrativeEvidenceIsComplete(
         canonical !== undefined &&
         candidates.filter(
           (candidate) =>
+            !supersededTurnIds.has(candidate.turn.turnId) &&
             candidate.accepted &&
             candidate.povId === result.povId &&
             candidate.chapter === result.chapter &&
@@ -2009,6 +2177,7 @@ function narrativeEvidenceIsComplete(
         ).length === 1 &&
         candidates.some(
           (candidate) =>
+            !supersededTurnIds.has(candidate.turn.turnId) &&
             candidate.accepted &&
             candidate.povId === result.povId &&
             candidate.chapter === result.chapter &&
@@ -2206,6 +2375,15 @@ export interface ResumePreparation {
   readonly retainedPovIds: CharacterId[];
   readonly retainedResultCaps: ResultChapterCap[];
   readonly retainedResults: LiveResult[];
+  readonly supersededTurnIds: string[];
+}
+
+export interface LiveRunFinalizationState {
+  reportCommitted: boolean;
+}
+
+export function createLiveRunFinalizationState(): LiveRunFinalizationState {
+  return { reportCommitted: false };
 }
 
 async function main(): Promise<void> {
@@ -2238,6 +2416,11 @@ async function main(): Promise<void> {
     throw new Error("Full live eval requires --service-tier flex");
   }
   const pricingVersion = pricingVersionForServiceTier(serviceTier);
+  const reportPath = resolve(
+    REPORT_DIRECTORY,
+    `live-${suite}-${nativeRequested ? "native" : "sequential"}${povFilter ? `-${povFilter}` : ""}.json`,
+  );
+  const narrativeEvidencePath = reportPath.replace(/\.json$/u, ".narrative-candidates.json");
   const cleanPathProjection =
     suite === "full"
       ? assertPrompt1411FullMatrixFits(priorSpendUsd, serviceTier, TOTAL_CAP_USD)
@@ -2253,6 +2436,63 @@ async function main(): Promise<void> {
     resumeReportArgument === null ? null : resolve(ROOT, resumeReportArgument);
   const resumeSource = resumeReportPath === null ? null : readLiveReport(resumeReportPath);
   const resumeReport = resumeSource?.report ?? null;
+  if (recoverStaleRunId !== null && existsSync(reportPath) && existsSync(narrativeEvidencePath)) {
+    const committedSource = readLiveReport(reportPath);
+    const committedReport =
+      committedSource.report.version === REPORT_VERSION ? committedSource.report : null;
+    let currentReservationCounts: CommittedReportReservationCounts | null = null;
+    try {
+      if (committedReport === null) throw new Error("Committed report is not current version");
+      const committedEvidence = readNarrativeEvidenceSidecar(
+        narrativeEvidencePath,
+        recoverStaleRunId,
+        committedReport.sourceGitSha,
+        committedReport.serviceTier,
+        committedReport.pricingVersion,
+        true,
+      );
+      currentReservationCounts = assertCommittedReportMatchesSidecar(
+        committedReport,
+        committedEvidence,
+        recoverStaleRunId,
+      );
+    } catch {
+      currentReservationCounts = null;
+    }
+    if (currentReservationCounts !== null && committedReport !== null) {
+      if (
+        committedReport.suite !== suite ||
+        committedReport.nativeRequested !== nativeRequested ||
+        committedReport.adapterMode !== adapterMode ||
+        committedReport.povFilter !== povFilter ||
+        !costsMatch(committedReport.priorSpendUsd, priorSpendUsd) ||
+        !costsMatch(committedReport.chapterCostCapUsd, perChapterCapUsd) ||
+        committedReport.serviceTier !== serviceTier ||
+        committedReport.pricingVersion !== pricingVersion
+      ) {
+        throw new Error("Committed report recovery arguments do not match the original run");
+      }
+      const recoveryLedger = new LiveSpendLedger(LIVE_SPEND_LEDGER_PATH, TOTAL_CAP_USD);
+      try {
+        recoveryLedger.completeRunAfterCommittedReport(
+          recoverStaleRunId,
+          committedReport.budgetLedger,
+          currentReservationCounts.knownReservationCount,
+          currentReservationCounts.uncertainReservationCount,
+        );
+      } finally {
+        recoveryLedger.close();
+      }
+      console.log(`recovered committed report ${reportPath}; no provider request made`);
+      if (
+        committedReport.error !== null ||
+        Object.values(committedReport.gates).some((passed) => !passed)
+      ) {
+        process.exitCode = 1;
+      }
+      return;
+    }
+  }
   const resumeVerification =
     resumeSource === null
       ? { bridgeFiles: [], changedPaths: [] }
@@ -2292,12 +2532,6 @@ async function main(): Promise<void> {
   if (!apiKey) throw new Error("OPENAI_API_KEY is not configured");
   const client = new OpenAI({ apiKey });
   mkdirSync(REPORT_DIRECTORY, { recursive: true });
-
-  const reportPath = resolve(
-    REPORT_DIRECTORY,
-    `live-${suite}-${nativeRequested ? "native" : "sequential"}${povFilter ? `-${povFilter}` : ""}.json`,
-  );
-  const narrativeEvidencePath = reportPath.replace(/\.json$/u, ".narrative-candidates.json");
   const startedAt = new Date().toISOString();
   const results: LiveResult[] = [...(resumePreparation?.retainedResults ?? [])];
   const resultChapterCaps: ResultChapterCap[] = [...(resumePreparation?.retainedResultCaps ?? [])];
@@ -2318,6 +2552,7 @@ async function main(): Promise<void> {
   const runtimeAttemptEvidence: LiveReport["runtimeAttemptEvidence"] = [
     ...(resumePreparation?.runtimeAttemptEvidence ?? []),
   ];
+  const supersededTurnIds = [...(resumePreparation?.supersededTurnIds ?? [])];
   const ledger = new LiveSpendLedger(LIVE_SPEND_LEDGER_PATH, TOTAL_CAP_USD);
   const liveRunId = recoverStaleRunId ?? randomUUID();
   const ledgerBaseline = {
@@ -2326,7 +2561,7 @@ async function main(): Promise<void> {
     sourceReportSha256: resumeSource?.sha256 ?? `fresh:${sourceGitSha}`,
   };
   let ledgerLocked = false;
-  let recoveryReportCommitted = recoverStaleRunId === null;
+  const finalization = createLiveRunFinalizationState();
   let failure: unknown = null;
   let recoveredEvidenceExtended = false;
   try {
@@ -2344,6 +2579,7 @@ async function main(): Promise<void> {
         pricingVersion,
         sourceGitSha,
         liveRunId,
+        supersededTurnIds,
       );
     } else {
       const recoveredEvidence = readNarrativeEvidenceSidecar(
@@ -2358,7 +2594,8 @@ async function main(): Promise<void> {
         !isAppendOnlyEvidence(narrativeCandidates, recoveredEvidence.candidates) ||
         !isAppendOnlyEvidence(narrativeResponses, recoveredEvidence.narrativeResponses) ||
         recoveredEvidence.runtimeEvidenceStartAttemptIndex !== runtimeEvidenceStartAttemptIndex ||
-        !isAppendOnlyEvidence(runtimeAttemptEvidence, recoveredEvidence.runtimeAttemptEvidence)
+        !isAppendOnlyEvidence(runtimeAttemptEvidence, recoveredEvidence.runtimeAttemptEvidence) ||
+        !isDeepStrictEqual(supersededTurnIds, recoveredEvidence.supersededTurnIds)
       ) {
         throw new Error("Stale-run evidence is not an append-only checkpoint extension");
       }
@@ -2396,6 +2633,7 @@ async function main(): Promise<void> {
         pricingVersion,
         sourceGitSha,
         liveRunId,
+        supersededTurnIds,
       );
     }
     if (recoverStaleRunId === null) {
@@ -2438,6 +2676,7 @@ async function main(): Promise<void> {
                   pricingVersion,
                   sourceGitSha,
                   liveRunId,
+                  supersededTurnIds,
                 );
               },
               onNarrativeDraftRejected: (issues) => {
@@ -2459,6 +2698,7 @@ async function main(): Promise<void> {
                   pricingVersion,
                   sourceGitSha,
                   liveRunId,
+                  supersededTurnIds,
                 );
               },
               onRuntimeAttempt: (attempt, turn) => {
@@ -2475,6 +2715,7 @@ async function main(): Promise<void> {
                   pricingVersion,
                   sourceGitSha,
                   liveRunId,
+                  supersededTurnIds,
                 );
                 if (attempt.errorCode !== null) {
                   console.log(
@@ -2601,6 +2842,7 @@ async function main(): Promise<void> {
                   sourceGitSha,
                   serviceTier,
                   startedAt,
+                  supersededTurnIds,
                   suite,
                 }),
               );
@@ -2645,10 +2887,11 @@ async function main(): Promise<void> {
       sourceGitSha,
       serviceTier,
       startedAt,
+      supersededTurnIds,
       suite,
     });
     writeAtomicJson(reportPath, report);
-    recoveryReportCommitted = true;
+    finalization.reportCommitted = true;
 
     const p95LatencyMs = percentile(
       results.map(({ streamingLatencyMs }) => streamingLatencyMs),
@@ -2671,7 +2914,7 @@ async function main(): Promise<void> {
       }
     }
   } finally {
-    if (ledgerLocked && recoveryReportCommitted) {
+    if (ledgerLocked && finalization.reportCommitted) {
       ledger.releaseRun(liveRunId);
     } else if (ledgerLocked) {
       console.error(`stale recovery lock retained by run ${liveRunId}`);
@@ -2680,12 +2923,12 @@ async function main(): Promise<void> {
   }
 }
 
-interface ResumeVerification {
+export interface ResumeVerification {
   readonly bridgeFiles: z.infer<typeof BridgeFileSchema>[];
   readonly changedPaths: string[];
 }
 
-interface BuildLiveReportInput {
+export interface BuildLiveReportInput {
   readonly adapterMode: z.infer<typeof AdapterModeSchema>;
   readonly apiKey: string;
   readonly attempts: LiveReport["attempts"];
@@ -2710,13 +2953,28 @@ interface BuildLiveReportInput {
   readonly resumeReportPath: string | null;
   readonly resumeSource: ResumeSource | null;
   readonly resumeVerification: ResumeVerification;
+  readonly settledFailure?: z.infer<typeof SettledFailureSchema> | null;
   readonly sourceGitSha: string;
   readonly serviceTier: RuntimeServiceTier;
   readonly startedAt: string;
+  readonly supersededTurnIds: string[];
   readonly suite: "full" | "smoke";
 }
 
-function buildLiveReport(
+function sourceEvidenceBoundary(
+  report: ResumableLiveReport,
+): z.infer<typeof SourceEvidenceBoundarySchema> {
+  return {
+    attemptCount: report.attempts.length,
+    narrativeCandidateCount:
+      "narrativeCandidates" in report ? report.narrativeCandidates.length : 0,
+    narrativeResponseCount: "narrativeResponses" in report ? report.narrativeResponses.length : 0,
+    runtimeAttemptEvidenceCount:
+      "runtimeAttemptEvidence" in report ? report.runtimeAttemptEvidence.length : 0,
+  };
+}
+
+export function buildLiveReport(
   failure: unknown,
   ledgerSnapshot: LiveSpendSnapshot,
   input: BuildLiveReportInput,
@@ -2771,6 +3029,7 @@ function buildLiveReport(
       input.runtimeEvidenceStartAttemptIndex,
       input.runtimeAttemptEvidence,
       input.suite,
+      new Set(input.supersededTurnIds),
     ),
     p95WithinSixtySeconds:
       input.results.length > 0 &&
@@ -2813,7 +3072,10 @@ function buildLiveReport(
     priorSpendUsd: input.priorSpendUsd,
     pricingVersion: input.pricingVersion,
     projectedFinalExposureUsd: input.cleanPathProjection?.projectedFinalExposureUsd ?? null,
-    projectedMaximumCumulativeCostUsd: input.projectedMaximumCumulativeCostUsd,
+    projectedMaximumCumulativeCostUsd: Math.max(
+      input.projectedMaximumCumulativeCostUsd,
+      input.priorSpendUsd + totalCostUsd,
+    ),
     promptVersion: PROMPT_VERSION,
     resultChapterCaps: input.resultChapterCaps,
     results: input.results,
@@ -2847,12 +3109,15 @@ function buildLiveReport(
               };
             }),
             sourceChapterCostCapUsd: input.resumeReport.chapterCostCapUsd,
+            sourceEvidenceBoundary: sourceEvidenceBoundary(input.resumeReport),
             sourceGitSha: input.resumeReport.sourceGitSha,
             sourceReportPath: input.resumeReportPath,
             sourceReportSha256: input.resumeSource.sha256,
             sourceReportVersion: input.resumeReport.version,
           },
+    settledFailure: input.settledFailure ?? null,
     sourceGitSha: input.sourceGitSha,
+    supersededTurnIds: input.supersededTurnIds,
     serviceTier: input.serviceTier,
     startedAt: input.startedAt,
     suite: input.suite,
@@ -2986,6 +3251,7 @@ export function writeNarrativeEvidenceSidecar(
   pricingVersion: string,
   sourceGitSha: string,
   liveRunId: string,
+  supersededTurnIds: readonly string[] = [],
 ): void {
   writeAtomicJson(
     path,
@@ -3002,6 +3268,7 @@ export function writeNarrativeEvidenceSidecar(
       runtimeAttemptEvidence,
       serviceTier,
       sourceGitSha,
+      supersededTurnIds,
       updatedAt: new Date().toISOString(),
     }),
   );
@@ -3013,6 +3280,7 @@ export function readNarrativeEvidenceSidecar(
   expectedSourceGitSha: string,
   expectedServiceTier: RuntimeServiceTier,
   expectedPricingVersion: string,
+  allowUncertainReturnedTier = false,
 ): z.infer<typeof NarrativeEvidenceSidecarSchema> {
   let candidate: unknown;
   try {
@@ -3040,17 +3308,69 @@ export function readNarrativeEvidenceSidecar(
     currentAttempts.some(
       (attempt) =>
         attempt.requestedServiceTier !== expectedServiceTier ||
-        attempt.serviceTier !== expectedServiceTier,
+        (attempt.serviceTier !== expectedServiceTier &&
+          !(allowUncertainReturnedTier && attempt.serviceTier === null)),
     ) ||
     evidence.runtimeAttemptEvidence.some(
       ({ attempt }) =>
         attempt.requestedServiceTier !== expectedServiceTier ||
-        attempt.serviceTier !== expectedServiceTier,
+        (attempt.serviceTier !== expectedServiceTier &&
+          !(allowUncertainReturnedTier && attempt.serviceTier === null)),
     )
   ) {
     throw new Error("Narrative evidence contains mixed service-tier attempts");
   }
   return evidence;
+}
+
+export interface CommittedReportReservationCounts {
+  readonly knownReservationCount: number;
+  readonly uncertainReservationCount: number;
+}
+
+export function assertCommittedReportMatchesSidecar(
+  report: LiveReport,
+  evidence: z.infer<typeof NarrativeEvidenceSidecarSchema>,
+  expectedLiveRunId: string,
+): CommittedReportReservationCounts {
+  if (report.settledFailure != null) {
+    throw new Error("Settled-failure receipts need their dedicated reconciliation path");
+  }
+  if (
+    evidence.liveRunId !== expectedLiveRunId ||
+    evidence.sourceGitSha !== report.sourceGitSha ||
+    evidence.serviceTier !== report.serviceTier ||
+    evidence.pricingVersion !== report.pricingVersion ||
+    evidence.promptVersion !== report.promptVersion ||
+    evidence.reportVersion !== report.version ||
+    evidence.runtimeSchemaVersion !== RUNTIME_SCHEMA_VERSION
+  ) {
+    throw new Error("Committed report metadata does not match its narrative sidecar");
+  }
+  if (
+    evidence.runtimeEvidenceStartAttemptIndex !== report.runtimeEvidenceStartAttemptIndex ||
+    !isDeepStrictEqual(evidence.attempts, report.attempts) ||
+    !isDeepStrictEqual(evidence.candidates, report.narrativeCandidates) ||
+    !isDeepStrictEqual(evidence.narrativeResponses, report.narrativeResponses) ||
+    !isDeepStrictEqual(evidence.runtimeAttemptEvidence, report.runtimeAttemptEvidence) ||
+    !isDeepStrictEqual(evidence.supersededTurnIds, report.supersededTurnIds ?? [])
+  ) {
+    throw new Error("Committed report evidence does not exactly match its narrative sidecar");
+  }
+  const sourceAttemptCount = report.resume?.sourceEvidenceBoundary?.attemptCount ?? 0;
+  if (report.resume !== null && report.resume.sourceEvidenceBoundary === null) {
+    throw new Error("Committed resumed report lacks an authenticated source evidence boundary");
+  }
+  const currentAttemptCount = report.attempts.length - sourceAttemptCount;
+  if (currentAttemptCount < 0) {
+    throw new Error("Committed report source attempt boundary exceeds its evidence");
+  }
+  const currentAttempts = report.attempts.slice(sourceAttemptCount);
+  return {
+    knownReservationCount: currentAttempts.filter(({ serviceTier }) => serviceTier !== null).length,
+    uncertainReservationCount: currentAttempts.filter(({ serviceTier }) => serviceTier === null)
+      .length,
+  };
 }
 
 function assertChapterResult(
@@ -3118,6 +3438,19 @@ export function prepareResume(
   if (new Set(rerunFrom.map(({ povId }) => povId)).size !== rerunFrom.length) {
     throw new Error("Explicit rerun repeats a POV");
   }
+  if (
+    report.version === REPORT_VERSION &&
+    report.settledFailure !== null &&
+    report.settledFailure !== undefined
+  ) {
+    const expectedTargets = report.settledFailure.rerunFrom
+      .map(({ chapter, povId }) => resultKey(povId, chapter))
+      .sort();
+    const actualTargets = rerunFrom.map(({ chapter, povId }) => resultKey(povId, chapter)).sort();
+    if (!isDeepStrictEqual(actualTargets, expectedTargets)) {
+      throw new Error("Settled failure requires its exact recorded rerun targets");
+    }
+  }
   const rerunStartByPovId = new Map(rerunFrom.map(({ chapter, povId }) => [povId, chapter]));
 
   const retainedResults: LiveResult[] = [];
@@ -3177,6 +3510,27 @@ export function prepareResume(
   const attempts = [...report.attempts];
   const hasRuntimeEvidence =
     report.version === VERSION_8_REPORT_VERSION || report.version === REPORT_VERSION;
+  const retainedResultKeys = new Set(
+    retainedResults.map(({ chapter, povId }) => resultKey(povId, chapter)),
+  );
+  const supersededTurnIds = new Set(
+    report.version === REPORT_VERSION
+      ? [...(report.supersededTurnIds ?? []), ...(report.settledFailure?.turnIds ?? [])]
+      : [],
+  );
+  if (hasRuntimeEvidence) {
+    for (const { turn } of report.runtimeAttemptEvidence) {
+      if (!retainedResultKeys.has(resultKey(turn.povId, turn.chapter))) {
+        supersededTurnIds.add(turn.turnId);
+      }
+    }
+    for (const { chapter, povId, turn } of report.narrativeCandidates) {
+      if (!retainedResultKeys.has(resultKey(povId, chapter))) supersededTurnIds.add(turn.turnId);
+    }
+    for (const { chapter, povId, turn } of report.narrativeResponses) {
+      if (!retainedResultKeys.has(resultKey(povId, chapter))) supersededTurnIds.add(turn.turnId);
+    }
+  }
   return {
     attempts,
     auditRejections: [...report.auditRejections],
@@ -3194,6 +3548,7 @@ export function prepareResume(
     retainedPovIds,
     retainedResultCaps,
     retainedResults,
+    supersededTurnIds: [...supersededTurnIds],
   };
 }
 
@@ -3240,12 +3595,12 @@ export function resultTraceCostMatches(result: LiveResult): boolean {
   return costsMatch(result.costUsd, sum(result.trace.attempts.map(({ costUsd }) => costUsd)));
 }
 
-interface ResumeSource {
+export interface ResumeSource {
   readonly report: ResumableLiveReport;
   readonly sha256: string;
 }
 
-function readLiveReport(path: string): ResumeSource {
+export function readLiveReport(path: string): ResumeSource {
   let raw: string;
   let candidate: unknown;
   try {
