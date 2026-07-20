@@ -186,4 +186,4 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 
 ## Current Milestone
 
-Phase 6 human review and demo: the centered Reader, meaningful-decision continuation, truthful stop and retry behavior, chapter-100 boundary, provider-free seeded evidence, six-POV sample pack, desktop and mobile browser QA, and full non-live gate are ready. Stop for human testing after clean-clone verification and final evidence capture. Phase 5 paid correction remains separate; no paid command is prepared.
+Phase 6 is ready for human testing. The centered Reader, meaningful-decision continuation, truthful stop and retry behavior, chapter-100 boundary, provider-free seeded evidence, six-POV sample pack, desktop and mobile browser QA, full non-live gate, and clean-clone gate passed. Work stops here for human review. Phase 5 paid correction remains separate; no paid command is prepared.

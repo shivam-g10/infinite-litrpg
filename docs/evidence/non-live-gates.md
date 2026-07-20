@@ -74,4 +74,4 @@ Screenshots are viewport captures:
 
 ## Clean Clone
 
-Run after the green checkpoint commit. Record the exact commit and isolated result in `docs/STATUS.md` and this section before handoff.
+Runtime checkpoint commit `b553c10` (`feat(reader): continue to story decisions`) passed `npm run verify:clean-clone` in 57.5 seconds. A fresh install audited 448 packages with zero vulnerabilities, then passed 272 tests, all offline evals, production build, 21 E2E tests with one intentional desktop skip, both security scans, 526 licenses, the reproducible six-story pack, audit, and diff hygiene. Provider calls: zero.
