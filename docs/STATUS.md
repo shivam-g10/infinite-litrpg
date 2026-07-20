@@ -1,6 +1,6 @@
 # Status
 
-- Updated: 2026-07-20
+- Updated: 2026-07-21
 - Layer: Product hardening and human review
 - Current phase: Phase 6 chapter-100 demo and simple Reader
 - Repository: initialized on `main`
@@ -22,13 +22,14 @@
 ## Current Blockers
 
 - Human review originally rejected Rowan chapter 2, Elara chapter 1, and Lucan chapter 1 in automated-green report `fb9295d7c33ca154c7e407894b807d4a371b83d5ef066d78eee05ee42d4c49d2`.
-- The authorized re-narration chain retained a corrected Rowan chapter 2. Elara did not commit and Lucan was not reached. Current failure report SHA-256 is `d935b56ed039e560ac067c2ec268ed7780b9daf196497e3ffde6349be2c02e0a`.
+- The authorized re-narration chain retained a corrected Rowan chapter 2. Elara did not commit and Lucan was not reached. Failure report SHA-256 `d935b56ed039e560ac067c2ec268ed7780b9daf196497e3ffde6349be2c02e0a` is now registered under `prompt-1-4-11-flex-elara-renarration-failure-3` with 40 exact bridge hashes.
 - Durable exposure is `$2.993429175`; headroom is `$0.006570825`. Ledger has zero lock and zero active or uncertain reservations. No paid command is prepared or authorized.
+- Provider-free preflight accepts exact Elara chapter 1 and Lucan chapter 1 sources. Their hard `$0.027` new-work ceiling projects `$3.020429175`, so the current `$3` ledger cap blocks them. A one-way cap migration to `$3.021` and that exact paid ceiling require new user authority and provider-free regression coverage before any command can exist.
 - Current-prompt native Multi-agent proof, a human-approved corrected six-POV report, real-click video approval, feedback session ID, push, and submission remain release gates. They do not block local human testing of the Reader.
 
 ## Next Action
 
-Prepare a new exact paid plan for Elara chapter 1, Lucan chapter 1, and the current-prompt native Multi-agent smoke. Do not run it without explicit authority. User-owned work then remains: full packet approval, current checkpoint push, public demo video, feedback Session ID, and Devpost submission.
+Stop for user authority. If authorized, implement and verify a one-way `$3.021` ledger-cap migration, then prepare one exact two-target correction command capped at `$0.027` new provider exposure. Current-prompt native Multi-agent smoke needs a separate later plan after correction cost is known. User-owned work then remains: full packet approval, current checkpoint push, public demo video, feedback Session ID, and Devpost submission.
 
 ## Evidence Log
 
@@ -183,5 +184,9 @@ Prepare a new exact paid plan for Elara chapter 1, Lucan chapter 1, and the curr
 - 2026-07-21 no-cost demo rehearsal: the real browser completed Reader, God Mode, exact 46-chapter `$4.6000` confirmation, cancel, trace, and return-to-Reader in 87.4 seconds at 1280 by 720. Page identity, content, focus, zero horizontal overflow, and zero console warnings or errors passed. No generation confirmation or provider request ran. God Mode was recaptured at 1440 by 1000 with the delta collapsed so trace, audit, and atomic-commit evidence are visible together.
 - 2026-07-21 release-truth full gate: `npm run check` exited 0 in 35.4 seconds. Format, lint, all three strict TypeScript projects, 272 tests across 18 files, all six offline gates with 1,000 simulations and chapter 351 blocked, production build, 21 E2E passes with one intentional desktop skip, both security scans across 215 working files, 526 licenses, reproducible six-story pack, zero-vulnerability audit, and diff hygiene passed. No provider call ran.
 - 2026-07-21 release-evidence clean checkpoint: commit `262686b` (`docs: harden release evidence`) passed `npm run verify:clean-clone` in 57.8 seconds. A fresh install audited 448 packages with zero vulnerabilities, then passed 272 tests, all offline evals, production build, 21 E2E passes with one intentional desktop skip, both security scans, 526 licenses, the reproducible six-story pack, audit, and diff hygiene. No provider call ran.
+- 2026-07-21 test-first release hardening: focused baselines failed on the exact escaped Elara route contradiction and a native adapter label with no hosted call evidence. Deterministic movement validation now rejects the paid sentence. Native reports now require a matched hosted `spawn_agent` call/output and root final message; the StoryService vertical regression persists that evidence through an atomic chapter commit.
+- 2026-07-21 independent review found that a failed native retry could donate spawn evidence to a later root-only success and that 50 bridge files could exceed the old 50 changed-path bound. Both exact regressions failed first. Runtime and eval now share one accepted-response-only evidence validator, and the changed-path maximum is derived from 50 bridges plus every allowed non-runtime path. Reviewer recheck found no remaining P0 through P2 defect.
+- 2026-07-21 hardened full gate: `npm run check` exited 0 in 37.7 seconds. Format, lint, all three strict TypeScript projects, 277 tests across 18 files, all offline gates with 1,000 simulations and chapter 351 blocked, production build, 21 E2E passes with one intentional desktop skip, both security scans across 215 working files, 526 licenses, reproducible six-story pack, zero-vulnerability audit, and diff hygiene passed. No provider call ran.
+- 2026-07-21 registered failure preflight: report `d935b56ed039e560ac067c2ec268ed7780b9daf196497e3ffde6349be2c02e0a` authenticated through 40 exact bridge hashes. Provider-free preparation retained both Elara chapter 1 and Lucan chapter 1 sources with `$0.182347` existing attempts. A `$0.0135` ceiling per target projects `$0.027` new work, `$3.020429175` total exposure, and `$0.000570825` headroom only under a proposed `$3.021` cap. The actual `$3` ledger remains unchanged at `$2.993429175` exposure with zero active or uncertain reservations. No paid command ran.
 
 Add exact command, date, exit code, cost, and report path after every future milestone gate.

@@ -382,6 +382,179 @@
       "reportVersion": 9,
       "serviceTier": "flex",
       "sourceGitSha": "44d79aecf8feb588d25bba1bb720e4f1ccd2f185"
+    },
+    {
+      "adapterMode": "sequential",
+      "bridgeFiles": [
+        {
+          "path": "README.md",
+          "sha256": "e42ba2879aa4fdce10d8c1d8bdd033401c91a0ab9b6aba220c6a72e5f87c2cc5"
+        },
+        {
+          "path": "app/e2e/story.spec.ts",
+          "sha256": "9b945cadaa936bf874422ed91d02d40faa9f5cd2be672e3e3c281bef99ee73d3"
+        },
+        {
+          "path": "app/src/app/api/story/route.ts",
+          "sha256": "4c3406d161eff4d00a8f4b29866c800172fc275230af7bda3b56bd5462084e19"
+        },
+        {
+          "path": "app/src/app/globals.css",
+          "sha256": "3d2c5b58db382164553cd1cb75253c8f1313d445d14d0fcd2e2371eefa968b75"
+        },
+        {
+          "path": "app/src/components/character-selection.tsx",
+          "sha256": "c3db06cf0192fe69dd7bc66a165c94f1f985a40d64598ab24ae30dd11d16c06c"
+        },
+        {
+          "path": "app/src/components/story-app.tsx",
+          "sha256": "cc7ffd236c0018da6abe98088eda4cdca1b29f5e961cc03f861f0fb66b26636b"
+        },
+        {
+          "path": "app/src/components/story-shell.tsx",
+          "sha256": "8befb07a7028a376f61ce4a3cf234a65e68f659c3765b79560acc70713f76f2d"
+        },
+        {
+          "path": "app/src/components/story-types.ts",
+          "sha256": "151969409a8a0a98880295895f8768fa41ebf0a1feaaca228ad34bde5c4eb90a"
+        },
+        {
+          "path": "app/src/server/openai/luna.test.ts",
+          "sha256": "b96c016e8e692fcd2dd1ad670dde1569e85b9537502542442c332d8b35a5a057"
+        },
+        {
+          "path": "app/src/server/openai/luna.ts",
+          "sha256": "68ae4fa7b859948b30d2884447598c24c0adfcdac4029b66b2a1e8da126360bb"
+        },
+        {
+          "path": "app/src/server/story/story-service.ts",
+          "sha256": "84e617d85243f7de876f9a0294d2237ae72ac8a67467c7c4113b4d5e609929f5"
+        },
+        {
+          "path": "decisions/ADR-018-canon-preserving-renarration.md",
+          "sha256": "5e569b44cdf51812380dd404bdb01d4c4969553ca84f86dde0ad10bbf8b40ba6"
+        },
+        {
+          "path": "decisions/ADR-019-routine-story-continuation.md",
+          "sha256": "916d6b7203acdd329a5fe53aca679f8d4439a9d77f337f4341c81ff9744577b6"
+        },
+        {
+          "path": "docs/BUILD_WEEK.md",
+          "sha256": "4c90d170f3b0941822238a0f3dbefa838375dfd4b9865babf7f077ddf1c62fd6"
+        },
+        {
+          "path": "docs/DEMO_SCRIPT.md",
+          "sha256": "24eeb5a3e18022d13f167535c1b7c63ea335a487329ff870221aa922a4f78c8f"
+        },
+        {
+          "path": "docs/HUMAN_REVIEW.md",
+          "sha256": "1ed01ba59fc4f9b08c8d7d57e76734ec6537e1b3b74a68197b2c5ba8bd57ef2a"
+        },
+        {
+          "path": "docs/PRODUCT.md",
+          "sha256": "8a4215a8ea608d78b3a92b2e5efad4a0a5b9bee7ba72d0e4d361d018bca45df6"
+        },
+        {
+          "path": "docs/SAMPLE_STORIES.md",
+          "sha256": "607fdbce2bdba8b1902202ec7c5e0794c195a5741bd7dd9931c707572ee5d3fe"
+        },
+        {
+          "path": "docs/SUBMISSION.md",
+          "sha256": "c4c9a78824715e3a54482a11bca782869577bbf18d5d22bee774c1389ff88df0"
+        },
+        {
+          "path": "docs/design/DESIGN_SYSTEM.md",
+          "sha256": "ff8fe2392e356e35ef6e245a63050c1e5d388b7d2f49568e1fd2aef7a7f36bb4"
+        },
+        {
+          "path": "docs/design/reader-decision-desktop.png",
+          "sha256": "1c4466525e8f7364f904155788a5e347ffd4e283dc6a3ccec5a516cad22dbdcb"
+        },
+        {
+          "path": "docs/design/reader-generation-desktop.png",
+          "sha256": "02c5b08662f125adba17a5cf4b0c49512164e201d576404a67e8c29682d2788f"
+        },
+        {
+          "path": "docs/design/reader-simple-desktop.png",
+          "sha256": "1ac5dd0a136d62c89dfb86c1bd14c19ecdb9472d9b0c2e0b06dfb31dcec604ec"
+        },
+        {
+          "path": "docs/design/reader-simple-mobile.png",
+          "sha256": "09d5965d640e087c1a25da5577cee3e4eaf7957c7eea7cb2a6f5a915264b750e"
+        },
+        {
+          "path": "docs/evidence/README.md",
+          "sha256": "dd0869d7ec6ed56b17ed8408943e65afc5ab2e328c0828409a782d6aeed9cdba"
+        },
+        {
+          "path": "docs/evidence/non-live-gates.md",
+          "sha256": "c5f11c3426e447e6719a7f67ccc115fb39b511211aa7237f1a46f90038559ca9"
+        },
+        {
+          "path": "docs/evidence/rowan-chapter-1-demo.json",
+          "sha256": "bd8f7205b20698537f06ecafd38abf0b529f8e449de2b5ba068ae557e6686da8"
+        },
+        {
+          "path": "docs/screenshots/god-mode-desktop.png",
+          "sha256": "12eba468a2e25314f0ec7593698b0cfe5afcb4ba367dbff85d76b305c42cadf0"
+        },
+        {
+          "path": "docs/screenshots/reader-desktop.png",
+          "sha256": "f5500f4be3a6940e38a97ef165404a94045d6ed9ed49e3e99f8fe2e3a860e1d4"
+        },
+        {
+          "path": "docs/screenshots/reader-mobile.png",
+          "sha256": "a3db8c74031bd2591cf797944db97961a442b84f80a343c102e78d80636b41d5"
+        },
+        {
+          "path": "evals/run-live.ts",
+          "sha256": "6d8a736814e09955ccc55edacf0723c5d978d2f9546c4c531bd1a37421f01e43"
+        },
+        {
+          "path": "package.json",
+          "sha256": "a4110c9ba53d30e5a93d965d9b7957da64b8eb25743fc7152ba3592d222c9b20"
+        },
+        {
+          "path": "research/2026-07-20-story-continuation-ux.md",
+          "sha256": "98dd4856119fea1cbdc77387e6a0a092c44e305c1f2310835d697022686846d9"
+        },
+        {
+          "path": "scripts/export-demo-evidence.ts",
+          "sha256": "b2a5dd8fd7ee37f462d71847019826c4b98e31d78be31308ff30476c9a6ac1dd"
+        },
+        {
+          "path": "scripts/export-sample-stories.ts",
+          "sha256": "a4b4e94210eff37fb9d8bb78387d1f6e7d191d9f4ff5f0ac30fdc018f10f929a"
+        },
+        {
+          "path": "scripts/seed-demo-evidence.ts",
+          "sha256": "ad28bdf67d0dabf983dbd75b0d696be9bf3548b9fcdc2483130d995218d1dba2"
+        },
+        {
+          "path": "shared/src/contracts/trace.ts",
+          "sha256": "02381e783a5d3cb332f0110ca43839505b224469f1200f0c1aeacc87c2770e84"
+        },
+        {
+          "path": "shared/src/engine/clock.ts",
+          "sha256": "3d384f39fb5a3564c1a00ab8ee1b1d7857a394a08109bcaa7d77d8e7e68a8c38"
+        },
+        {
+          "path": "shared/src/engine/narrative.test.ts",
+          "sha256": "f55c26f3e496c5b8b453b14027fa390b2a8c119e501cb50610f0a9de0fd63e03"
+        },
+        {
+          "path": "shared/src/engine/narrative.ts",
+          "sha256": "7ff7d9dd3bda18985f078f1d497497af3c2a0216b117f28c7927b7b48219bd0b"
+        }
+      ],
+      "chapterCostCapUsd": 0.0056,
+      "id": "prompt-1-4-11-flex-elara-renarration-failure-3",
+      "priorSpendUsd": 2.811082175,
+      "promptVersion": "1.4.11",
+      "reportSha256": "d935b56ed039e560ac067c2ec268ed7780b9daf196497e3ffde6349be2c02e0a",
+      "reportVersion": 9,
+      "serviceTier": "flex",
+      "sourceGitSha": "ba1d00c6e6b480cec6e572f855a3035b2519630a"
     }
   ],
   "version": 2

@@ -33,6 +33,8 @@ Human review rejected Rowan chapter 2, Elara chapter 1, and Lucan chapter 1. The
 
 The authorized re-narration chain produced a corrected Rowan chapter 2, then failed to commit Elara and did not reach Lucan. Provider-free settlement materialized `evals/reports/live-full-sequential-renarrated-settled-2.json` at SHA-256 `90374f2e4ca49fe390fc6c64cd9412579efa7cdaa2c7e291f1b8a772127ea1bc`. A final Elara-only attempt used two known Flex requests costing `$0.004246`, then stopped before a request that could not fit its chapter budget. Its strict failure report has SHA-256 `d935b56ed039e560ac067c2ec268ed7780b9daf196497e3ffde6349be2c02e0a`.
 
+That strict failure report is registered under `prompt-1-4-11-flex-elara-renarration-failure-3` with 40 exact bridge hashes. Provider-free preparation authenticates Elara chapter 1 and Lucan chapter 1 and retains `$0.182347` existing attempt cost. Two `$0.0135` target ceilings project `$3.020429175` total exposure. The unchanged `$3` ledger rejects that plan; a one-way `$3.021` cap migration and `$0.027` maximum new provider exposure need new explicit user authority and regressions before a paid command is prepared.
+
 Current ledger exposure is `$2.993429175`; headroom is `$0.006570825`. There is no run lock and no active or uncertain reservation. Elara chapter 1 and Lucan chapter 1 still need eligible corrected prose. No paid command is prepared or authorized. Do not infer one from historical commands.
 
 Never resume automatically.
