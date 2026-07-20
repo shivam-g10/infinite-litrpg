@@ -2,7 +2,7 @@
 
 - Updated: 2026-07-20
 - Layer: Release evaluation
-- Current phase: Phase 5 report version 6 resume bridge under verification
+- Current phase: Phase 5 report version 7 durable prefix resume under verification
 - Repository: initialized on `main`
 - Remote: `git@github.com:shivam-g10/infinite-litrpg.git`
 - Initial commit: `39b19a2` (`chore: scaffold agent workflow`)
@@ -21,11 +21,12 @@
 
 ## Current Blockers
 
-- The final twelve-cycle sequential report has not passed on prompt `1.4.9`; two Rowan chapters are valid and ten chapters remain.
+- The final twelve-cycle sequential report has not passed on prompt `1.4.9`; Rowan chapters 1 and 2 plus Elara chapter 1 are valid. Nine chapters remain.
+- Report version 7 and its durable ledger must pass every non-live gate and be committed before another paid call.
 
 ## Next Action
 
-Finish non-live verification and commit the report version 6 harness. Then resume the exact archived prompt `1.4.9` report with prior spend `$2.49105695` and chapter cap `$0.0405`.
+Finish non-live verification and commit report version 7. Then resume the exact archived version 6 artifact with prior spend `$2.49105695` and chapter cap `$0.0424`. The durable ledger opens at `$2.6656366` exposure and blocks every request that cannot fit below `$3`.
 
 ## Evidence Log
 
@@ -103,5 +104,11 @@ Finish non-live verification and commit the report version 6 harness. Then resum
 - 2026-07-20 spend reconciliation check: the configured project key received HTTP 403 from the organization Costs endpoint because it lacks `api.usage.read`; both available browser profiles reached the OpenAI Platform login page. No lower provider-bill figure is claimed. The conservative local generation ledger remains authoritative for this release eval.
 - 2026-07-20 report version 6 bridge: tracked `evals/resume-checkpoints.json` pins the exact legacy report SHA-256 `2e83070e4edfeef14fc9e91c2683090d78636551f736f63898b7521ad32f093a`, source SHA `8ceac05c57960388238cb1161ac140178c6e335a`, prompt, adapter, prior spend, cap, and report version. Every future version 6 source must be inspected and registered before reuse. Resume permits cap decrease only, rejects model-facing source drift, preserves all 15 prior attempts and complete Rowan results, and records mixed per-result Git provenance. The strongest three-agent, two-frame-retry, recovery, and full-audit regression passes at the reduced `$0.0405` cap. Focused strict gates passed 33 tests plus lint, typecheck, format check, and diff check.
 - 2026-07-20 report version 6 full non-live gate: `npm run check` and `npm audit` exited 0. Vitest passed 124 tests. Offline eval passed 14 invariant cases, 12 POV attacks, 1,000 simulations, 35 checkpoints, and the 350/no-351 horizon. Production build, 17 E2E tests with one intentional desktop skip, secret scan across 148 working files, client-bundle scan, 526 package licenses, and zero-vulnerability audit passed. Independent read-only review found no remaining resume, provenance, or cost-projection blocker.
+- 2026-07-20 prompt `1.4.9` version 6 resume command `npm run evals:live:full -- --prior-spend-usd 2.49105695 --chapter-cap-usd 0.0405 --resume-report evals/reports/live-full-sequential-prompt-1.4.9.json` exited 1 after three of twelve chapters. It retained both Rowan chapters and committed Elara chapter 1 at 970 words, `$0.03700975`, 27,572 ms, exact 12-chunk replay, approved audit, and empty leak list. Elara chapter 2 spent `$0.03383925`; its audit reservation needed `$0.007131` with `$0.006661` left. Run exposure was `$0.070849`; all preserved attempts total `$0.17457965`; cumulative conservative exposure is `$2.6656366`. Archived report: `evals/reports/live-full-sequential-prompt-1.4.9-resume-1.json`, SHA-256 `08c37ef8f4c7c9b3b7c6e7a9cc0382350a3aa0eee2dbdbe73abfd6330ca60f82`.
+- 2026-07-20 recovery audit: the version 6 pair-only resume has no legal single cap. Ten pending chapters require at most `$0.03343634`, but retained Rowan chapter 2 costs `$0.038406625`. Retaining valid Elara chapter 1 leaves nine pending chapters and `$0.037151489` average global headroom.
+- 2026-07-20 report version 7 implementation baseline: 51 focused policy, stable-adapter, durable-ledger, strict-report, atomic-checkpoint, and state-restore tests passed. Strict TypeScript passed. No API call ran. Version 7 reserves generation requests in a durable integer nano-USD SQLite ledger before transport, settles known usage before output validation, keeps unknown exposure, checkpoints reports atomically, retains contiguous prefixes, verifies restored state hashes, binds new results to the current cap, and preserves authenticated retained caps.
+- 2026-07-20 interruption review: explicit stale takeover now requires the exact old run ID, a dead recorded PID, and zero active reservations in one immediate transaction. It never mutates exposure. A live owner, wrong ID, active request, or source report omitting settled exposure fails closed. A fresh live chain can fold only the exact durable total into prior spend.
+- 2026-07-20 real-artifact probe: strict version 6 parsing and the version 2 checkpoint registry accepted report SHA-256 `08c37ef8f4c7c9b3b7c6e7a9cc0382350a3aa0eee2dbdbe73abfd6330ca60f82`. Four runtime bridge hashes matched. Resume retained `rowan-ashborn:1`, `rowan-ashborn:2`, and `elara-voss:1`; pending POVs are Elara, Maelin, Varek, Lucan, and Nyra. Replaying Elara's accepted delta restored chapter 1, world version 2, and the exact authenticated state-after hash. Zero API calls ran.
+- 2026-07-20 report version 7 full non-live gate: `npm run check` and `npm audit` exited 0. Vitest passed 141 tests across 14 files. All six offline gates passed with 14 invariant cases, 12 POV attacks, 1,000 simulations, 35 clock transitions, chapter 350 terminal, and chapter 351 blocked. Production build, 17 E2E tests with one intentional desktop skip, secret scan across 154 working files plus ignored reports and Git history, client-bundle scan, 526 package licenses, and zero-vulnerability audit passed with no lint warnings. Independent read-only review found no remaining accounting, prefix-restore, provenance, or recovery blocker.
 
 Add exact command, date, exit code, cost, and report path after every future milestone gate.

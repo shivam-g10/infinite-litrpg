@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import type { BetaResponseUsage } from "openai/resources/beta/responses/responses";
 import type { ResponseUsage } from "openai/resources/responses/responses";
 
@@ -17,9 +19,29 @@ export const DEFAULT_CHAPTER_COST_CAP_USD = 0.1;
 
 export interface RuntimePolicy {
   readonly budget: ChapterCostBudget;
+  readonly costHooks?: RuntimeCostHooks;
   readonly maxRetries?: number;
   readonly onAttempt?: (attempt: RuntimeAttempt) => void;
   readonly timeoutMs?: number;
+}
+
+export interface RuntimeCostReservation {
+  readonly agentId: string | null;
+  readonly attempt: number;
+  readonly id: string;
+  readonly maximumCostUsd: number;
+  readonly model: RuntimeModel;
+}
+
+export interface RuntimeCostSettlement {
+  readonly actualCostUsd: number;
+  readonly id: string;
+}
+
+export interface RuntimeCostHooks {
+  readonly markUncertain: (reservationId: string) => void;
+  readonly reserve: (reservation: RuntimeCostReservation) => void;
+  readonly settle: (settlement: RuntimeCostSettlement) => void;
 }
 
 export interface RuntimeAttempt {
@@ -157,6 +179,19 @@ export async function runRetriedRequest<TResponse, TData>({
     const reservedCostUsd =
       typeof maximumCostUsd === "function" ? await maximumCostUsd(attempt) : maximumCostUsd;
     policy.budget.reserve(reservedCostUsd);
+    const reservationId = randomUUID();
+    if (policy.costHooks) {
+      invokeCostHook(() =>
+        policy.costHooks?.reserve({
+          agentId,
+          attempt,
+          id: reservationId,
+          maximumCostUsd: reservedCostUsd,
+          model,
+        }),
+      );
+    }
+    let durableReservationActive = policy.costHooks !== undefined;
     let attemptCostUsd = reservedCostUsd;
     let attemptUsage = ZERO_USAGE;
     let responseId: string | null = null;
@@ -170,7 +205,19 @@ export async function runRetriedRequest<TResponse, TData>({
       attemptCostUsd = costUsd;
       aggregateUsage = addUsage(aggregateUsage, usage);
       aggregateCostUsd += costUsd - reservedCostUsd;
-      policy.budget.settleReservation(reservedCostUsd, costUsd);
+      let localSettlementError: unknown = null;
+      try {
+        policy.budget.settleReservation(reservedCostUsd, costUsd);
+      } catch (error) {
+        localSettlementError = error;
+      }
+      if (policy.costHooks) {
+        invokeCostHook(() =>
+          policy.costHooks?.settle({ actualCostUsd: costUsd, id: reservationId }),
+        );
+        durableReservationActive = false;
+      }
+      if (localSettlementError !== null) throw localSettlementError;
 
       const evaluated = await evaluate(response);
       policy.onAttempt?.({
@@ -192,7 +239,15 @@ export async function runRetriedRequest<TResponse, TData>({
         usage: aggregateUsage,
       };
     } catch (error) {
-      const runtimeError = asRuntimeError(error);
+      let runtimeError = asRuntimeError(error);
+      if (durableReservationActive && policy.costHooks) {
+        try {
+          invokeCostHook(() => policy.costHooks?.markUncertain(reservationId));
+          durableReservationActive = false;
+        } catch (hookError) {
+          runtimeError = asRuntimeError(hookError);
+        }
+      }
       policy.onAttempt?.({
         agentId,
         attempt,
@@ -208,6 +263,17 @@ export async function runRetriedRequest<TResponse, TData>({
   }
 
   throw new OpenAIRuntimeError("TRANSPORT_ERROR", "OpenAI retry loop ended unexpectedly");
+}
+
+function invokeCostHook(callback: () => void): void {
+  try {
+    callback();
+  } catch (error) {
+    if (error instanceof OpenAIRuntimeError) throw error;
+    throw new OpenAIRuntimeError("INVALID_POLICY", "Durable cost ledger operation failed", {
+      cause: error,
+    });
+  }
 }
 
 function validateMaxRetries(value: number): number {

@@ -77,9 +77,9 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 ### Phase 8: Build Week Submission
 
 - User-owned gates begin after repository is submission-ready.
-- [ ] README setup and architecture complete.
-- [ ] Screenshots and architecture diagram ready.
-- [ ] Demo script and capture path ready.
+- [x] README setup and architecture complete.
+- [x] Screenshots and architecture diagram ready.
+- [x] Demo script and capture path ready.
 - [ ] User approves six POV review packets.
 - [ ] User authorizes public repository push.
 - [ ] User records or approves public demo under three minutes.
@@ -126,6 +126,9 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 - The counted-reservation prompt `1.4.8` matrix baseline committed zero chapters. Its audit treated Rowan's explicitly supplied private reincarnation canon as hidden from his own viewpoint, returned no leaked fact ID, and blocked otherwise valid narration. Exact run exposure was `$0.0268884`; cumulative conservative exposure is `$2.49105695`. This establishes the regression baseline before prompt `1.4.9` clarifies that selected-POV private canon is narratable but cannot become another character's knowledge without a canonical effect.
 - Prompt `1.4.9` names the selected viewpoint's fact map as allowed POV canon. It permits exact restatements and faithful paraphrases of POV-private canon in internal close-third narration while requiring allowed current effects or visible events before another character can learn it; detection-only remote context never grants narration permission. A paired regression sends the same explicit reincarnation prose through Rowan and Elara contexts: Rowan's fact is allowed, Elara's is forbidden, and the hidden Void history stays forbidden. The strongest three-agent, two-frame-retry, narration-recovery, full-audit test passed at the original fresh-run `$0.0424` cap with conservative 1,400-token narration and 3,200-token audit counts; the same regression also passes the resumed `$0.0405` cap.
 - Prompt `1.4.9` passed both Rowan chapters at `$0.029751275` and `$0.038406625`. Elara chapter 1 then received contradictory audit evidence: POV safety scored zero while its evidence said supplied POV canon was used; continuity also scored zero and no leak ID was named. The strict gate rejected it. Total run exposure was `$0.10373065`; cumulative conservative exposure is `$2.5947876`. Same-cap recovery would project `$3.0187876`. Report version 6 therefore permits only a cap decrease and non-runtime source drift, preserves complete pairs with original trace SHAs, and requires every source artifact's full hash and metadata in the committed resume registry. Resuming ten chapters at `$0.0405` projects `$2.9997876`, leaving `$0.0002124`.
+- The version 6 resume committed Elara chapter 1 at `$0.03700975`. Elara chapter 2 spent `$0.03383925`, then its audit reservation missed the chapter cap by `$0.000470`. Total attempts are `$0.17457965`; cumulative conservative exposure is `$2.6656366`. Pair-only recovery is now mathematically impossible: ten pending chapters require a cap at most `$0.03343634`, while retained Rowan chapter 2 requires at least `$0.038406625`.
+- ADR-011 introduces report version 7. It retains authenticated contiguous prefixes, reconstructs Elara chapter 1 state from the accepted trace, preserves mixed source caps, and makes an integer nano-USD SQLite request ledger authoritative. Each generation reservation commits before transport; known usage settles before validation; unknown usage and crashes keep full exposure. Atomic report checkpoints preserve every committed chapter.
+- Durable recovery now distinguishes safe and unsafe interruption. A dead process with zero active reservations can transfer its exact run lock, then must reconcile the source report before any call. An active reservation remains an external stop. All live suites share the ledger; a fresh chain can start only by folding the exact durable total into its new prior spend.
 
 ## Decision Log
 
@@ -138,11 +141,13 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 - ADR-009 permits one bounded Luna continuation only for an otherwise-valid 840-to-899-word Terra draft. It does not weaken the absolute 900-to-1,300-word gate.
 - ADR-010 permits official input-token counting to narrow a byte reservation. Failed counting keeps the byte bound. Actual overrun aborts before commit with exact accounting.
 - Prompt `1.4.9` distinguishes reader access to selected-POV private canon from an in-world knowledge transfer. It does not auto-approve empty leak lists or weaken forbidden fact and remote-effect checks.
+- ADR-011 replaces pair-only live recovery and static suite rejection with authenticated prefix recovery plus durable request-level global reservations. Static projection stays visible but cannot reclaim or spend exposure.
+- Version 7 authenticates each retained result's source cap. Every new result cap must equal the current run cap; mixed caps cannot be forged to pass the cost gate.
 
 ## Outcomes and Retrospective
 
-- Phases 1 through 4 and Phase 6 are implemented. Offline contracts, deterministic transitions, knowledge boundaries, atomic storage, both OpenAI adapters, and the product UI are green. Phase 5 has green live smoke and awaits the twelve-cycle release run.
+- Phases 1 through 4 and Phase 6 are implemented. Offline contracts, deterministic transitions, knowledge boundaries, atomic storage, both OpenAI adapters, product UI, README, architecture, screenshots, and demo path are green. Phase 5 has green live smoke and awaits the complete twelve-cycle release report.
 
 ## Current Milestone
 
-Phase 5 release eval: checkpoint the report version 6 harness-only resume bridge, then retain the two valid Rowan chapters and run the remaining ten prompt `1.4.9` cycles at `$0.0405` per chapter. Conservative prior exposure is `$2.49105695`; preserved attempts cost `$0.10373065`; projected worst-case cumulative exposure is `$2.9997876`, leaving `$0.0002124` below the POC cap.
+Phase 5 release eval: finish and commit report version 7 with the durable request ledger and authenticated prefix restore. Then retain Rowan chapters 1 and 2 plus Elara chapter 1 and run the remaining nine prompt `1.4.9` chapters at `$0.0424` per chapter. Conservative opening exposure is `$2.6656366`; every new provider request must reserve inside the remaining `$0.3343634` global headroom.

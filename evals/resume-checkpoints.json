@@ -2,7 +2,24 @@
   "checkpoints": [
     {
       "adapterMode": "sequential",
-      "bridgeRunnerSha256": "e91a2f958841468a96410183af1037a1bfeb7e359c24a7f00fd06ca26805549f",
+      "bridgeFiles": [
+        {
+          "path": "app/src/server/openai/policy.ts",
+          "sha256": "7845d6363fc112154522e48c94ed763a153e7f56581e7d3b77696595543e7f7f"
+        },
+        {
+          "path": "app/src/server/story/story-service.ts",
+          "sha256": "c35fefd84e0a232445b66c174f3384d25ae73001cec30b82b7337a8f6ccd3739"
+        },
+        {
+          "path": "evals/live-spend-ledger.ts",
+          "sha256": "49892cd9f0995f887e85173daa487e95dbd8865ca604e6ff2736d4aa3ceee910"
+        },
+        {
+          "path": "evals/run-live.ts",
+          "sha256": "d86274d12664379b71b11256493716702319396af16d79603a97ae845ca8bb7b"
+        }
+      ],
       "chapterCostCapUsd": 0.0424,
       "id": "prompt-1-4-9-rowan-pair",
       "priorSpendUsd": 2.49105695,
@@ -10,7 +27,35 @@
       "reportSha256": "2e83070e4edfeef14fc9e91c2683090d78636551f736f63898b7521ad32f093a",
       "reportVersion": 5,
       "sourceGitSha": "8ceac05c57960388238cb1161ac140178c6e335a"
+    },
+    {
+      "adapterMode": "sequential",
+      "bridgeFiles": [
+        {
+          "path": "app/src/server/openai/policy.ts",
+          "sha256": "7845d6363fc112154522e48c94ed763a153e7f56581e7d3b77696595543e7f7f"
+        },
+        {
+          "path": "app/src/server/story/story-service.ts",
+          "sha256": "c35fefd84e0a232445b66c174f3384d25ae73001cec30b82b7337a8f6ccd3739"
+        },
+        {
+          "path": "evals/live-spend-ledger.ts",
+          "sha256": "49892cd9f0995f887e85173daa487e95dbd8865ca604e6ff2736d4aa3ceee910"
+        },
+        {
+          "path": "evals/run-live.ts",
+          "sha256": "d86274d12664379b71b11256493716702319396af16d79603a97ae845ca8bb7b"
+        }
+      ],
+      "chapterCostCapUsd": 0.0405,
+      "id": "prompt-1-4-9-elara-prefix",
+      "priorSpendUsd": 2.49105695,
+      "promptVersion": "1.4.9",
+      "reportSha256": "08c37ef8f4c7c9b3b7c6e7a9cc0382350a3aa0eee2dbdbe73abfd6330ca60f82",
+      "reportVersion": 6,
+      "sourceGitSha": "e07983ca62b9ba9d67c5f89b8bafdd7d91874ed9"
     }
   ],
-  "version": 1
+  "version": 2
 }

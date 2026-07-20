@@ -1,4 +1,7 @@
 import { createHash } from "node:crypto";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
   CHARACTER_IDS,
@@ -11,12 +14,14 @@ import { describe, expect, it } from "vitest";
 import {
   LegacyLiveReportSchema,
   LiveReportSchema,
+  Version6LiveReportSchema,
   assertRegisteredResumeCheckpoint,
   assertResumeHarnessPaths,
   hasExactFullMatrix,
   prepareResume,
   projectedCumulativeCostUsd,
   resultTraceCostMatches,
+  writeAtomicJson,
   type LiveReport,
   type LiveResult,
   type ResumeRequirements,
@@ -31,18 +36,38 @@ const REQUIREMENTS: ResumeRequirements = {
   sourceGitSha: GIT_SHA,
 };
 
-describe("live report version 6", () => {
+describe("live report version 7", () => {
+  it("atomically replaces a checkpoint and preserves it when serialization fails", () => {
+    const directory = mkdtempSync(join(tmpdir(), "infinite-litrpg-report-"));
+    const filename = join(directory, "live.json");
+    try {
+      writeAtomicJson(filename, { checkpoint: 1 });
+      writeAtomicJson(filename, { checkpoint: 2 });
+      expect(JSON.parse(readFileSync(filename, "utf8"))).toEqual({ checkpoint: 2 });
+      expect(readdirSync(directory)).toEqual(["live.json"]);
+
+      const cyclic: { self?: unknown } = {};
+      cyclic.self = cyclic;
+      expect(() => writeAtomicJson(filename, cyclic)).toThrow();
+      expect(JSON.parse(readFileSync(filename, "utf8"))).toEqual({ checkpoint: 2 });
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
   it("strictly parses current data and keeps a strict legacy parser", () => {
     const candidate = emptyReportData();
+    const version6 = emptyVersion6ReportData();
 
     expect(LiveReportSchema.safeParse(candidate).success).toBe(true);
     expect(LiveReportSchema.safeParse({ ...candidate, unexpected: true }).success).toBe(false);
     expect(LiveReportSchema.safeParse({ ...candidate, version: 5 }).success).toBe(false);
-    expect(LegacyLiveReportSchema.safeParse({ ...candidate, version: 5 }).success).toBe(true);
+    expect(Version6LiveReportSchema.safeParse(version6).success).toBe(true);
+    expect(LegacyLiveReportSchema.safeParse({ ...version6, version: 5 }).success).toBe(true);
     expect(LiveReportSchema.safeParse({ ...candidate, version: 4 }).success).toBe(false);
   });
 
-  it("retains only exact chapter pairs while preserving every old attempt and rejection", () => {
+  it("retains contiguous chapter prefixes while preserving every old attempt and rejection", () => {
     const attempts = [{ costUsd: 0.08 }, { costUsd: 0.11 }] as LiveReport["attempts"];
     const auditRejections = [{ marker: "audit" }] as unknown as LiveReport["auditRejections"];
     const draftRejections = [{ marker: "draft" }] as unknown as LiveReport["draftRejections"];
@@ -60,10 +85,11 @@ describe("live report version 6", () => {
     expect(prepared.retainedResults.map(({ povId, chapter }) => [povId, chapter])).toEqual([
       ["rowan-ashborn", 1],
       ["rowan-ashborn", 2],
+      ["elara-voss", 1],
     ]);
-    expect(prepared.retainedPovIds).toEqual(["rowan-ashborn"]);
+    expect(prepared.retainedPovIds).toEqual(["rowan-ashborn", "elara-voss"]);
     expect(prepared.pendingPovIds).toEqual(CHARACTER_IDS.slice(1));
-    expect(prepared.discardedResultCount).toBe(1);
+    expect(prepared.discardedResultCount).toBe(0);
     expect(prepared.attempts).toEqual(attempts);
     expect(prepared.auditRejections).toEqual(auditRejections);
     expect(prepared.draftRejections).toEqual(draftRejections);
@@ -88,9 +114,7 @@ describe("live report version 6", () => {
       "prior spend",
     );
     expect(prepareResume(report, { ...REQUIREMENTS, chapterCostCapUsd: 0.05 })).toBeDefined();
-    expect(() => prepareResume(report, { ...REQUIREMENTS, chapterCostCapUsd: 0.07 })).toThrow(
-      "cannot increase",
-    );
+    expect(prepareResume(report, { ...REQUIREMENTS, chapterCostCapUsd: 0.07 })).toBeDefined();
     expect(() =>
       prepareResume(report, { ...REQUIREMENTS, adapterMode: "native-multi-agent" }),
     ).toThrow("adapter");
@@ -113,18 +137,33 @@ describe("live report version 6", () => {
     expect(() => prepareResume(report, REQUIREMENTS)).toThrow("prose hash");
   });
 
-  it("revalidates retained results under a decreased cap", () => {
-    const report = fakeReport([
-      fakeResult("rowan-ashborn", 1, 0.029751275),
-      fakeResult("rowan-ashborn", 2, 0.038406625),
-    ]);
-
-    expect(
-      prepareResume(report, { ...REQUIREMENTS, chapterCostCapUsd: 0.0405 }).retainedPovIds,
-    ).toEqual(["rowan-ashborn"]);
-    expect(() => prepareResume(report, { ...REQUIREMENTS, chapterCostCapUsd: 0.0384 })).toThrow(
-      "exceeded cap",
+  it("keeps each retained result under its authenticated source cap", () => {
+    const report = fakeReport(
+      [fakeResult("rowan-ashborn", 1, 0.029751275), fakeResult("rowan-ashborn", 2, 0.038406625)],
+      {
+        resultChapterCaps: [
+          { capUsd: 0.03, chapter: 1, povId: "rowan-ashborn" },
+          { capUsd: 0.04, chapter: 2, povId: "rowan-ashborn" },
+        ],
+      },
     );
+
+    const prepared = prepareResume(report, { ...REQUIREMENTS, chapterCostCapUsd: 0.0424 });
+    expect(prepared.retainedPovIds).toEqual(["rowan-ashborn"]);
+    expect(prepared.retainedResultCaps.map(({ capUsd }) => capUsd)).toEqual([0.03, 0.04]);
+
+    expect(() =>
+      prepareResume(
+        {
+          ...report,
+          resultChapterCaps: [
+            { capUsd: 0.03, chapter: 1, povId: "rowan-ashborn" },
+            { capUsd: 0.0384, chapter: 2, povId: "rowan-ashborn" },
+          ],
+        },
+        REQUIREMENTS,
+      ),
+    ).toThrow("exceeded cap");
   });
 
   it("allows only audited harness and documentation drift", () => {
@@ -136,7 +175,9 @@ describe("live report version 6", () => {
       ]),
     ).not.toThrow();
     expect(() => assertResumeHarnessPaths(["evals/run-live.ts"])).toThrow("runtime path");
-    expect(() => assertResumeHarnessPaths(["evals/run-live.ts"], true)).not.toThrow();
+    expect(() =>
+      assertResumeHarnessPaths(["evals/run-live.ts"], ["evals/run-live.ts"]),
+    ).not.toThrow();
     expect(() => assertResumeHarnessPaths(["app/src/server/story/prompts.ts"])).toThrow(
       "runtime path",
     );
@@ -144,10 +185,10 @@ describe("live report version 6", () => {
 
   it("pins every resume artifact to the committed checkpoint registry", () => {
     const reportSha256 = "2e83070e4edfeef14fc9e91c2683090d78636551f736f63898b7521ad32f093a";
-    const bridgeRunnerSha256 = "d".repeat(64);
+    const bridgeSha256 = "d".repeat(64);
     const sourceGitSha = "8ceac05c57960388238cb1161ac140178c6e335a";
     const legacy = LegacyLiveReportSchema.parse({
-      ...emptyReportData(),
+      ...emptyVersion6ReportData(),
       chapterCostCapUsd: 0.0424,
       cumulativeCostUsd: 2.49105695,
       priorSpendUsd: 2.49105695,
@@ -158,7 +199,7 @@ describe("live report version 6", () => {
       checkpoints: [
         {
           adapterMode: "sequential",
-          bridgeRunnerSha256,
+          bridgeFiles: [{ path: "evals/run-live.ts", sha256: bridgeSha256 }],
           chapterCostCapUsd: 0.0424,
           id: "prompt-1-4-9-rowan-pair",
           priorSpendUsd: 2.49105695,
@@ -168,23 +209,23 @@ describe("live report version 6", () => {
           sourceGitSha,
         },
       ],
-      version: 1,
+      version: 2,
     };
+    const currentFileHashes = { "evals/run-live.ts": bridgeSha256 };
 
-    expect(() => assertRegisteredResumeCheckpoint(legacy, reportSha256)).not.toThrow();
     expect(() =>
-      assertRegisteredResumeCheckpoint(legacy, reportSha256, registry, bridgeRunnerSha256),
+      assertRegisteredResumeCheckpoint(legacy, reportSha256, registry, currentFileHashes),
     ).not.toThrow();
     expect(() =>
-      assertRegisteredResumeCheckpoint(legacy, "0".repeat(64), registry, bridgeRunnerSha256),
+      assertRegisteredResumeCheckpoint(legacy, "0".repeat(64), registry, currentFileHashes),
     ).toThrow("committed checkpoint registry");
-    const versionFlip = LiveReportSchema.parse({
+    const versionFlip = Version6LiveReportSchema.parse({
       ...legacy,
       projectedMaximumCumulativeCostUsd: 2.99985695,
       version: 6,
     });
     expect(() =>
-      assertRegisteredResumeCheckpoint(versionFlip, reportSha256, registry, bridgeRunnerSha256),
+      assertRegisteredResumeCheckpoint(versionFlip, reportSha256, registry, currentFileHashes),
     ).toThrow("committed checkpoint registry");
     expect(() =>
       assertRegisteredResumeCheckpoint(
@@ -194,7 +235,7 @@ describe("live report version 6", () => {
           ...registry,
           checkpoints: [{ ...registry.checkpoints[0], sourceGitSha: GIT_SHA }],
         },
-        bridgeRunnerSha256,
+        currentFileHashes,
       ),
     ).toThrow("committed checkpoint registry");
     expect(() =>
@@ -205,12 +246,14 @@ describe("live report version 6", () => {
           ...registry,
           checkpoints: [...registry.checkpoints, registry.checkpoints[0]],
         },
-        bridgeRunnerSha256,
+        currentFileHashes,
       ),
     ).toThrow("Resume checkpoint IDs and report hashes must be unique");
     expect(() =>
-      assertRegisteredResumeCheckpoint(legacy, reportSha256, registry, "e".repeat(64)),
-    ).toThrow("audited content hash");
+      assertRegisteredResumeCheckpoint(legacy, reportSha256, registry, {
+        "evals/run-live.ts": "e".repeat(64),
+      }),
+    ).toThrow("audited hash");
   });
 
   it("parses declared mixed Git provenance and rejects an unlisted result SHA", () => {
@@ -224,18 +267,45 @@ describe("live report version 6", () => {
     const candidate = {
       ...emptyReportData(),
       attempts,
+      budgetLedger: {
+        activeReservationCount: 0,
+        baselineAttemptCostUsd: 0.02,
+        headroomUsd: 0.97,
+        knownReservationCostUsd: 0.01,
+        priorSpendUsd: 2,
+        sourceReportSha256: "c".repeat(64),
+        totalCapUsd: 3,
+        totalExposureUsd: 2.03,
+        uncertainReservationCostUsd: 0,
+      },
       completedChapters: results.length,
       cumulativeCostUsd: 2.03,
       projectedMaximumCumulativeCostUsd: 2.62,
+      resultChapterCaps: results.map(({ chapter, povId }) => ({
+        capUsd: 0.06,
+        chapter,
+        povId,
+      })),
       results,
       resume: {
+        bridgeFiles: [{ path: "evals/run-live.ts", sha256: "d".repeat(64) }],
         changedPaths: ["evals/run-live.ts"],
         discardedResultCount: 0,
         existingAttemptCostUsd: 0.02,
         retainedPovIds: ["rowan-ashborn"],
-        retainedResultGitShas: [
-          { chapter: 1, povId: "rowan-ashborn", sourceGitSha: GIT_SHA },
-          { chapter: 2, povId: "rowan-ashborn", sourceGitSha: GIT_SHA },
+        retainedResults: [
+          {
+            chapter: 1,
+            povId: "rowan-ashborn",
+            sourceChapterCapUsd: 0.06,
+            sourceGitSha: GIT_SHA,
+          },
+          {
+            chapter: 2,
+            povId: "rowan-ashborn",
+            sourceChapterCapUsd: 0.06,
+            sourceGitSha: GIT_SHA,
+          },
         ],
         sourceChapterCostCapUsd: 0.06,
         sourceGitSha: GIT_SHA,
@@ -255,6 +325,26 @@ describe("live report version 6", () => {
       ),
     };
     expect(LiveReportSchema.safeParse(tampered).success).toBe(false);
+    const inflatedNewResultCap = {
+      ...candidate,
+      resultChapterCaps: candidate.resultChapterCaps.map((entry, index) =>
+        index === 2 ? { ...entry, capUsd: 0.1 } : entry,
+      ),
+    };
+    expect(LiveReportSchema.safeParse(inflatedNewResultCap).success).toBe(false);
+    const inflatedRetainedCap = {
+      ...candidate,
+      resultChapterCaps: candidate.resultChapterCaps.map((entry, index) =>
+        index === 0 ? { ...entry, capUsd: 0.1 } : entry,
+      ),
+    };
+    expect(LiveReportSchema.safeParse(inflatedRetainedCap).success).toBe(false);
+    expect(
+      LiveReportSchema.safeParse({
+        ...candidate,
+        budgetLedger: { ...candidate.budgetLedger, sourceReportSha256: "e".repeat(64) },
+      }).success,
+    ).toBe(false);
   });
 });
 
@@ -291,6 +381,18 @@ function emptyReportData(): Record<string, unknown> {
     adapterMode: "sequential",
     attempts: [],
     auditRejections: [],
+    budgetLedger: {
+      activeReservationCount: 0,
+      baselineAttemptCostUsd: 0,
+      headroomUsd: 1,
+      knownReservationCostUsd: 0,
+      priorSpendUsd: REQUIREMENTS.priorSpendUsd,
+      sourceReportSha256: `fresh:${GIT_SHA}`,
+      totalCapUsd: 3,
+      totalExposureUsd: REQUIREMENTS.priorSpendUsd,
+      uncertainReservationCostUsd: 0,
+    },
+    budgetMode: "durable-request-reservations",
     chapterCostCapUsd: REQUIREMENTS.chapterCostCapUsd,
     completedChapters: 0,
     cumulativeCostUsd: REQUIREMENTS.priorSpendUsd,
@@ -313,6 +415,7 @@ function emptyReportData(): Record<string, unknown> {
     priorSpendUsd: REQUIREMENTS.priorSpendUsd,
     projectedMaximumCumulativeCostUsd: 2.72,
     promptVersion: PROMPT_VERSION,
+    resultChapterCaps: [],
     results: [],
     resume: null,
     sourceGitSha: GIT_SHA,
@@ -320,13 +423,26 @@ function emptyReportData(): Record<string, unknown> {
     suite: "full",
     totalCostCapUsd: 3,
     totalCostUsd: 0,
-    version: 6,
+    version: 7,
   };
+}
+
+function emptyVersion6ReportData(): Record<string, unknown> {
+  const report = { ...emptyReportData() };
+  delete report.budgetLedger;
+  delete report.budgetMode;
+  delete report.resultChapterCaps;
+  return { ...report, version: 6 };
 }
 
 function fakeReport(results: LiveResult[], overrides: Partial<LiveReport> = {}): LiveReport {
   return {
     ...emptyReportData(),
+    resultChapterCaps: results.map(({ chapter, povId }) => ({
+      capUsd: REQUIREMENTS.chapterCostCapUsd,
+      chapter,
+      povId,
+    })),
     ...overrides,
     completedChapters: results.length,
     results,

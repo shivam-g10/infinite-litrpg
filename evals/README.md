@@ -8,22 +8,32 @@ Evals define completion. Implement runner before live prompt work.
 - `npm run evals:live:smoke`: smallest capped API suite.
 - `npm run evals:live:full`: release-only live suite with explicit cost confirmation.
 
-Live runs accept `--prior-spend-usd` and `--chapter-cap-usd`. The runner rejects a suite when prior spend plus every configured chapter ceiling could exceed the cumulative `$3` POC cap. Report version 6 records prior spend, projected maximum, exact cumulative generation-attempt cost, attempt phase, audit rejections, deterministic draft rejections, approved prose, prompt version, per-result Git provenance, source-report hash, changed harness paths, and adapter checkpoint.
+Live runs accept `--prior-spend-usd` and `--chapter-cap-usd`. Report version 7 records prior spend, the static worst-case projection, exact cumulative generation-attempt exposure, attempt phase, audit rejections, deterministic draft rejections, approved prose, prompt version, per-result Git and chapter-cap provenance, source-report hash, bridge hashes, and adapter checkpoint.
+
+The static projection stays visible even when it exceeds `$3`; it is not the authority after a partial run. The durable SQLite ledger at ignored `evals/reports/live-spend-ledger.db` is authoritative. It reserves every generation request before provider transport and rejects a request that could take cumulative local exposure above `$3`. Returned usage settles to estimated actual cost before response validation. A timeout, transport failure, or interrupted process keeps the full reservation.
+
+All live suites share this ledger. Do not run an unrelated smoke while a release resume chain is open. After a chain closes, a fresh suite may start only when `--prior-spend-usd` exactly equals the ledger's current total exposure; the ledger then folds that total into the new prior without reclaiming spend.
 
 ```powershell
 npm run evals:live:smoke -- --prior-spend-usd 1.25 --chapter-cap-usd 0.10
 npm run evals:live:full -- --prior-spend-usd 1.30 --chapter-cap-usd 0.09
 ```
 
-A full run requires a clean committed worktree. A failed version 6 run can resume with the same prior spend, adapter, and prompt version. The chapter cap may stay fixed or decrease, never increase. Current HEAD must equal the source checkpoint or differ only in committed non-runtime tests and release documentation; the one version 5 bridge also permits its audited runner migration. Resume keeps all old attempt cost and rejections, retains only complete chapter 1 and 2 POV pairs with their original trace SHAs, and reruns every incomplete POV from chapter 1. Every source report must exactly match a full-file SHA-256 and metadata entry in tracked `evals/resume-checkpoints.json`. Inspect and register a failed version 6 report before another resume; never auto-resume an unregistered artifact.
+A full run requires a clean committed worktree. A failed version 5, 6, or 7 run can resume only with the same prior spend, adapter, and prompt version. Version 7 authenticates and retains each contiguous chapter prefix. A retained chapter keeps its original Git SHA and source cap; a new chapter uses the current run cap. Chapter 1 state is reconstructed from the seed fixture, player intent, accepted delta, and both trace state hashes before chapter 2 runs.
+
+Current HEAD must equal the source checkpoint or differ only in committed non-runtime tests and release documentation. A legacy bridge additionally requires the exact audited hashes of every changed runtime file. Every source report must match a full-file SHA-256 and metadata entry in tracked `evals/resume-checkpoints.json`. Inspect and register each failed report before another resume. Never auto-resume an unregistered artifact.
 
 ```powershell
-npm run evals:live:full -- --prior-spend-usd 2.49105695 --chapter-cap-usd 0.0405 --resume-report evals/reports/live-full-sequential-prompt-1.4.9.json
+npm run evals:live:full -- --prior-spend-usd 2.49105695 --chapter-cap-usd 0.0424 --resume-report evals/reports/live-full-sequential-prompt-1.4.9-resume-1.json
 ```
 
 Runner must load root `.env`, redact secrets, write reports under ignored `evals/reports/`, and return nonzero on gate failure.
 
 Cost gates cover estimated Responses generation exposure from returned usage. The input-token counting endpoint returns token counts, not usage or cost, so count-request billing is not represented in this local ledger. Provider-bill reconciliation requires organization usage access.
+
+An interrupted provider request deliberately leaves the ledger locked. Do not delete the database or clear the lock. Reconcile the provider request first; without organization usage access, the full reservation remains spent.
+
+If the recorded process is dead and the ledger has zero active provider reservations, rerun the exact resume command with `--recover-stale-run <run-id>`. The lock error supplies the run ID. Recovery atomically transfers only the lock; it never changes exposure. Source-report reconciliation still runs before any provider request. A live owner, wrong run ID, active reservation, or omitted settled exposure fails closed.
 
 ## Gates
 

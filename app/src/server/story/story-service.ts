@@ -44,6 +44,7 @@ import {
   type LunaCallSummary,
   type RuntimeAttempt,
   type RuntimeCallResult,
+  type RuntimeCostHooks,
   type RuntimeUsage,
 } from "../openai";
 import { StaleWorldVersionError, StoryStore } from "../storage/story-store";
@@ -61,6 +62,7 @@ import {
 const WORLD_ID = "ashen-crown-v1";
 
 export interface StoryServiceOptions {
+  readonly costHooks?: RuntimeCostHooks;
   readonly maxBackgroundAgents: number;
   readonly maxCostUsdPerChapter: number;
   readonly nativeMultiAgent: boolean;
@@ -195,6 +197,7 @@ export class StoryService {
     let attemptPhase: TraceEnvelope["attempts"][number]["phase"] = "intent";
     const policy = {
       budget,
+      ...(this.options.costHooks === undefined ? {} : { costHooks: this.options.costHooks }),
       maxRetries: 2,
       onAttempt: (attempt: RuntimeAttempt) => {
         const tracedAttempt = { ...attempt, phase: attemptPhase };

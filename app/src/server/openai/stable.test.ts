@@ -218,6 +218,7 @@ describe("stable Responses adapter", () => {
   it("rejects actual usage above a counted reservation", async () => {
     const count = vi.fn().mockResolvedValue(countResponse(1));
     const onAttempt = vi.fn();
+    const settle = vi.fn();
     const parse = vi.fn().mockResolvedValue(
       parsedResponse(
         { answer: "under-counted" },
@@ -234,7 +235,12 @@ describe("stable Responses adapter", () => {
     );
     const request = structuredRequest({ maxRetries: 0 });
     request.input = "x".repeat(5_000);
-    request.policy = { budget: new ChapterCostBudget(0.005), maxRetries: 0, onAttempt };
+    request.policy = {
+      budget: new ChapterCostBudget(0.005),
+      costHooks: { markUncertain: vi.fn(), reserve: vi.fn(), settle },
+      maxRetries: 0,
+      onAttempt,
+    };
 
     await expectRuntimeError(
       runStructuredResponse(stableClient({ count, parse }), request),
@@ -242,6 +248,7 @@ describe("stable Responses adapter", () => {
     );
     expect(parse).toHaveBeenCalledTimes(1);
     expect(request.policy.budget.spentUsd).toBeCloseTo(0.00655, 10);
+    expect(settle).toHaveBeenCalledWith(expect.objectContaining({ actualCostUsd: 0.00655 }));
     expect(onAttempt).toHaveBeenCalledWith(
       expect.objectContaining({
         costUsd: 0.00655,
