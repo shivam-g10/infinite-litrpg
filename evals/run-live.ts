@@ -12,6 +12,7 @@ import {
   ChapterRecordSchema,
   ChapterFrameSchema,
   IdSchema,
+  ModelCallTraceSchema,
   NarrativeAuditCandidateSchema,
   NarrativeAuditSchema,
   PlayerActionSchema,
@@ -19,6 +20,7 @@ import {
   PROMPT_VERSION,
   RUNTIME_SCHEMA_VERSION,
   RuntimeAttemptTraceSchema,
+  RuntimeServiceTierSchema,
   TraceEnvelopeSchema,
   UsageSchema,
   VALIDATION_CODES,
@@ -34,18 +36,24 @@ import {
   type ChapterRecord,
   type CharacterId,
   type Choice,
+  type RuntimeServiceTier,
   type WorldState,
 } from "@infinite-litrpg/shared";
 import OpenAI from "openai";
 import { z } from "zod";
 
 import { OpenAIRuntimeError } from "../app/src/server/openai/errors";
+import { pricingVersionForServiceTier } from "../app/src/server/openai/usage";
 import {
   StoryService,
   canonicalizeNarrativeAuditOutput,
 } from "../app/src/server/story/story-service";
 import { StoryStore } from "../app/src/server/storage/story-store";
 import { LiveSpendLedger, type LiveSpendSnapshot } from "./live-spend-ledger";
+import {
+  assertPrompt1411FullMatrixFits,
+  projectPrompt1411FullMatrixCostUsd,
+} from "./live-cost-projection";
 
 const ROOT = process.cwd();
 const REPORT_DIRECTORY = resolve(ROOT, "evals", "reports");
@@ -57,7 +65,8 @@ const TOTAL_CAP_USD = 3;
 const LEGACY_REPORT_VERSION = 5;
 const VERSION_6_REPORT_VERSION = 6;
 const VERSION_7_REPORT_VERSION = 7;
-const REPORT_VERSION = 8;
+const VERSION_8_REPORT_VERSION = 8;
+const REPORT_VERSION = 9;
 const MONEY_EPSILON_USD = 0.000_000_1;
 const RESUME_NON_RUNTIME_PATHS = new Set([
   "app/src/server/openai/stable.test.ts",
@@ -101,8 +110,10 @@ const ResumeCheckpointRegistrySchema = z
               z.literal(LEGACY_REPORT_VERSION),
               z.literal(VERSION_6_REPORT_VERSION),
               z.literal(VERSION_7_REPORT_VERSION),
+              z.literal(VERSION_8_REPORT_VERSION),
               z.literal(REPORT_VERSION),
             ]),
+            serviceTier: RuntimeServiceTierSchema.default("standard"),
             sourceGitSha: GitShaSchema,
           })
           .strict(),
@@ -283,6 +294,34 @@ export const LiveResultSchema = z
     }
   });
 
+const CurrentRuntimeAttemptTraceSchema = RuntimeAttemptTraceSchema.and(
+  z
+    .object({
+      requestedServiceTier: RuntimeServiceTierSchema,
+      serviceTier: RuntimeServiceTierSchema.nullable(),
+    })
+    .passthrough(),
+);
+const CurrentModelCallTraceSchema = ModelCallTraceSchema.and(
+  z
+    .object({
+      requestedServiceTier: RuntimeServiceTierSchema,
+      serviceTier: RuntimeServiceTierSchema,
+    })
+    .passthrough(),
+);
+const CurrentPersistedTraceEnvelopeSchema = PersistedTraceEnvelopeSchema.and(
+  z
+    .object({
+      attempts: z.array(CurrentRuntimeAttemptTraceSchema).max(1_000),
+      calls: z.array(CurrentModelCallTraceSchema).min(1).max(12),
+    })
+    .passthrough(),
+);
+const CurrentLiveResultSchema = LiveResultSchema.and(
+  z.object({ trace: CurrentPersistedTraceEnvelopeSchema }).passthrough(),
+);
+
 const GateSchema = z
   .object({
     allAuditsApproved: z.boolean(),
@@ -299,6 +338,10 @@ const GateSchema = z
 
 const Version8GateSchema = GateSchema.extend({
   narrativeEvidenceComplete: z.boolean(),
+}).strict();
+
+const Version9GateSchema = Version8GateSchema.extend({
+  serviceTierEvidenceComplete: z.boolean(),
 }).strict();
 
 const BaseLiveReportSchema = z
@@ -524,7 +567,7 @@ const Version8ResumeSchema = Version7ResumeSchema.omit({ sourceReportVersion: tr
       z.literal(LEGACY_REPORT_VERSION),
       z.literal(VERSION_6_REPORT_VERSION),
       z.literal(VERSION_7_REPORT_VERSION),
-      z.literal(REPORT_VERSION),
+      z.literal(VERSION_8_REPORT_VERSION),
     ]),
   })
   .strict();
@@ -552,6 +595,9 @@ const RuntimeAttemptEvidenceSchema = z
     turn: TurnIdentitySchema,
   })
   .strict();
+const CurrentRuntimeAttemptEvidenceSchema = RuntimeAttemptEvidenceSchema.and(
+  z.object({ attempt: CurrentRuntimeAttemptTraceSchema }).passthrough(),
+);
 const NarrativeRecoveryEvidenceSchema = z
   .object({
     accepted: z.boolean(),
@@ -816,15 +862,17 @@ export const NarrativeCandidateEvidenceSchema = z
 
 const NarrativeEvidenceSidecarSchema = z
   .object({
-    attempts: z.array(RuntimeAttemptTraceSchema).max(1_000),
+    attempts: z.array(CurrentRuntimeAttemptTraceSchema).max(1_000),
     candidates: z.array(NarrativeCandidateEvidenceSchema).max(100),
     liveRunId: z.string().uuid(),
     narrativeResponses: z.array(NarrativeResponseEvidenceSchema).max(500),
+    pricingVersion: z.string().min(1).max(240),
     promptVersion: z.literal(PROMPT_VERSION),
     reportVersion: z.literal(REPORT_VERSION),
     runtimeEvidenceStartAttemptIndex: z.number().int().min(0).max(1_000),
     runtimeSchemaVersion: z.literal(RUNTIME_SCHEMA_VERSION),
-    runtimeAttemptEvidence: z.array(RuntimeAttemptEvidenceSchema).max(1_000),
+    runtimeAttemptEvidence: z.array(CurrentRuntimeAttemptEvidenceSchema).max(1_000),
+    serviceTier: RuntimeServiceTierSchema,
     sourceGitSha: GitShaSchema,
     updatedAt: z.string().datetime(),
   })
@@ -839,7 +887,7 @@ export const Version7LiveReportSchema = BaseLiveReportSchema.extend({
   version: z.literal(VERSION_7_REPORT_VERSION),
 }).superRefine(refineDurableReport);
 
-export const LiveReportSchema = BaseLiveReportSchema.extend({
+export const Version8LiveReportSchema = BaseLiveReportSchema.extend({
   budgetLedger: LiveSpendSnapshotSchema,
   budgetMode: z.literal("durable-request-reservations"),
   gates: Version8GateSchema,
@@ -850,20 +898,60 @@ export const LiveReportSchema = BaseLiveReportSchema.extend({
   resultChapterCaps: z.array(ResultChapterCapSchema).max(12),
   resume: Version8ResumeSchema.nullable(),
   sourceGitSha: GitShaSchema,
+  version: z.literal(VERSION_8_REPORT_VERSION),
+}).superRefine(refineDurableReport);
+
+const Version9ResumeSchema = Version8ResumeSchema.omit({ sourceReportVersion: true })
+  .extend({
+    sourceReportVersion: z.union([
+      z.literal(LEGACY_REPORT_VERSION),
+      z.literal(VERSION_6_REPORT_VERSION),
+      z.literal(VERSION_7_REPORT_VERSION),
+      z.literal(VERSION_8_REPORT_VERSION),
+      z.literal(REPORT_VERSION),
+    ]),
+  })
+  .strict();
+
+export const LiveReportSchema = BaseLiveReportSchema.extend({
+  attempts: z.array(CurrentRuntimeAttemptTraceSchema).max(1_000),
+  budgetLedger: LiveSpendSnapshotSchema,
+  budgetMode: z.literal("durable-request-reservations"),
+  cleanPathProjectedCostUsd: z.number().min(0).nullable(),
+  gates: Version9GateSchema,
+  narrativeCandidates: z.array(NarrativeCandidateEvidenceSchema).max(100),
+  narrativeResponses: z.array(NarrativeResponseEvidenceSchema).max(500),
+  pricingVersion: z.string().min(1).max(240),
+  projectedFinalExposureUsd: z.number().min(0).nullable(),
+  runtimeEvidenceStartAttemptIndex: z.number().int().min(0).max(1_000),
+  runtimeAttemptEvidence: z.array(CurrentRuntimeAttemptEvidenceSchema).max(1_000),
+  resultChapterCaps: z.array(ResultChapterCapSchema).max(12),
+  results: z.array(CurrentLiveResultSchema).max(12),
+  resume: Version9ResumeSchema.nullable(),
+  serviceTier: RuntimeServiceTierSchema,
+  sourceGitSha: GitShaSchema,
   version: z.literal(REPORT_VERSION),
 }).superRefine(refineDurableReport);
 
 type DurableReportForRefinement = z.infer<typeof BaseLiveReportSchema> & {
   readonly budgetLedger: z.infer<typeof LiveSpendSnapshotSchema>;
-  readonly gates: z.infer<typeof GateSchema> | z.infer<typeof Version8GateSchema>;
+  readonly cleanPathProjectedCostUsd?: number | null;
+  readonly gates:
+    | z.infer<typeof GateSchema>
+    | z.infer<typeof Version8GateSchema>
+    | z.infer<typeof Version9GateSchema>;
   readonly narrativeCandidates?: z.infer<typeof NarrativeCandidateEvidenceSchema>[];
   readonly narrativeResponses?: z.infer<typeof NarrativeResponseEvidenceSchema>[];
   readonly runtimeEvidenceStartAttemptIndex?: number;
   readonly runtimeAttemptEvidence?: z.infer<typeof RuntimeAttemptEvidenceSchema>[];
   readonly resultChapterCaps: z.infer<typeof ResultChapterCapSchema>[];
-  readonly resume: z.infer<typeof Version8ResumeSchema> | null;
+  readonly pricingVersion?: string;
+  readonly projectedFinalExposureUsd?: number | null;
+  readonly resume: z.infer<typeof Version9ResumeSchema> | null;
+  readonly serviceTier?: RuntimeServiceTier;
   readonly sourceGitSha: string;
-  readonly version: typeof VERSION_7_REPORT_VERSION | typeof REPORT_VERSION;
+  readonly version:
+    typeof VERSION_7_REPORT_VERSION | typeof VERSION_8_REPORT_VERSION | typeof REPORT_VERSION;
 };
 
 function refineDurableReport(report: DurableReportForRefinement, context: z.RefinementCtx): void {
@@ -1035,7 +1123,7 @@ function refineDurableReport(report: DurableReportForRefinement, context: z.Refi
     context,
   );
 
-  if (report.version === REPORT_VERSION) {
+  if (report.version === VERSION_8_REPORT_VERSION || report.version === REPORT_VERSION) {
     const candidates = report.narrativeCandidates ?? [];
     const responses = report.narrativeResponses ?? [];
     const runtimeEvidenceStartAttemptIndex = report.runtimeEvidenceStartAttemptIndex ?? 0;
@@ -1068,6 +1156,95 @@ function refineDurableReport(report: DurableReportForRefinement, context: z.Refi
       });
     }
   }
+  if (report.version === REPORT_VERSION) refineServiceTierEvidence(report, context);
+}
+
+function refineServiceTierEvidence(
+  report: DurableReportForRefinement,
+  context: z.RefinementCtx,
+): void {
+  const serviceTier = report.serviceTier;
+  if (serviceTier === undefined || report.pricingVersion === undefined) {
+    context.addIssue({ code: "custom", message: "Version 9 report lacks service-tier provenance" });
+    return;
+  }
+  if (report.suite === "full" && serviceTier !== "flex") {
+    context.addIssue({ code: "custom", message: "Full version 9 reports require Flex processing" });
+  }
+  const expectedPricingVersion = pricingVersionForServiceTier(serviceTier);
+  if (report.pricingVersion !== expectedPricingVersion) {
+    context.addIssue({
+      code: "custom",
+      message: "Report pricing version disagrees with service tier",
+    });
+  }
+  const expectedProjection =
+    report.suite === "full" ? projectPrompt1411FullMatrixCostUsd(serviceTier) : null;
+  const expectedFinalExposure =
+    expectedProjection === null ? null : roundNanoUsd(report.priorSpendUsd + expectedProjection);
+  if (
+    report.cleanPathProjectedCostUsd !== expectedProjection ||
+    report.projectedFinalExposureUsd !== expectedFinalExposure
+  ) {
+    context.addIssue({ code: "custom", message: "Report clean-path projection is inconsistent" });
+  }
+  const expectedEvidence = serviceTierEvidenceIsComplete(
+    report,
+    serviceTier,
+    expectedPricingVersion,
+  );
+  if (
+    !("serviceTierEvidenceComplete" in report.gates) ||
+    report.gates.serviceTierEvidenceComplete !== expectedEvidence
+  ) {
+    context.addIssue({
+      code: "custom",
+      message: "Service-tier evidence gate is inconsistent",
+      path: ["gates", "serviceTierEvidenceComplete"],
+    });
+  }
+}
+
+function serviceTierEvidenceIsComplete(
+  report: DurableReportForRefinement,
+  serviceTier: RuntimeServiceTier,
+  pricingVersion: string,
+): boolean {
+  return recordedServiceTierEvidenceIsComplete(
+    report.attempts,
+    report.results,
+    report.runtimeEvidenceStartAttemptIndex ?? 0,
+    serviceTier,
+    pricingVersion,
+  );
+}
+
+function recordedServiceTierEvidenceIsComplete(
+  attempts: readonly z.infer<typeof RuntimeAttemptTraceSchema>[],
+  results: readonly LiveResult[],
+  runtimeEvidenceStartAttemptIndex: number,
+  serviceTier: RuntimeServiceTier,
+  pricingVersion: string,
+): boolean {
+  const currentAttempts = attempts.slice(runtimeEvidenceStartAttemptIndex);
+  return (
+    currentAttempts.length > 0 &&
+    currentAttempts.every(
+      (attempt) =>
+        attempt.requestedServiceTier === serviceTier && attempt.serviceTier === serviceTier,
+    ) &&
+    results.every(
+      ({ trace }) =>
+        trace.pricingVersion === pricingVersion &&
+        trace.attempts.every(
+          (attempt) =>
+            attempt.requestedServiceTier === serviceTier && attempt.serviceTier === serviceTier,
+        ) &&
+        trace.calls.every(
+          (call) => call.requestedServiceTier === serviceTier && call.serviceTier === serviceTier,
+        ),
+    )
+  );
 }
 
 function refineNarrativeEvidence(
@@ -1805,9 +1982,10 @@ export type LiveResult = z.infer<typeof LiveResultSchema>;
 export type LegacyLiveReport = z.infer<typeof LegacyLiveReportSchema>;
 export type Version6LiveReport = z.infer<typeof Version6LiveReportSchema>;
 export type Version7LiveReport = z.infer<typeof Version7LiveReportSchema>;
+export type Version8LiveReport = z.infer<typeof Version8LiveReportSchema>;
 export type LiveReport = z.infer<typeof LiveReportSchema>;
 export type ResumableLiveReport =
-  LegacyLiveReport | Version6LiveReport | Version7LiveReport | LiveReport;
+  LegacyLiveReport | Version6LiveReport | Version7LiveReport | Version8LiveReport | LiveReport;
 export type ResultChapterCap = z.infer<typeof ResultChapterCapSchema>;
 
 function refineReportCommon(
@@ -1966,6 +2144,7 @@ export interface ResumeRequirements {
   readonly chapterCostCapUsd: number;
   readonly priorSpendUsd: number;
   readonly promptVersion: string;
+  readonly serviceTier: RuntimeServiceTier;
   readonly sourceGitSha: string;
 }
 
@@ -2004,6 +2183,17 @@ async function main(): Promise<void> {
     DEFAULT_PER_CHAPTER_CAP_USD,
   );
   const priorSpendUsd = parseUsdFlag(args, "--prior-spend-usd", 0, true, TOTAL_CAP_USD);
+  const serviceTier = RuntimeServiceTierSchema.parse(
+    parseOptionalFlag(args, "--service-tier") ?? "standard",
+  );
+  if (suite === "full" && serviceTier !== "flex") {
+    throw new Error("Full live eval requires --service-tier flex");
+  }
+  const pricingVersion = pricingVersionForServiceTier(serviceTier);
+  const cleanPathProjection =
+    suite === "full"
+      ? assertPrompt1411FullMatrixFits(priorSpendUsd, serviceTier, TOTAL_CAP_USD)
+      : null;
   if (suite === "full" && !args.includes("--confirm-cost")) {
     throw new Error("Full live eval requires --confirm-cost");
   }
@@ -2027,6 +2217,7 @@ async function main(): Promise<void> {
           chapterCostCapUsd: perChapterCapUsd,
           priorSpendUsd,
           promptVersion: PROMPT_VERSION,
+          serviceTier,
           sourceGitSha: resumeReport.sourceGitSha,
         });
   const plannedPovIds =
@@ -2097,6 +2288,8 @@ async function main(): Promise<void> {
         narrativeResponses,
         runtimeEvidenceStartAttemptIndex,
         runtimeAttemptEvidence,
+        serviceTier,
+        pricingVersion,
         sourceGitSha,
         liveRunId,
       );
@@ -2105,6 +2298,8 @@ async function main(): Promise<void> {
         narrativeEvidencePath,
         recoverStaleRunId,
         sourceGitSha,
+        serviceTier,
+        pricingVersion,
       );
       if (
         !isAppendOnlyEvidence(attempts, recoveredEvidence.attempts) ||
@@ -2145,6 +2340,8 @@ async function main(): Promise<void> {
         narrativeResponses,
         runtimeEvidenceStartAttemptIndex,
         runtimeAttemptEvidence,
+        serviceTier,
+        pricingVersion,
         sourceGitSha,
         liveRunId,
       );
@@ -2185,6 +2382,8 @@ async function main(): Promise<void> {
                   narrativeResponses,
                   runtimeEvidenceStartAttemptIndex,
                   runtimeAttemptEvidence,
+                  serviceTier,
+                  pricingVersion,
                   sourceGitSha,
                   liveRunId,
                 );
@@ -2204,6 +2403,8 @@ async function main(): Promise<void> {
                   narrativeResponses,
                   runtimeEvidenceStartAttemptIndex,
                   runtimeAttemptEvidence,
+                  serviceTier,
+                  pricingVersion,
                   sourceGitSha,
                   liveRunId,
                 );
@@ -2218,6 +2419,8 @@ async function main(): Promise<void> {
                   narrativeResponses,
                   runtimeEvidenceStartAttemptIndex,
                   runtimeAttemptEvidence,
+                  serviceTier,
+                  pricingVersion,
                   sourceGitSha,
                   liveRunId,
                 );
@@ -2227,6 +2430,7 @@ async function main(): Promise<void> {
                   );
                 }
               },
+              serviceTier,
             });
             let view = service.selectPov(povId);
             const retainedPrefix = results
@@ -2327,6 +2531,8 @@ async function main(): Promise<void> {
                   existingAttemptCostUsd,
                   narrativeCandidates,
                   narrativeResponses,
+                  pricingVersion,
+                  cleanPathProjection,
                   runtimeEvidenceStartAttemptIndex,
                   runtimeAttemptEvidence,
                   nativeRequested,
@@ -2341,6 +2547,7 @@ async function main(): Promise<void> {
                   resumeSource,
                   resumeVerification,
                   sourceGitSha,
+                  serviceTier,
                   startedAt,
                   suite,
                 }),
@@ -2368,6 +2575,8 @@ async function main(): Promise<void> {
       existingAttemptCostUsd,
       narrativeCandidates,
       narrativeResponses,
+      pricingVersion,
+      cleanPathProjection,
       runtimeEvidenceStartAttemptIndex,
       runtimeAttemptEvidence,
       nativeRequested,
@@ -2382,6 +2591,7 @@ async function main(): Promise<void> {
       resumeSource,
       resumeVerification,
       sourceGitSha,
+      serviceTier,
       startedAt,
       suite,
     });
@@ -2432,6 +2642,7 @@ interface BuildLiveReportInput {
   readonly attempts: LiveReport["attempts"];
   readonly auditRejections: LiveReport["auditRejections"];
   readonly chapterCostCapUsd: number;
+  readonly cleanPathProjection: ReturnType<typeof assertPrompt1411FullMatrixFits> | null;
   readonly draftRejections: LiveReport["draftRejections"];
   readonly existingAttemptCostUsd: number;
   readonly narrativeCandidates: LiveReport["narrativeCandidates"];
@@ -2441,6 +2652,7 @@ interface BuildLiveReportInput {
   readonly nativeRequested: boolean;
   readonly povFilter: CharacterId | null;
   readonly priorSpendUsd: number;
+  readonly pricingVersion: string;
   readonly projectedMaximumCumulativeCostUsd: number;
   readonly resultChapterCaps: ResultChapterCap[];
   readonly results: LiveResult[];
@@ -2450,6 +2662,7 @@ interface BuildLiveReportInput {
   readonly resumeSource: ResumeSource | null;
   readonly resumeVerification: ResumeVerification;
   readonly sourceGitSha: string;
+  readonly serviceTier: RuntimeServiceTier;
   readonly startedAt: string;
   readonly suite: "full" | "smoke";
 }
@@ -2516,6 +2729,13 @@ function buildLiveReport(
         input.results.map(({ streamingLatencyMs }) => streamingLatencyMs),
         0.95,
       ) <= 60_000,
+    serviceTierEvidenceComplete: recordedServiceTierEvidenceIsComplete(
+      input.attempts,
+      input.results,
+      input.runtimeEvidenceStartAttemptIndex,
+      input.serviceTier,
+      input.pricingVersion,
+    ),
     traceCostMatchesAttempts:
       input.results.length === expected &&
       input.results.every((result) => resultTraceCostMatches(result)),
@@ -2529,6 +2749,7 @@ function buildLiveReport(
     budgetLedger: ledgerSnapshot,
     budgetMode: "durable-request-reservations",
     chapterCostCapUsd: input.chapterCostCapUsd,
+    cleanPathProjectedCostUsd: input.cleanPathProjection?.projectedMatrixCostUsd ?? null,
     completedChapters: input.results.length,
     cumulativeCostUsd: input.priorSpendUsd + totalCostUsd,
     draftRejections: input.draftRejections,
@@ -2541,6 +2762,8 @@ function buildLiveReport(
     runtimeEvidenceStartAttemptIndex: input.runtimeEvidenceStartAttemptIndex,
     povFilter: input.povFilter,
     priorSpendUsd: input.priorSpendUsd,
+    pricingVersion: input.pricingVersion,
+    projectedFinalExposureUsd: input.cleanPathProjection?.projectedFinalExposureUsd ?? null,
     projectedMaximumCumulativeCostUsd: input.projectedMaximumCumulativeCostUsd,
     promptVersion: PROMPT_VERSION,
     resultChapterCaps: input.resultChapterCaps,
@@ -2580,6 +2803,7 @@ function buildLiveReport(
             sourceReportVersion: input.resumeReport.version,
           },
     sourceGitSha: input.sourceGitSha,
+    serviceTier: input.serviceTier,
     startedAt: input.startedAt,
     suite: input.suite,
     totalCostCapUsd: TOTAL_CAP_USD,
@@ -2688,6 +2912,8 @@ export function writeNarrativeEvidenceSidecar(
   narrativeResponses: readonly z.infer<typeof NarrativeResponseEvidenceSchema>[],
   runtimeEvidenceStartAttemptIndex: number,
   runtimeAttemptEvidence: readonly z.infer<typeof RuntimeAttemptEvidenceSchema>[],
+  serviceTier: RuntimeServiceTier,
+  pricingVersion: string,
   sourceGitSha: string,
   liveRunId: string,
 ): void {
@@ -2700,9 +2926,11 @@ export function writeNarrativeEvidenceSidecar(
       narrativeResponses,
       promptVersion: PROMPT_VERSION,
       reportVersion: REPORT_VERSION,
+      pricingVersion,
       runtimeEvidenceStartAttemptIndex,
       runtimeSchemaVersion: RUNTIME_SCHEMA_VERSION,
       runtimeAttemptEvidence,
+      serviceTier,
       sourceGitSha,
       updatedAt: new Date().toISOString(),
     }),
@@ -2713,6 +2941,8 @@ export function readNarrativeEvidenceSidecar(
   path: string,
   expectedLiveRunId: string,
   expectedSourceGitSha: string,
+  expectedServiceTier: RuntimeServiceTier,
+  expectedPricingVersion: string,
 ): z.infer<typeof NarrativeEvidenceSidecarSchema> {
   let candidate: unknown;
   try {
@@ -2728,6 +2958,27 @@ export function readNarrativeEvidenceSidecar(
   }
   if (evidence.sourceGitSha !== expectedSourceGitSha) {
     throw new Error("Narrative evidence belongs to a different Git checkpoint");
+  }
+  if (
+    evidence.serviceTier !== expectedServiceTier ||
+    evidence.pricingVersion !== expectedPricingVersion
+  ) {
+    throw new Error("Narrative evidence service tier does not match this run");
+  }
+  const currentAttempts = evidence.attempts.slice(evidence.runtimeEvidenceStartAttemptIndex);
+  if (
+    currentAttempts.some(
+      (attempt) =>
+        attempt.requestedServiceTier !== expectedServiceTier ||
+        attempt.serviceTier !== expectedServiceTier,
+    ) ||
+    evidence.runtimeAttemptEvidence.some(
+      ({ attempt }) =>
+        attempt.requestedServiceTier !== expectedServiceTier ||
+        attempt.serviceTier !== expectedServiceTier,
+    )
+  ) {
+    throw new Error("Narrative evidence contains mixed service-tier attempts");
   }
   return evidence;
 }
@@ -2802,7 +3053,7 @@ export function prepareResume(
   requirements: ResumeRequirements,
 ): ResumePreparation {
   if (report.suite !== "full") {
-    throw new Error("Resume report must be a version 5, 6, 7, or 8 full-suite report");
+    throw new Error("Resume report must be a version 5 through 9 full-suite report");
   }
   if (report.priorSpendUsd !== requirements.priorSpendUsd) {
     throw new Error("Resume report prior spend does not match this run");
@@ -2812,6 +3063,16 @@ export function prepareResume(
   }
   if (report.promptVersion !== requirements.promptVersion) {
     throw new Error("Resume report prompt version does not match current prompts");
+  }
+  if (reportServiceTier(report) !== requirements.serviceTier) {
+    throw new Error("Resume report service tier does not match this run");
+  }
+  if (
+    report.version === REPORT_VERSION &&
+    report.attempts.length > report.runtimeEvidenceStartAttemptIndex &&
+    !report.gates.serviceTierEvidenceComplete
+  ) {
+    throw new Error("Resume report contains incomplete service-tier evidence");
   }
   if (report.sourceGitSha !== requirements.sourceGitSha) {
     throw new Error("Resume report Git SHA does not match current HEAD");
@@ -2848,25 +3109,29 @@ export function prepareResume(
     }
   }
   const attempts = [...report.attempts];
+  const hasRuntimeEvidence =
+    report.version === VERSION_8_REPORT_VERSION || report.version === REPORT_VERSION;
   return {
     attempts,
     auditRejections: [...report.auditRejections],
     discardedResultCount,
     draftRejections: [...report.draftRejections],
     existingAttemptCostUsd: sum(attempts.map(({ costUsd }) => costUsd)),
-    narrativeCandidates: report.version === REPORT_VERSION ? [...report.narrativeCandidates] : [],
-    narrativeResponses: report.version === REPORT_VERSION ? [...report.narrativeResponses] : [],
-    runtimeEvidenceStartAttemptIndex:
-      report.version === REPORT_VERSION
-        ? report.runtimeEvidenceStartAttemptIndex
-        : report.attempts.length,
-    runtimeAttemptEvidence:
-      report.version === REPORT_VERSION ? [...report.runtimeAttemptEvidence] : [],
+    narrativeCandidates: hasRuntimeEvidence ? [...report.narrativeCandidates] : [],
+    narrativeResponses: hasRuntimeEvidence ? [...report.narrativeResponses] : [],
+    runtimeEvidenceStartAttemptIndex: hasRuntimeEvidence
+      ? report.runtimeEvidenceStartAttemptIndex
+      : report.attempts.length,
+    runtimeAttemptEvidence: hasRuntimeEvidence ? [...report.runtimeAttemptEvidence] : [],
     pendingPovIds,
     retainedPovIds,
     retainedResultCaps,
     retainedResults,
   };
+}
+
+function reportServiceTier(report: ResumableLiveReport): RuntimeServiceTier {
+  return report.version === REPORT_VERSION ? report.serviceTier : "standard";
 }
 
 function sourceResultChapterCap(
@@ -2928,7 +3193,9 @@ function readLiveReport(path: string): ResumeSource {
 }
 
 export function parseLiveReport(candidate: unknown): ResumableLiveReport {
-  const version8 = LiveReportSchema.safeParse(candidate);
+  const version9 = LiveReportSchema.safeParse(candidate);
+  if (version9.success) return version9.data;
+  const version8 = Version8LiveReportSchema.safeParse(candidate);
   if (version8.success) return version8.data;
   const version7 = Version7LiveReportSchema.safeParse(candidate);
   if (version7.success) return version7.data;
@@ -2937,6 +3204,7 @@ export function parseLiveReport(candidate: unknown): ResumableLiveReport {
   const version5 = LegacyLiveReportSchema.safeParse(candidate);
   if (version5.success) return version5.data;
   const details = [
+    ...version9.error.issues,
     ...version8.error.issues,
     ...version7.error.issues,
     ...version6.error.issues,
@@ -2945,7 +3213,7 @@ export function parseLiveReport(candidate: unknown): ResumableLiveReport {
     .slice(0, 5)
     .map((issue) => `${issue.path.join(".") || "report"}: ${issue.message}`)
     .join("; ");
-  throw new Error(`Resume report is not valid version 5, 6, 7, or 8 data: ${details}`);
+  throw new Error(`Resume report is not valid version 5, 6, 7, 8, or 9 data: ${details}`);
 }
 
 function verifyResumeCheckpoint(
@@ -3010,6 +3278,7 @@ export function assertRegisteredResumeCheckpoint(
       checkpoint.promptVersion === report.promptVersion &&
       checkpoint.reportSha256 === reportSha256 &&
       checkpoint.reportVersion === report.version &&
+      checkpoint.serviceTier === reportServiceTier(report) &&
       checkpoint.sourceGitSha === report.sourceGitSha,
   );
   if (!registered) {
@@ -3099,6 +3368,10 @@ function wordCount(prose: string): number {
 
 function sum(values: readonly number[]): number {
   return values.reduce((total, value) => total + value, 0);
+}
+
+function roundNanoUsd(value: number): number {
+  return Math.round(value * 1_000_000_000) / 1_000_000_000;
 }
 
 function costsMatch(left: number, right: number): boolean {

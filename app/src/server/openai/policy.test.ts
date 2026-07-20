@@ -26,6 +26,7 @@ describe("durable runtime cost hooks", () => {
       runRetriedRequest({
         evaluate: (response: { id: string }) => ({ data: response.id, responseId: response.id }),
         getResponseId: (response: { id: string }) => response.id,
+        getServiceTier: () => "default",
         getUsage: () => USAGE,
         invoke,
         maximumCostUsd: 0.01,
@@ -52,6 +53,7 @@ describe("durable runtime cost hooks", () => {
           throw new OpenAIRuntimeError("INVALID_OUTPUT", "bad schema");
         },
         getResponseId: (response: { id: string }) => response.id,
+        getServiceTier: () => "default",
         getUsage: () => USAGE,
         invoke: async () => ({ id: "resp_known" }),
         maximumCostUsd: 0.01,
@@ -78,11 +80,13 @@ describe("durable runtime cost hooks", () => {
     const reserve = vi.fn();
     const settle = vi.fn();
     const markUncertain = vi.fn();
+    const onAttempt = vi.fn();
 
     await expect(
       runRetriedRequest({
         evaluate: (response: { id: string }) => ({ data: response.id, responseId: response.id }),
         getResponseId: (response: { id: string }) => response.id,
+        getServiceTier: () => "flex",
         getUsage: () => USAGE,
         invoke: async () => {
           throw new OpenAIRuntimeError("TIMEOUT", "timed out");
@@ -93,11 +97,93 @@ describe("durable runtime cost hooks", () => {
           budget: new ChapterCostBudget(0.02),
           costHooks: { markUncertain, reserve, settle },
           maxRetries: 0,
+          onAttempt,
+          serviceTier: "flex",
         },
       }),
     ).rejects.toMatchObject({ code: "TIMEOUT" });
 
     const reservation = reserve.mock.calls[0]?.[0];
+    expect(reservation).toMatchObject({ serviceTier: "flex" });
+    expect(onAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({ requestedServiceTier: "flex", serviceTier: null }),
+    );
+    expect(markUncertain).toHaveBeenCalledWith(reservation?.id);
+    expect(settle).not.toHaveBeenCalled();
+  });
+
+  it("settles recognized provider-tier mismatches at the returned tier price", async () => {
+    const reserve = vi.fn();
+    const settle = vi.fn();
+    const markUncertain = vi.fn();
+    const onAttempt = vi.fn();
+
+    await expect(
+      runRetriedRequest({
+        evaluate: (response: { id: string }) => ({ data: response.id, responseId: response.id }),
+        getResponseId: (response: { id: string }) => response.id,
+        getServiceTier: () => "default",
+        getUsage: () => USAGE,
+        invoke: async () => ({ id: "resp_wrong_tier" }),
+        maximumCostUsd: 0.01,
+        model: "gpt-5.6-terra",
+        policy: {
+          budget: new ChapterCostBudget(0.02),
+          costHooks: { markUncertain, reserve, settle },
+          maxRetries: 0,
+          onAttempt,
+          serviceTier: "flex",
+        },
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_USAGE" });
+
+    expect(onAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        costUsd: 0.00055,
+        requestedServiceTier: "flex",
+        serviceTier: "standard",
+      }),
+    );
+    expect(settle).toHaveBeenCalledWith(expect.objectContaining({ actualCostUsd: 0.00055 }));
+    expect(markUncertain).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["missing", undefined],
+    ["auto", "auto" as const],
+  ])("keeps the full reservation when provider tier evidence is %s", async (_label, tier) => {
+    const reserve = vi.fn();
+    const settle = vi.fn();
+    const markUncertain = vi.fn();
+    const onAttempt = vi.fn();
+
+    await expect(
+      runRetriedRequest({
+        evaluate: (response: { id: string }) => ({ data: response.id, responseId: response.id }),
+        getResponseId: (response: { id: string }) => response.id,
+        getServiceTier: () => tier,
+        getUsage: () => USAGE,
+        invoke: async () => ({ id: "resp_unpriced_tier" }),
+        maximumCostUsd: 0.01,
+        model: "gpt-5.6-terra",
+        policy: {
+          budget: new ChapterCostBudget(0.02),
+          costHooks: { markUncertain, reserve, settle },
+          maxRetries: 0,
+          onAttempt,
+        },
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_USAGE" });
+
+    const reservation = reserve.mock.calls[0]?.[0];
+    expect(onAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        costUsd: 0.01,
+        requestedServiceTier: "standard",
+        serviceTier: null,
+        usage: expect.objectContaining({ inputTokens: 100, outputTokens: 20 }),
+      }),
+    );
     expect(markUncertain).toHaveBeenCalledWith(reservation?.id);
     expect(settle).not.toHaveBeenCalled();
   });
@@ -112,6 +198,7 @@ describe("durable runtime cost hooks", () => {
       runRetriedRequest({
         evaluate: (response: { id: string }) => ({ data: response.id, responseId: response.id }),
         getResponseId: (response: { id: string }) => response.id,
+        getServiceTier: () => "default",
         getUsage: () => USAGE,
         invoke,
         maximumCostUsd: 0.01,
@@ -136,6 +223,7 @@ describe("durable runtime cost hooks", () => {
       runRetriedRequest({
         evaluate: (response: { id: string }) => ({ data: response.id, responseId: response.id }),
         getResponseId: (response: { id: string }) => response.id,
+        getServiceTier: () => "default",
         getUsage: () => USAGE,
         invoke: async () => ({ id: "resp_uncheckpointed" }),
         maximumCostUsd: 0.01,

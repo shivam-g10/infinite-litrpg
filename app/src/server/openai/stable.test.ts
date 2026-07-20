@@ -44,6 +44,64 @@ describe("stable Responses adapter", () => {
       strict: true,
       type: "json_schema",
     });
+    expect((body as { service_tier?: string }).service_tier).toBe("default");
+  });
+
+  it("requests, verifies, traces, and half-prices explicit Flex processing", async () => {
+    const parse = vi
+      .fn()
+      .mockResolvedValue(parsedResponse({ answer: "ash" }, { service_tier: "flex" }));
+    const client = stableClient({ parse });
+    const request = structuredRequest({ maxRetries: 0 });
+    request.policy = {
+      budget: new ChapterCostBudget(0.01),
+      maxRetries: 0,
+      serviceTier: "flex",
+    };
+
+    const result = await runStructuredResponse(client, request);
+
+    expect((parse.mock.calls[0]?.[0] as { service_tier?: string }).service_tier).toBe("flex");
+    expect(result).toMatchObject({ requestedServiceTier: "flex", serviceTier: "flex" });
+    expect(result.estimatedCostUsd).toBeCloseTo(0.0002646875, 12);
+  });
+
+  it("rejects a provider tier that disagrees with explicit Flex", async () => {
+    const parse = vi
+      .fn()
+      .mockResolvedValue(parsedResponse({ answer: "ash" }, { service_tier: "default" }));
+    const request = structuredRequest({ maxRetries: 0 });
+    request.policy = {
+      budget: new ChapterCostBudget(0.01),
+      maxRetries: 0,
+      serviceTier: "flex",
+    };
+
+    await expectRuntimeError(
+      runStructuredResponse(stableClient({ parse }), request),
+      "INVALID_USAGE",
+    );
+  });
+
+  it.each([
+    ["missing", undefined],
+    ["auto", "auto"],
+  ])("rejects %s provider tier evidence", async (_label, serviceTier) => {
+    const response =
+      serviceTier === undefined
+        ? ({ ...parsedResponse({ answer: "ash" }), service_tier: undefined } as unknown as Response)
+        : parsedResponse(
+            { answer: "ash" },
+            {
+              service_tier: serviceTier as Exclude<Response["service_tier"], undefined>,
+            },
+          );
+    const parse = vi.fn().mockResolvedValue(response);
+
+    await expectRuntimeError(
+      runStructuredResponse(stableClient({ parse }), structuredRequest({ maxRetries: 0 })),
+      "INVALID_USAGE",
+    );
   });
 
   it.each([
@@ -416,6 +474,24 @@ describe("stable Responses adapter", () => {
     });
   });
 
+  it("requests and verifies Flex on the streaming narration path", async () => {
+    const response = narrationResponse("Flex ash", { service_tier: "flex" });
+    const stream = vi.fn().mockReturnValue(fakeStream(["Flex ash"], response));
+
+    const result = await createAuditedNarrationReplay(stableClient({ stream }), {
+      audit: () => ({ accepted: true }),
+      input: "safe POV context",
+      instructions: "Narrate.",
+      maxOutputTokens: 100,
+      model: "gpt-5.6-terra",
+      policy: { budget: new ChapterCostBudget(1), maxRetries: 0, serviceTier: "flex" },
+      reasoningEffort: "none",
+    });
+
+    expect(stream.mock.calls[0]?.[0]).toMatchObject({ service_tier: "flex" });
+    expect(result).toMatchObject({ requestedServiceTier: "flex", serviceTier: "flex" });
+  });
+
   it("gives the audit the exact narrator attempt and response id", async () => {
     const rejected = narrationResponse("rejected prose", { id: "resp_rejected" });
     const accepted = narrationResponse("accepted prose", { id: "resp_accepted" });
@@ -652,6 +728,7 @@ function parsedResponse<T>(
     incomplete_details: null,
     output: [],
     output_text: JSON.stringify(data),
+    service_tier: "default",
     status: "completed",
     usage: openAIUsage(),
     ...overrides,
@@ -665,6 +742,7 @@ function narrationResponse(outputText: string, overrides: Partial<Response> = {}
     incomplete_details: null,
     output: [],
     output_text: outputText,
+    service_tier: "default",
     status: "completed",
     usage: openAIUsage(),
     ...overrides,

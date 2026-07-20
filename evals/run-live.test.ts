@@ -31,6 +31,7 @@ import {
   NarrativeCandidateEvidenceSchema,
   Version6LiveReportSchema,
   Version7LiveReportSchema,
+  Version8LiveReportSchema,
   assertRegisteredResumeCheckpoint,
   assertResumeHarnessPaths,
   hasExactFullMatrix,
@@ -55,9 +56,11 @@ const REQUIREMENTS: ResumeRequirements = {
   priorSpendUsd: 2,
   promptVersion: PROMPT_VERSION,
   sourceGitSha: GIT_SHA,
+  serviceTier: "flex",
 };
+const STANDARD_REQUIREMENTS: ResumeRequirements = { ...REQUIREMENTS, serviceTier: "standard" };
 
-describe("live report version 8", () => {
+describe("live report version 9", () => {
   it("accepts only append-only stale-run evidence", () => {
     const checkpointed = [{ id: 1 }, { id: 2 }];
     expect(isAppendOnlyEvidence(checkpointed, [...checkpointed, { id: 3 }])).toBe(true);
@@ -95,30 +98,74 @@ describe("live report version 8", () => {
         fakeNarrativeResponses([fakeNarrativeCandidate()]),
         0,
         [],
+        "flex",
+        "openai-flex-explicit-no-cache-2026-07-20",
         GIT_SHA,
         "00000000-0000-4000-8000-000000000088",
       );
       const sidecar = JSON.parse(readFileSync(filename, "utf8")) as {
+        attempts: LiveReport["attempts"];
         candidates: unknown[];
+        pricingVersion: string;
+        runtimeAttemptEvidence: LiveReport["runtimeAttemptEvidence"];
         runtimeSchemaVersion: string;
+        serviceTier: string;
       };
       expect(sidecar.candidates).toHaveLength(1);
       expect(sidecar.runtimeSchemaVersion).toBe(RUNTIME_SCHEMA_VERSION);
+      expect(sidecar.pricingVersion).toBe("openai-flex-explicit-no-cache-2026-07-20");
+      expect(sidecar.serviceTier).toBe("flex");
       expect(
-        readNarrativeEvidenceSidecar(filename, "00000000-0000-4000-8000-000000000088", GIT_SHA)
-          .narrativeResponses,
+        readNarrativeEvidenceSidecar(
+          filename,
+          "00000000-0000-4000-8000-000000000088",
+          GIT_SHA,
+          "flex",
+          "openai-flex-explicit-no-cache-2026-07-20",
+        ).narrativeResponses,
       ).toHaveLength(2);
       expect(() =>
-        readNarrativeEvidenceSidecar(filename, "00000000-0000-4000-8000-000000000089", GIT_SHA),
+        readNarrativeEvidenceSidecar(
+          filename,
+          "00000000-0000-4000-8000-000000000089",
+          GIT_SHA,
+          "flex",
+          "openai-flex-explicit-no-cache-2026-07-20",
+        ),
       ).toThrow("different stale run");
+      expect(() =>
+        readNarrativeEvidenceSidecar(
+          filename,
+          "00000000-0000-4000-8000-000000000088",
+          GIT_SHA,
+          "standard",
+          "openai-standard-explicit-no-cache-2026-07-20",
+        ),
+      ).toThrow("service tier");
+      writeAtomicJson(filename, {
+        ...sidecar,
+        attempts: sidecar.attempts.map((attempt, index) =>
+          index === 0 ? { ...attempt, serviceTier: "standard" } : attempt,
+        ),
+      });
+      expect(() =>
+        readNarrativeEvidenceSidecar(
+          filename,
+          "00000000-0000-4000-8000-000000000088",
+          GIT_SHA,
+          "flex",
+          "openai-flex-explicit-no-cache-2026-07-20",
+        ),
+      ).toThrow("mixed service-tier attempts");
       expect(readdirSync(directory).filter((name) => name.endsWith(".tmp"))).toEqual([]);
     } finally {
       rmSync(directory, { force: true, recursive: true });
     }
   });
 
-  it("strictly parses exact version 8, 7, 6, and 5 data", () => {
+  it("strictly parses exact version 9, 8, 7, 6, and 5 data", () => {
     const candidate = emptyReportData();
+    const version8 = emptyVersion8ReportData();
     const version7 = emptyVersion7ReportData();
     const version6 = emptyVersion6ReportData();
     const version5 = { ...version6, version: 5 };
@@ -126,14 +173,17 @@ describe("live report version 8", () => {
     expect(LiveReportSchema.safeParse(candidate).success).toBe(true);
     expect(LiveReportSchema.safeParse({ ...candidate, unexpected: true }).success).toBe(false);
     expect(LiveReportSchema.safeParse(version7).success).toBe(false);
+    expect(Version8LiveReportSchema.safeParse(version8).success).toBe(true);
     expect(Version7LiveReportSchema.safeParse(version7).success).toBe(true);
     expect(Version7LiveReportSchema.safeParse(candidate).success).toBe(false);
     expect(Version6LiveReportSchema.safeParse(version6).success).toBe(true);
     expect(LegacyLiveReportSchema.safeParse(version5).success).toBe(true);
     expect(LiveReportSchema.safeParse({ ...candidate, version: 4 }).success).toBe(false);
     expect(
-      [candidate, version7, version6, version5].map((report) => parseLiveReport(report).version),
-    ).toEqual([8, 7, 6, 5]);
+      [candidate, version8, version7, version6, version5].map(
+        (report) => parseLiveReport(report).version,
+      ),
+    ).toEqual([9, 8, 7, 6, 5]);
   });
 
   it("recomputes every stored release gate", () => {
@@ -148,6 +198,64 @@ describe("live report version 8", () => {
         gate,
       ).toBe(false);
     }
+  });
+
+  it.each([
+    ["missing", undefined],
+    ["mixed", "standard"],
+  ])("rejects %s observed service-tier evidence", (_label, observedTier) => {
+    const report = fakeSmokeReport();
+    const attempts = report.attempts.map((attempt, index) =>
+      index === 0 ? { ...attempt, serviceTier: observedTier } : attempt,
+    );
+    expect(LiveReportSchema.safeParse({ ...report, attempts }).success).toBe(false);
+  });
+
+  it("requires explicit tier fields even for Standard version 9 evidence", () => {
+    const report = standardSmokeReport();
+    expect(LiveReportSchema.safeParse(report).success).toBe(true);
+    const firstAttempt = report.attempts[0];
+    const firstResult = report.results[0];
+    const firstCall = firstResult?.trace.calls[0];
+    if (!firstAttempt || !firstResult || !firstCall)
+      throw new Error("Standard fixture is incomplete");
+    const { serviceTier: _attemptTier, ...attemptWithoutTier } = firstAttempt;
+    const { requestedServiceTier: _requestedTier, ...callWithoutRequestedTier } = firstCall;
+    void _attemptTier;
+    void _requestedTier;
+
+    expect(
+      LiveReportSchema.safeParse({
+        ...report,
+        attempts: [attemptWithoutTier, ...report.attempts.slice(1)],
+      }).success,
+    ).toBe(false);
+    expect(
+      LiveReportSchema.safeParse({
+        ...report,
+        results: [
+          {
+            ...firstResult,
+            trace: {
+              ...firstResult.trace,
+              calls: [callWithoutRequestedTier, ...firstResult.trace.calls.slice(1)],
+            },
+          },
+        ],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("forbids Standard processing on full version 9 reports", () => {
+    expect(
+      LiveReportSchema.safeParse({
+        ...emptyReportData(),
+        cleanPathProjectedCostUsd: 0.208988,
+        pricingVersion: "openai-standard-explicit-no-cache-2026-07-20",
+        projectedFinalExposureUsd: 2.208988,
+        serviceTier: "standard",
+      }).success,
+    ).toBe(false);
   });
 
   it("binds turns, attempts, canon, and stream transcripts to committed evidence", () => {
@@ -448,6 +556,10 @@ describe("live report version 8", () => {
     const report = {
       ...emptyReportData(),
       attempts: [auditAttempt],
+      gates: {
+        ...(emptyReportData().gates as Record<string, boolean>),
+        serviceTierEvidenceComplete: true,
+      },
       narrativeResponses: [auditResponse],
       runtimeAttemptEvidence: [{ attempt: auditAttempt, turn: fakeTurnIdentity(result) }],
     };
@@ -482,6 +594,10 @@ describe("live report version 8", () => {
     const report = {
       ...emptyReportData(),
       attempts: evidenceResult.trace.attempts,
+      gates: {
+        ...(emptyReportData().gates as Record<string, boolean>),
+        serviceTierEvidenceComplete: true,
+      },
       narrativeCandidates: [candidate],
       narrativeResponses: fakeNarrativeResponses([candidate]),
       runtimeAttemptEvidence: fakeRuntimeAttemptEvidence([evidenceResult]),
@@ -578,7 +694,12 @@ describe("live report version 8", () => {
   });
 
   it("retains contiguous chapter prefixes while preserving every old attempt and rejection", () => {
-    const attempts = [{ costUsd: 0.08 }, { costUsd: 0.11 }] as LiveReport["attempts"];
+    const seedAttempt = fakeResult("rowan-ashborn", 1, 0).trace.attempts[0];
+    if (!seedAttempt) throw new Error("Fake result lost its first runtime attempt");
+    const attempts: LiveReport["attempts"] = [
+      { ...seedAttempt, costUsd: 0.08, responseId: "resp_retained_attempt_0" },
+      { ...seedAttempt, attempt: 1, costUsd: 0.11, responseId: "resp_retained_attempt_1" },
+    ];
     const auditRejections = [{ marker: "audit" }] as unknown as LiveReport["auditRejections"];
     const draftRejections = [{ marker: "draft" }] as unknown as LiveReport["draftRejections"];
     const narrativeCandidates = [
@@ -590,7 +711,16 @@ describe("live report version 8", () => {
         fakeResult("elara-voss", 1, 0.03),
         fakeResult("rowan-ashborn", 1, 0.01),
       ],
-      { attempts, auditRejections, draftRejections, narrativeCandidates },
+      {
+        attempts,
+        auditRejections,
+        draftRejections,
+        gates: {
+          ...(emptyReportData().gates as LiveReport["gates"]),
+          serviceTierEvidenceComplete: true,
+        },
+        narrativeCandidates,
+      },
     );
 
     const prepared = prepareResume(report, REQUIREMENTS);
@@ -638,6 +768,57 @@ describe("live report version 8", () => {
     expect(() => prepareResume(report, { ...REQUIREMENTS, sourceGitSha: "1234567" })).toThrow(
       "Git SHA",
     );
+    expect(() => prepareResume(report, STANDARD_REQUIREMENTS)).toThrow("service tier");
+  });
+
+  it("refuses to resume retained attempts with incomplete tier evidence", () => {
+    const smoke = fakeSmokeReport();
+    const report = {
+      ...smoke,
+      cleanPathProjectedCostUsd: 0.104494,
+      gates: {
+        ...smoke.gates,
+        allAuditsApproved: false,
+        allCommitsCompleted: false,
+        allCostsWithinChapterCap: false,
+        allPovLeakListsEmpty: false,
+        allProseWithinWordLimit: false,
+        allStreamsReconstructed: false,
+        narrativeEvidenceComplete: false,
+        serviceTierEvidenceComplete: true,
+        traceCostMatchesAttempts: false,
+      },
+      povFilter: null,
+      projectedFinalExposureUsd: 2.104494,
+      projectedMaximumCumulativeCostUsd: 2.72,
+      suite: "full" as const,
+    };
+    expect(LiveReportSchema.safeParse(report).success).toBe(true);
+    const poisonAttempt = (attempt: LiveReport["attempts"][number]) => ({
+      ...attempt,
+      serviceTier: "standard" as const,
+    });
+    const poisoned = {
+      ...report,
+      attempts: report.attempts.map(poisonAttempt),
+      gates: { ...report.gates, serviceTierEvidenceComplete: false },
+      results: report.results.map((result) => ({
+        ...result,
+        trace: {
+          ...result.trace,
+          attempts: result.trace.attempts.map(poisonAttempt),
+          calls: result.trace.calls.map((call) => ({ ...call, serviceTier: "standard" as const })),
+        },
+      })),
+      runtimeAttemptEvidence: report.runtimeAttemptEvidence.map((evidence) => ({
+        ...evidence,
+        attempt: poisonAttempt(evidence.attempt),
+      })),
+    };
+    expect(LiveReportSchema.safeParse(poisoned).success).toBe(true);
+    expect(() => prepareResume(poisoned as LiveReport, REQUIREMENTS)).toThrow(
+      "incomplete service-tier evidence",
+    );
   });
 
   it("rejects a retained result whose prose and audit hash disagree", () => {
@@ -671,7 +852,7 @@ describe("live report version 8", () => {
     );
     const version7 = { ...version7Data, version: 7 } as unknown as Version7LiveReport;
     const preparedVersion7 = prepareResume(version7, {
-      ...REQUIREMENTS,
+      ...STANDARD_REQUIREMENTS,
       chapterCostCapUsd: 0.0424,
     });
     expect(preparedVersion7.retainedResultCaps.map(({ capUsd }) => capUsd)).toEqual([0.03, 0.04]);
@@ -768,6 +949,17 @@ describe("live report version 8", () => {
         reportSha256,
         {
           ...registry,
+          checkpoints: [{ ...registry.checkpoints[0], serviceTier: "flex" }],
+        },
+        currentFileHashes,
+      ),
+    ).toThrow("committed checkpoint registry");
+    expect(() =>
+      assertRegisteredResumeCheckpoint(
+        legacy,
+        reportSha256,
+        {
+          ...registry,
           checkpoints: [...registry.checkpoints, registry.checkpoints[0]],
         },
         currentFileHashes,
@@ -849,6 +1041,7 @@ describe("live report version 8", () => {
       gates: {
         ...(emptyReportData().gates as Record<string, boolean>),
         p95WithinSixtySeconds: true,
+        serviceTierEvidenceComplete: true,
       },
       resultChapterCaps: results.map(({ chapter, povId }) => ({
         capUsd: 0.06,
@@ -985,6 +1178,7 @@ function emptyReportData(): Record<string, unknown> {
     },
     budgetMode: "durable-request-reservations",
     chapterCostCapUsd: REQUIREMENTS.chapterCostCapUsd,
+    cleanPathProjectedCostUsd: 0.104494,
     completedChapters: 0,
     cumulativeCostUsd: REQUIREMENTS.priorSpendUsd,
     draftRejections: [],
@@ -999,6 +1193,7 @@ function emptyReportData(): Record<string, unknown> {
       allStreamsReconstructed: false,
       narrativeEvidenceComplete: false,
       p95WithinSixtySeconds: false,
+      serviceTierEvidenceComplete: false,
       traceCostMatchesAttempts: false,
       totalCostWithinCap: true,
     },
@@ -1009,22 +1204,37 @@ function emptyReportData(): Record<string, unknown> {
     runtimeAttemptEvidence: [],
     povFilter: null,
     priorSpendUsd: REQUIREMENTS.priorSpendUsd,
+    pricingVersion: "openai-flex-explicit-no-cache-2026-07-20",
+    projectedFinalExposureUsd: 2.104494,
     projectedMaximumCumulativeCostUsd: 2.72,
     promptVersion: PROMPT_VERSION,
     resultChapterCaps: [],
     results: [],
     resume: null,
     sourceGitSha: GIT_SHA,
+    serviceTier: "flex",
     startedAt: "2026-07-20T00:00:00.000Z",
     suite: "full",
     totalCostCapUsd: 3,
     totalCostUsd: 0,
-    version: 8,
+    version: 9,
   };
 }
 
-function emptyVersion7ReportData(): Record<string, unknown> {
+function emptyVersion8ReportData(): Record<string, unknown> {
   const report = { ...emptyReportData() };
+  delete report.cleanPathProjectedCostUsd;
+  delete report.pricingVersion;
+  delete report.projectedFinalExposureUsd;
+  delete report.serviceTier;
+  const gates = { ...(report.gates as Record<string, unknown>) };
+  delete gates.serviceTierEvidenceComplete;
+  report.gates = gates;
+  return { ...report, version: 8 };
+}
+
+function emptyVersion7ReportData(): Record<string, unknown> {
+  const report = { ...emptyVersion8ReportData() };
   delete report.narrativeCandidates;
   delete report.narrativeResponses;
   delete report.runtimeEvidenceStartAttemptIndex;
@@ -1076,6 +1286,7 @@ function fakeSmokeReport(): LiveReport {
       uncertainReservationCostUsd: 0,
     },
     completedChapters: 1,
+    cleanPathProjectedCostUsd: null,
     gates: {
       allAuditsApproved: true,
       allCommitsCompleted: true,
@@ -1085,12 +1296,14 @@ function fakeSmokeReport(): LiveReport {
       allStreamsReconstructed: true,
       narrativeEvidenceComplete: true,
       p95WithinSixtySeconds: true,
+      serviceTierEvidenceComplete: true,
       traceCostMatchesAttempts: true,
       totalCostWithinCap: true,
     },
     narrativeCandidates,
     narrativeResponses: fakeNarrativeResponses(narrativeCandidates),
     povFilter: "rowan-ashborn",
+    projectedFinalExposureUsd: null,
     projectedMaximumCumulativeCostUsd: REQUIREMENTS.priorSpendUsd + REQUIREMENTS.chapterCostCapUsd,
     resultChapterCaps: [
       {
@@ -1103,6 +1316,38 @@ function fakeSmokeReport(): LiveReport {
     runtimeAttemptEvidence: fakeRuntimeAttemptEvidence([result]),
     suite: "smoke",
   } as LiveReport;
+}
+
+function standardSmokeReport(): LiveReport {
+  const report = fakeSmokeReport();
+  const standardAttempt = (attempt: LiveReport["attempts"][number]) => ({
+    ...attempt,
+    requestedServiceTier: "standard" as const,
+    serviceTier: "standard" as const,
+  });
+  return {
+    ...report,
+    attempts: report.attempts.map(standardAttempt),
+    pricingVersion: "openai-standard-explicit-no-cache-2026-07-20",
+    results: report.results.map((result) => ({
+      ...result,
+      trace: {
+        ...result.trace,
+        attempts: result.trace.attempts.map(standardAttempt),
+        calls: result.trace.calls.map((call) => ({
+          ...call,
+          requestedServiceTier: "standard" as const,
+          serviceTier: "standard" as const,
+        })),
+        pricingVersion: "openai-standard-explicit-no-cache-2026-07-20",
+      },
+    })),
+    runtimeAttemptEvidence: report.runtimeAttemptEvidence.map((evidence) => ({
+      ...evidence,
+      attempt: standardAttempt(evidence.attempt),
+    })),
+    serviceTier: "standard",
+  };
 }
 
 function fakeResult(
@@ -1134,7 +1379,9 @@ function fakeResult(
       latencyMs: 1,
       model: "gpt-5.6-luna" as const,
       phase: "narration" as const,
+      requestedServiceTier: "flex" as const,
       responseId: `resp_narration_${povId}_${chapter}_${index}`,
+      serviceTier: "flex" as const,
       usage,
     })),
     {
@@ -1145,7 +1392,9 @@ function fakeResult(
       latencyMs: 1,
       model: "gpt-5.6-luna" as const,
       phase: "audit" as const,
+      requestedServiceTier: "flex" as const,
       responseId: `resp_audit_${povId}_${chapter}`,
+      serviceTier: "flex" as const,
       usage,
     },
   ];
@@ -1163,8 +1412,10 @@ function fakeResult(
         phase: "narration" as const,
         reasoningEffort: "none" as const,
         refusal: false,
+        requestedServiceTier: "flex" as const,
         responseId: `resp_narration_${povId}_${chapter}_${attemptCosts.length - 1}`,
         retries: 0,
+        serviceTier: "flex" as const,
         timedOut: false,
         usage,
       },
@@ -1177,8 +1428,10 @@ function fakeResult(
         phase: "audit" as const,
         reasoningEffort: "none" as const,
         refusal: false,
+        requestedServiceTier: "flex" as const,
         responseId: `resp_audit_${povId}_${chapter}`,
         retries: 0,
+        serviceTier: "flex" as const,
         timedOut: false,
         usage,
       },
@@ -1190,7 +1443,7 @@ function fakeResult(
     gitSha,
     intents: canonical.intents,
     multiAgentOutputItems: [],
-    pricingVersion: "test-pricing",
+    pricingVersion: "openai-flex-explicit-no-cache-2026-07-20",
     promptVersion: PROMPT_VERSION,
     runId: turnId,
     schemaVersion: RUNTIME_SCHEMA_VERSION,

@@ -2,7 +2,7 @@
 
 - Updated: 2026-07-20
 - Layer: Release evaluation
-- Current phase: Phase 5 Flex live-eval implementation after conservative interruption recovery
+- Current phase: Phase 5 Flex release gates before one paid matrix
 - Repository: initialized on `main`
 - Remote: `git@github.com:shivam-g10/infinite-litrpg.git`
 - Initial commit: `39b19a2` (`chore: scaffold agent workflow`)
@@ -22,12 +22,12 @@
 ## Current Blockers
 
 - The fresh prompt `1.4.11` run was killed by the local shell timeout during Rowan chapter 1 narration retry. The unknown provider request is permanently charged at its full `$0.014623` reservation. No chapter committed.
-- Durable exposure is `$2.811082175`; headroom is `$0.188917825`. The corrected Standard projection is `$0.208988`, so another Standard matrix cannot fit. The behavior-preserving Flex projection is `$0.104494`, but service-tier request, pricing, trace, and report binding are not implemented yet.
+- Durable exposure is `$2.811082175`; headroom is `$0.188917825`. The corrected Standard projection is `$0.208988`, so another Standard matrix cannot fit. Explicit Flex request, pricing, reservation, trace, sidecar, interruption, resume, and report binding reproduce the behavior-preserving `$0.104494` projection offline. Full non-live gates and independent review pass. A clean commit, clean-clone verification, and exact ledger preflight still block paid access.
 - The twelve-cycle matrix, six-POV zero-leak proof, and review packets remain open.
 
 ## Next Action
 
-Implement explicit Flex processing for the release eval, keep product traffic Standard by default, bind the tier into reservations and evidence, then pass full non-live and clean-clone gates. Run no paid request before the corrected twelve-cycle projection is reproduced by code.
+Inspect and commit the reviewed Flex slice, pass clean-clone verification, migrate and inspect the durable ledger without changing exposure, then run the single Flex twelve-cycle command with a long outer timeout. Never rerun automatically.
 
 ## Evidence Log
 
@@ -135,5 +135,8 @@ Implement explicit Flex processing for the release eval, keep product traffic St
 - 2026-07-20 interruption reconciliation: commit `cded33c` adds an exact tracked checkpoint and a no-network recovery command. It authenticated source commit `7afba1d`, sidecar, run, turn, three known reservations, and one unknown retry; rejected cross-run reservation ownership; converted only that retry to uncertain at its full `$0.014623`; wrote strict receipt `evals/reports/live-interruption-prompt-1.4.11-1.json` with SHA-256 `235b2d455389e9c9f3376f8f234fd6a45253107783e1d23b584e3a0e0f43872b`; then released the lock. Read-only SQLite inspection found zero lock, zero active reservations, three known reservations, one uncertain reservation, exact exposure `$2.811082175`, and headroom `$0.188917825`.
 - 2026-07-20 recovery gates: `npm run check`, `npm audit`, and `npm run verify:clean-clone` exited 0. Vitest passed 195 tests. Offline evals, production build, 17 E2E passes with one intentional desktop skip, both security scans, 526 licenses, and zero vulnerabilities passed. Independent review found and the regression closed one reservation-owner mismatch.
 - 2026-07-20 cost correction and Flex research: the prior compaction projection priced saved ordinary Luna input at the `$1.25` cache-write rate instead of the explicit no-cache `$1` rate. Correct Standard projection is `$0.208988`. Official Flex processing keeps the same Responses request semantics and models at half Standard token prices, making the same matrix `$0.104494`; projected final exposure is `$2.915576175` with `$0.084423825` margin. The organization usage endpoint still returns 403 because the project key lacks `api.usage.read`, so no lower provider bill is claimed. No generation ran.
+- 2026-07-20 Flex implementation slice: product runtime explicitly requests Standard while the full release script requires Flex. Runtime schema `1.1.0-runtime-candidates-5`, report version 9, and ledger version 2 bind requested and returned tier, tier-specific pricing, reservations, sidecars, interrupted-request receipts, resume checkpoints, and the exact `$0.104494` projection. Missing, auto, mismatched, mixed, or retained poisoned tier evidence fails closed. Ledger version 1 migration defaults historical rows to Standard and preserves exact `$2.811082175` exposure in regression. Standard and Flex StoryService committed and failed trace paths, strict current-report provenance, legacy report parsing, reconciliation, and accounting passed 59 focused tests plus strict TypeScript. No generation ran.
+- 2026-07-20 Flex full non-live gate: `npm run check`, `npm audit --audit-level=low`, and `git diff --check` exited 0. Format, lint, strict typecheck, 218 tests across 16 files, all six offline gates with 1,000 simulations and chapter 351 blocked, production build, 17 E2E passes with one intentional desktop skip, secret scan across 171 working files plus ignored reports and Git history, client-bundle scan, 526 package licenses, and zero vulnerabilities passed. No generation ran.
+- 2026-07-20 Flex independent review: 147 focused Flex tests and both real version 7 report parses passed. Review found no P0 through P2 defect. One stale resume error string and two test-only lint warnings were fixed; the full gate then passed without warnings. No generation ran.
 
 Add exact command, date, exit code, cost, and report path after every future milestone gate.

@@ -6,7 +6,12 @@ import type { Response } from "openai/resources/responses/responses";
 import type { z } from "zod";
 
 import { OpenAIRuntimeError } from "./errors";
-import { parseRuntimeModel, type RuntimeModel, type RuntimeReasoningEffort } from "./models";
+import {
+  parseRuntimeModel,
+  parseRuntimeServiceTier,
+  type RuntimeModel,
+  type RuntimeReasoningEffort,
+} from "./models";
 import { runRetriedRequest, type RuntimeCallResult, type RuntimePolicy } from "./policy";
 import { estimateMaximumCountedRequestCostUsd, estimateMaximumRequestCostUsd } from "./usage";
 
@@ -49,6 +54,7 @@ export async function runStructuredResponse<T>(
 ): Promise<RuntimeCallResult<T>> {
   const model = parseRuntimeModel(request.model);
   const reasoningEffort = ReasoningEffortSchema.parse(request.reasoningEffort);
+  const serviceTier = parseRuntimeServiceTier(request.policy.serviceTier ?? "standard");
   validateGenerationSettings(request.schemaName, request.maxOutputTokens);
   const format = zodTextFormat(request.schema, request.schemaName);
   const maximumCostUsd = createStableMaximumCostResolver(client, {
@@ -59,6 +65,7 @@ export async function runStructuredResponse<T>(
     model,
     policy: request.policy,
     reasoningEffort,
+    serviceTier,
   });
 
   return runRetriedRequest({
@@ -105,6 +112,7 @@ export async function runStructuredResponse<T>(
       return { data: parsed.data, responseId: response.id };
     },
     getResponseId: ({ response }) => response.id,
+    getServiceTier: ({ response }) => response.service_tier,
     getUsage: ({ response }) => response.usage,
     invoke: async (signal, attempt): Promise<AttemptedStructuredResponse> => ({
       attempt,
@@ -116,6 +124,7 @@ export async function runStructuredResponse<T>(
           model,
           prompt_cache_options: NO_PROMPT_CACHE_OPTIONS,
           reasoning: { effort: reasoningEffort },
+          service_tier: serviceTier === "flex" ? "flex" : "default",
           store: false,
           text: { format },
         },
@@ -198,6 +207,7 @@ export async function createAuditedNarrationReplay(
 ): Promise<AuditedNarrationResult> {
   const model = parseRuntimeModel(request.model);
   const reasoningEffort = ReasoningEffortSchema.parse(request.reasoningEffort);
+  const serviceTier = parseRuntimeServiceTier(request.policy.serviceTier ?? "standard");
   validateGenerationSettings("narration", request.maxOutputTokens);
   const chunkCharacters = request.chunkCharacters ?? 512;
   if (!Number.isInteger(chunkCharacters) || chunkCharacters < 1 || chunkCharacters > 4_096) {
@@ -221,6 +231,7 @@ export async function createAuditedNarrationReplay(
     model,
     policy: request.policy,
     reasoningEffort,
+    serviceTier,
   });
 
   const call = await runRetriedRequest({
@@ -265,6 +276,7 @@ export async function createAuditedNarrationReplay(
       };
     },
     getResponseId: ({ response }) => response.id,
+    getServiceTier: ({ response }) => response.service_tier,
     getUsage: ({ response }) => response.usage,
     invoke: async (signal, attempt): Promise<BufferedStreamResponse> => {
       const stream = client.responses.stream(
@@ -275,6 +287,7 @@ export async function createAuditedNarrationReplay(
           model,
           prompt_cache_options: NO_PROMPT_CACHE_OPTIONS,
           reasoning: { effort: reasoningEffort },
+          service_tier: serviceTier === "flex" ? "flex" : "default",
           store: false,
         },
         { signal },
@@ -310,8 +323,10 @@ export async function createAuditedNarrationReplay(
     latencyMs: call.latencyMs,
     prose: call.data.prose,
     replay: replayBufferedText(call.data.prose, chunkCharacters),
+    requestedServiceTier: call.requestedServiceTier,
     responseId: call.responseId,
     retries: call.retries,
+    serviceTier: call.serviceTier,
     usage: call.usage,
   };
 }
@@ -382,6 +397,7 @@ interface StableMaximumCostRequest {
   readonly model: RuntimeModel;
   readonly policy: RuntimePolicy;
   readonly reasoningEffort: RuntimeReasoningEffort;
+  readonly serviceTier: "standard" | "flex";
 }
 
 function createStableMaximumCostResolver(
@@ -395,7 +411,7 @@ function createStableMaximumCostResolver(
       request.model,
       promptBytes(input, request.instructions, request.format),
       request.maxOutputTokens,
-      { inputBilling: "uncached" },
+      { inputBilling: "uncached", serviceTier: request.serviceTier },
     );
     if (byteBound <= request.policy.budget.remainingUsd) return byteBound;
 
@@ -439,7 +455,7 @@ async function countMaximumRequestCost(
       request.model,
       counted.input_tokens,
       request.maxOutputTokens,
-      { inputBilling: "uncached" },
+      { inputBilling: "uncached", serviceTier: request.serviceTier },
     );
   } catch {
     return byteBound;

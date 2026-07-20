@@ -6,6 +6,7 @@
 ## Facts
 
 - Flex uses the Responses API with `service_tier: "flex"`. It is intended for lower-priority work such as evaluations. It can be slower and can return Resource Unavailable 429 errors. Source: [Flex processing](https://developers.openai.com/api/docs/guides/flex-processing).
+- The installed OpenAI SDK exposes returned `Response.service_tier`. Local strict fixtures map provider `default` to project Standard and provider `flex` to project Flex; missing, `auto`, `scale`, `priority`, or a different recognized tier fails.
 - OpenAI states that a Flex Resource Unavailable 429 is not charged. Source: [Flex processing](https://developers.openai.com/api/docs/guides/flex-processing).
 - Flex token prices are half Standard for GPT-5.6 Sol, Terra, and Luna. Luna is `$0.50` per million input tokens, `$0.05` cached input, `$0.625` cache write, and `$3` output. Source: [API pricing](https://developers.openai.com/api/docs/pricing?latest-pricing=flex).
 - The project key cannot call organization usage or cost endpoints because it lacks `api.usage.read`. Local conservative accounting remains authoritative. Source: [Usage API](https://platform.openai.com/docs/api-reference/usage/audio_transcriptions_object).
@@ -22,12 +23,13 @@
 
 - Exact latency and Resource Unavailable frequency for this twelve-cycle run are unknown until the single release attempt.
 - Provider invoice equality remains unknowable without organization usage access.
-- The SDK's returned service-tier field and error shape must be pinned by local type inspection and regression fixtures before generation.
+- The exact SDK error object for a Flex Resource Unavailable 429 remains unknown. Until a provider response proves that shape, the runner keeps the full reservation for every ambiguous failure.
 
 ## Decision Impact
 
 - Product requests stay Standard by default. Only an explicit release-eval option selects Flex.
 - Bind requested and returned service tier into request construction, pricing version, reservations, attempts, traces, and the strict live report.
 - Price byte bounds, counted-input bounds, known usage, static projection, and durable settlements with the same tier.
+- Runtime schema `1.1.0-runtime-candidates-5`, live report version 9, and ledger version 2 implement the binding. Historical ledger rows migrate as Standard without changing nano-USD exposure.
 - Do not weaken prompts, agents, audits, chapters, word count, or latency gates.
 - Run no paid request until unit tests, full `npm run check`, independent review, clean commit, clean-clone verification, and an exact ledger preflight reproduce the projected fit.

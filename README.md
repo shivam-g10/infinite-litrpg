@@ -42,6 +42,8 @@ Open `http://127.0.0.1:3000`. Choose one of six characters. The viewpoint locks 
 
 Set `OPENAI_NATIVE_MULTI_AGENT=true` to use the native Multi-agent beta. The default sequential Luna adapter preserves the same intent schema and deterministic resolver.
 
+Product requests explicitly use Standard processing. Flex is isolated to the release eval command and cannot change product runtime behavior.
+
 ## Architecture
 
 ```mermaid
@@ -91,7 +93,7 @@ npm run evals:live:smoke
 npm run evals:live:full
 ```
 
-The full command requires explicit `--confirm-cost` through its npm script. Reports stay in ignored `evals/reports/`. See [eval gates](evals/README.md) and [current status](docs/STATUS.md).
+The smoke command defaults to Standard. The full npm script requires explicit cost confirmation and selects Flex. Reports stay in ignored `evals/reports/`. See [eval gates](evals/README.md) and [current status](docs/STATUS.md).
 
 ## Safety
 
@@ -99,7 +101,7 @@ The full command requires explicit `--confirm-cost` through its npm script. Repo
 - Reader JSON excludes hidden world facts and other characters' private ledgers.
 - God Mode JSON is an explicit full-canon export.
 - Every request carries a UUID and expected world version for replay safety.
-- Per-chapter cost, retries, timeout, and background concurrency are bounded. Generation uses a byte-based worst case first. When that bound would falsely block, the official input-token counter supplies an exact count plus a 512-token margin. Counter failure keeps the byte bound. Unknown response cost keeps its reservation, and failed exposure carries into later chapter retries.
+- Per-chapter cost, retries, timeout, and background concurrency are bounded. Generation uses a tier-priced byte worst case first. When that bound would falsely block, the official input-token counter supplies an exact count plus a 512-token margin at the same tier. Counter failure keeps the byte bound. Returned tier mismatch fails, unknown response cost keeps its reservation, and failed exposure carries into later chapter retries.
 
 ## Build Week
 

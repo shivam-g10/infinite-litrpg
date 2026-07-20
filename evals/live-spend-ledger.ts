@@ -2,8 +2,9 @@ import Database from "better-sqlite3";
 
 import { OpenAIRuntimeError, type RuntimeCostHooks } from "../app/src/server/openai";
 import type { RuntimeModel } from "../app/src/server/openai/models";
+import type { RuntimeServiceTier } from "@infinite-litrpg/shared";
 
-const LEDGER_VERSION = 1;
+const LEDGER_VERSION = 2;
 const NANO_USD = 1_000_000_000;
 
 export interface LiveSpendBaseline {
@@ -49,6 +50,7 @@ interface ReservationAuditRow extends ReservationRow {
   readonly attempt: number;
   readonly id: string;
   readonly model: RuntimeModel;
+  readonly service_tier: RuntimeServiceTier;
 }
 
 export interface InterruptedKnownReservation {
@@ -58,6 +60,7 @@ export interface InterruptedKnownReservation {
   readonly id: string;
   readonly maximumCostUsd: number;
   readonly model: RuntimeModel;
+  readonly serviceTier?: RuntimeServiceTier;
 }
 
 export interface InterruptedUnknownReservation {
@@ -66,6 +69,7 @@ export interface InterruptedUnknownReservation {
   readonly id: string;
   readonly maximumCostUsd: number;
   readonly model: RuntimeModel;
+  readonly serviceTier?: RuntimeServiceTier;
 }
 
 export interface InterruptedRunExpectation {
@@ -109,6 +113,7 @@ export class LiveSpendLedger {
         agent_id TEXT,
         attempt INTEGER NOT NULL,
         model TEXT NOT NULL,
+        service_tier TEXT NOT NULL CHECK (service_tier IN ('standard', 'flex')),
         max_nano INTEGER NOT NULL,
         actual_nano INTEGER,
         status TEXT NOT NULL CHECK (status IN ('active', 'known', 'uncertain')),
@@ -124,7 +129,15 @@ export class LiveSpendLedger {
          ) VALUES (1, ?, ?, NULL, 0, NULL)`,
       )
       .run(LEDGER_VERSION, totalCapNano);
-    const meta = this.readMeta();
+    let meta = this.readMeta();
+    if (meta.total_cap_nano !== totalCapNano) {
+      this.db.close();
+      throw new Error("Live spend ledger total cap does not match this runner");
+    }
+    if (meta.version === 1) {
+      this.migrateVersionOneLedger();
+      meta = this.readMeta();
+    }
     if (meta.version !== LEDGER_VERSION || meta.total_cap_nano !== totalCapNano) {
       this.db.close();
       throw new Error("Live spend ledger version or total cap does not match this runner");
@@ -197,10 +210,12 @@ export class LiveSpendLedger {
       ...reservation,
       actualNano: usdToNano(reservation.actualCostUsd, "known reservation actual cost"),
       maximumNano: usdToNano(reservation.maximumCostUsd, "known reservation maximum cost"),
+      serviceTier: reservation.serviceTier ?? "standard",
     }));
     const unknown = expectation.unknownReservations.map((reservation) => ({
       ...reservation,
       maximumNano: usdToNano(reservation.maximumCostUsd, "unknown reservation maximum cost"),
+      serviceTier: reservation.serviceTier ?? "standard",
     }));
     if (unknown.length === 0) {
       throw new Error("Interrupted run reconciliation requires an unknown reservation");
@@ -240,6 +255,7 @@ export class LiveSpendLedger {
           row.agent_id === expected.agentId &&
           row.attempt === expected.attempt &&
           row.model === expected.model &&
+          row.service_tier === expected.serviceTier &&
           row.max_nano === expected.maximumNano &&
           row.actual_nano === expected.actualNano
         );
@@ -253,6 +269,7 @@ export class LiveSpendLedger {
           row.agent_id === expected.agentId &&
           row.attempt === expected.attempt &&
           row.model === expected.model &&
+          row.service_tier === expected.serviceTier &&
           row.max_nano === expected.maximumNano &&
           row.actual_nano === null
         );
@@ -345,9 +362,9 @@ export class LiveSpendLedger {
           this.db
             .prepare(
               `INSERT INTO reservations (
-                 id, run_id, agent_id, attempt, model, max_nano, actual_nano, status,
+                 id, run_id, agent_id, attempt, model, service_tier, max_nano, actual_nano, status,
                  created_at, settled_at
-               ) VALUES (?, ?, ?, ?, ?, ?, NULL, 'active', ?, NULL)`,
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 'active', ?, NULL)`,
             )
             .run(
               reservation.id,
@@ -355,6 +372,7 @@ export class LiveSpendLedger {
               reservation.agentId,
               reservation.attempt,
               reservation.model,
+              reservation.serviceTier,
               maximumNano,
               new Date().toISOString(),
             );
@@ -446,6 +464,27 @@ export class LiveSpendLedger {
       throw new Error("Live run does not own the spend ledger lock");
   }
 
+  private migrateVersionOneLedger(): void {
+    const transaction = this.db.transaction(() => {
+      const beforeExposureNano = this.totalExposureNano();
+      const columns = this.db.prepare("PRAGMA table_info(reservations)").all() as {
+        readonly name: string;
+      }[];
+      if (!columns.some(({ name }) => name === "service_tier")) {
+        this.db.exec(
+          "ALTER TABLE reservations ADD COLUMN service_tier TEXT NOT NULL DEFAULT 'standard' CHECK (service_tier IN ('standard', 'flex'))",
+        );
+      }
+      const updated = this.db
+        .prepare("UPDATE ledger_meta SET version = ? WHERE id = 1 AND version = 1")
+        .run(LEDGER_VERSION);
+      if (updated.changes !== 1 || this.totalExposureNano() !== beforeExposureNano) {
+        throw new Error("Live spend ledger migration changed durable exposure");
+      }
+    });
+    transaction.immediate();
+  }
+
   private countAllReservations(): number {
     return this.readSum("SELECT COUNT(*) AS value FROM reservations");
   }
@@ -482,7 +521,7 @@ export class LiveSpendLedger {
   private readAllReservations(): ReservationAuditRow[] {
     return this.db
       .prepare(
-        `SELECT id, run_id, agent_id, attempt, model, max_nano, actual_nano, status
+        `SELECT id, run_id, agent_id, attempt, model, service_tier, max_nano, actual_nano, status
            FROM reservations
           ORDER BY id`,
       )

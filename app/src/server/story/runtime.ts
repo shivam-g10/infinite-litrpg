@@ -34,6 +34,7 @@ export function getStoryRuntime(): StoryRuntime {
     maxBackgroundAgents: environment.maxBackgroundAgents,
     maxCostUsdPerChapter: environment.maxCostUsdPerChapter,
     nativeMultiAgent: environment.nativeMultiAgent,
+    serviceTier: "standard",
   });
 
   const runtime = { environment, service };

@@ -19,7 +19,7 @@ import type {
 import type { z } from "zod";
 
 import { OpenAIRuntimeError } from "./errors";
-import type { RuntimeReasoningEffort } from "./models";
+import { parseRuntimeServiceTier, type RuntimeReasoningEffort } from "./models";
 import { runRetriedRequest, type RuntimeCallResult, type RuntimePolicy } from "./policy";
 import { NO_PROMPT_CACHE_OPTIONS, runStructuredResponse, type StableOpenAIClient } from "./stable";
 import { estimateMaximumRequestCostUsd } from "./usage";
@@ -59,8 +59,10 @@ export interface LunaCallSummary {
   readonly agentId: string | null;
   readonly estimatedCostUsd: number;
   readonly latencyMs: number;
+  readonly requestedServiceTier: RuntimeCallResult<unknown>["requestedServiceTier"];
   readonly responseId: string;
   readonly retries: number;
+  readonly serviceTier: RuntimeCallResult<unknown>["serviceTier"];
   readonly usage: RuntimeCallResult<unknown>["usage"];
 }
 
@@ -88,6 +90,7 @@ export async function runNativeLunaWorldTick(
 ): Promise<LunaWorldTickResult> {
   validateLunaRequest(request);
   const reasoningEffort = ReasoningEffortSchema.parse(request.reasoningEffort);
+  const serviceTier = parseRuntimeServiceTier(request.policy.serviceTier ?? "standard");
   const schemaFormat = zodTextFormat(
     BackgroundIntentBatchCandidateSchema,
     "background_intent_batch",
@@ -152,6 +155,7 @@ export async function runNativeLunaWorldTick(
       return { data: IntentBatchSchema.parse({ intents }), responseId: response.id };
     },
     getResponseId: (response) => response.id,
+    getServiceTier: (response) => response.service_tier,
     getUsage: (response) => response.usage,
     invoke: async (signal) =>
       client.beta.responses.create(
@@ -167,6 +171,7 @@ export async function runNativeLunaWorldTick(
           },
           prompt_cache_options: NO_PROMPT_CACHE_OPTIONS,
           reasoning: { effort: reasoningEffort },
+          service_tier: serviceTier === "flex" ? "flex" : "default",
           store: false,
           text: { format: schemaFormat },
         },
@@ -179,7 +184,7 @@ export async function runNativeLunaWorldTick(
         `${request.coordinatorInstructions}\n${buildNativeCoordinatorInput(request.resolverInput, request.agents)}\n${JSON.stringify(schemaFormat)}`,
       ).byteLength,
       request.maxOutputTokens,
-      { inputBilling: "uncached" },
+      { inputBilling: "uncached", serviceTier },
     ),
     policy: request.policy,
   });
@@ -395,8 +400,10 @@ function toCallSummary(agentId: string | null, call: RuntimeCallResult<unknown>)
     agentId,
     estimatedCostUsd: call.estimatedCostUsd,
     latencyMs: call.latencyMs,
+    requestedServiceTier: call.requestedServiceTier,
     responseId: call.responseId,
     retries: call.retries,
+    serviceTier: call.serviceTier,
     usage: call.usage,
   };
 }

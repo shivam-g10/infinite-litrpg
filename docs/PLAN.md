@@ -47,12 +47,14 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 - [x] Implement sequential Luna fallback.
 - [x] Implement bounded refusal, retry, timeout, and preflight cost handling.
 - [x] Persist successful calls and every failed or successful runtime attempt without secrets.
+- [x] Keep product requests explicitly Standard and bind explicit Flex into release-eval requests, pricing, reservations, traces, and recovery evidence.
 
 ### Phase 5: Narrative Loop
 
 - [x] Implement two valid choices plus custom action.
 - [x] Implement POV-safe Luna narration and audited NDJSON replay.
 - [x] Implement chapter fact audit that can reject prose but cannot create canon.
+- [x] Reproduce the exact prompt `1.4.11` Standard and Flex matrix projections and fail closed on incomplete service-tier evidence.
 - [ ] Pass twelve full live chapter cycles.
 - [ ] Pass zero-leak checks across six POVs.
 
@@ -134,6 +136,7 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 - ADR-012 introduces prompt `1.4.10`. Luna becomes the primary narrator while Terra remains the custom-action translator. Labeled maps and tuples preserve every background POV, provenance, visibility, skill, secret, and public-world value, reducing seed agent instructions to 4,083–4,374 bytes and frames to 4,293–4,608 bytes. Narration targets 900–925 words. Sole-failure recovery expands to 800–899 words with a dynamic maximum of 230 output tokens; merged prose still reruns the unchanged 900–1,300 gate and full audit. Current writes require `1.4.10`; persisted reads accept matching authenticated `1.4.9` records. A three-agent 812-word regression passes under `$0.0405` without token counting. The old four Terra chapters will not count toward the fresh release matrix.
 - Prompt `1.4.10` committed Rowan chapter 1, then failed Rowan chapter 2 after three short narrations, two failed continuations, and one disputed audit. The report retained only accepted prose, so the leak claim could not be adjudicated. Fifteen known attempts cost `$0.0512422`; global exposure reached `$2.786385175` and left `$0.213614825`.
 - ADR-013 introduces prompt `1.4.11`, runtime schema `1.1.0-runtime-candidates-4`, and live report version 8. Generation calls explicitly disable prompt caching and reserve ordinary input. Audit failures require exact prose evidence and canonical fact anchors, invalid audits retry the same prose, recovery aligns to 900–925 words, and reports preserve every rejected narrative candidate without exposing it to the reader. Compact application-owned intent and frame envelopes preserve exact domain values. Provider token counts and minimum structural output savings project `$0.207336`, leaving `$0.006278825` under the remaining global headroom before additional narration and audit savings.
+- ADR-014 adds explicit service-tier provenance without changing prompt behavior. Product requests send Standard; the full release script sends Flex. Runtime schema `1.1.0-runtime-candidates-5`, live report version 9, and ledger version 2 preserve requested and returned tier through attempts, calls, traces, sidecars, reservations, interruption receipts, and resumes. Historical rows migrate as Standard without changing exposure. Exact code projections are `$0.208988` Standard and `$0.104494` Flex.
 
 ## Decision Log
 
@@ -149,6 +152,7 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 - ADR-011 replaces pair-only live recovery and static suite rejection with authenticated prefix recovery plus durable request-level global reservations. Static projection stays visible but cannot reclaim or spend exposure.
 - Version 7 authenticates each retained result's source cap. Every new result cap must equal the current run cap; mixed caps cannot be forged to pass the cost gate.
 - ADR-013 makes prompt-cache behavior explicit, grounds audit failures in retained prose, and moves new live evidence to strict report version 8. Canon, three background agents, deterministic validation, full independent audit, and atomic commit remain unchanged.
+- ADR-014 keeps product traffic explicitly Standard and requires Flex for version 9 full release reports. Requested and returned tier, pricing version, and projection must agree; missing, mixed, auto, mismatched, or retained poisoned evidence fails closed.
 - Responses rejects Zod fixed tuples because their generated JSON Schema uses an unsupported array-valued `items`. Runtime candidates therefore use compact strict objects and homogeneous argument arrays, followed by exact deterministic decoding and canonical schema validation.
 - Version 8 creates one turn identity before model access; binds accepted results, candidates, raw narration, recovery, and audit responses, retry groups for intent and narrative calls, committed chapter requests, traces, and stream chunks to it; deterministically restages full before and after state; preserves raw malformed audit text; carries authenticated legacy gaps across resumes; and recomputes every release gate from evidence.
 
@@ -158,4 +162,4 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 
 ## Current Milestone
 
-Phase 5 release eval: prompt `1.4.11` locally preserves exact failed candidates, grounds audit rejections, stops after same-prose audit exhaustion, aligns recovery, and disables implicit cache writes. Its first fresh run was interrupted during a narration retry. Exact checkpoint reconciliation permanently charged the unknown request at its full maximum; the durable ledger now has zero lock, zero active reservations, one uncertain reservation, exposure `$2.811082175`, and headroom `$0.188917825`. Correcting the no-cache input-rate error makes the Standard twelve-cycle projection `$0.208988`, which cannot fit. Implement explicit Flex processing only for release evals, bind its half-price tier into requests, reservations, traces, and reports, reproduce the `$0.104494` projection in code, then rerun all non-live and clean-clone gates before one paid twelve-cycle attempt. No automatic retry.
+Phase 5 release eval: prompt `1.4.11` locally preserves exact failed candidates, grounds audit rejections, stops after same-prose audit exhaustion, aligns recovery, and disables implicit cache writes. Exact checkpoint reconciliation permanently charged the interrupted unknown request at its full maximum; the durable ledger has zero lock, zero active reservations, one uncertain reservation, exposure `$2.811082175`, and headroom `$0.188917825`. Explicit Flex processing reproduces the `$0.104494` matrix, requires matching provider tier evidence, and projects final exposure `$2.915576175`. Full non-live gates and independent review pass. Create the clean checkpoint, pass clean-clone verification, and run the exact ledger preflight before the single paid twelve-cycle attempt. No automatic retry.

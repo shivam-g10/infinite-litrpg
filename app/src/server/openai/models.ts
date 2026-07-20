@@ -1,4 +1,9 @@
-import { RuntimeModelSchema, type ModelCallTrace } from "@infinite-litrpg/shared";
+import {
+  RuntimeModelSchema,
+  RuntimeServiceTierSchema,
+  type ModelCallTrace,
+  type RuntimeServiceTier,
+} from "@infinite-litrpg/shared";
 
 import { OpenAIRuntimeError } from "./errors";
 
@@ -14,6 +19,14 @@ export function parseRuntimeModel(input: unknown): RuntimeModel {
       "INVALID_MODEL",
       `Runtime model must be one of: ${RUNTIME_MODELS.join(", ")}`,
     );
+  }
+  return parsed.data;
+}
+
+export function parseRuntimeServiceTier(input: unknown): RuntimeServiceTier {
+  const parsed = RuntimeServiceTierSchema.safeParse(input);
+  if (!parsed.success) {
+    throw new OpenAIRuntimeError("INVALID_POLICY", "Runtime service tier must be standard or flex");
   }
   return parsed.data;
 }

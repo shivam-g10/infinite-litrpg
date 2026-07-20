@@ -4,10 +4,18 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { CHARACTER_IDS, RuntimeAttemptTraceSchema } from "@infinite-litrpg/shared";
+import {
+  CHARACTER_IDS,
+  RuntimeAttemptTraceSchema,
+  RuntimeServiceTierSchema,
+} from "@infinite-litrpg/shared";
 import { z } from "zod";
 
-import { ZERO_USAGE } from "../app/src/server/openai";
+import {
+  PRICING_VERSION,
+  ZERO_USAGE,
+  pricingVersionForServiceTier,
+} from "../app/src/server/openai";
 import {
   LiveSpendLedger,
   type InterruptedRunExpectation,
@@ -55,6 +63,7 @@ const KnownReservationSchema = z
     id: z.string().min(1).max(240),
     maximumCostUsd: z.number().positive().max(TOTAL_CAP_USD),
     model: RuntimeModelSchema,
+    serviceTier: RuntimeServiceTierSchema.default("standard"),
   })
   .strict();
 const UnknownReservationSchema = z
@@ -65,6 +74,7 @@ const UnknownReservationSchema = z
     maximumCostUsd: z.number().positive().max(TOTAL_CAP_USD),
     model: RuntimeModelSchema,
     phase: z.enum(["intent", "narration", "audit", "genesis", "recovery", "finale"]),
+    serviceTier: RuntimeServiceTierSchema.default("standard"),
     turn: TurnIdentitySchema,
   })
   .strict();
@@ -78,9 +88,11 @@ export const InterruptionCheckpointSchema = z
         attemptCount: z.number().int().min(0).max(1_000),
         candidateCount: z.number().int().min(0).max(500),
         narrativeResponseCount: z.number().int().min(0).max(500),
+        pricingVersion: z.string().min(1).max(240).default(PRICING_VERSION),
         promptVersion: z.string().min(1).max(240),
         reportVersion: z.number().int().min(1).max(100),
         runtimeAttemptEvidenceCount: z.number().int().min(0).max(1_000),
+        serviceTier: RuntimeServiceTierSchema.default("standard"),
       })
       .strict(),
     id: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/u),
@@ -112,6 +124,15 @@ export const InterruptionCheckpointSchema = z
     ];
     if (new Set(ids).size !== ids.length) {
       context.addIssue({ code: "custom", message: "Reservation IDs must be unique" });
+    }
+    if (
+      checkpoint.expectedSidecar.pricingVersion !==
+        pricingVersionForServiceTier(checkpoint.expectedSidecar.serviceTier) ||
+      [...checkpoint.knownReservations, ...checkpoint.unknownReservations].some(
+        ({ serviceTier }) => serviceTier !== checkpoint.expectedSidecar.serviceTier,
+      )
+    ) {
+      context.addIssue({ code: "custom", message: "Interruption service-tier evidence disagrees" });
     }
     const bridgePaths = checkpoint.bridgeFiles.map(({ path }) => path);
     if (
@@ -157,12 +178,14 @@ export const InterruptionReceiptSchema = z
     checkpointId: z.string().min(1).max(240),
     finishedAt: z.string().datetime(),
     knownAttemptCostUsd: z.number().min(0).max(TOTAL_CAP_USD),
+    pricingVersion: z.string().min(1).max(240).default(PRICING_VERSION),
     promptVersion: z.string().min(1).max(240),
     reconciliationGitSha: GitShaSchema,
     runId: z.string().uuid(),
     sidecarPath: z.string().min(1).max(1_000),
     sidecarSha256: Sha256Schema,
     sourceGitSha: GitShaSchema,
+    serviceTier: RuntimeServiceTierSchema.default("standard"),
     syntheticAttempts: z.array(SyntheticAttemptSchema).length(1),
     totalExposureUsd: z.number().min(0).max(TOTAL_CAP_USD),
     unknownReservationCostUsd: z.number().positive().max(TOTAL_CAP_USD),
@@ -184,9 +207,11 @@ const MinimalSidecarSchema = z
     ),
     liveRunId: z.string().uuid(),
     narrativeResponses: z.array(z.unknown()),
+    pricingVersion: z.string().min(1).max(240).default(PRICING_VERSION),
     promptVersion: z.string().min(1).max(240),
     reportVersion: z.number().int().min(1).max(100),
     runtimeAttemptEvidence: z.array(z.unknown()),
+    serviceTier: RuntimeServiceTierSchema.default("standard"),
     sourceGitSha: GitShaSchema,
   })
   .passthrough();
@@ -232,7 +257,9 @@ export function verifyInterruptedSidecar(
     sidecar.attempts.length !== expected.attemptCount ||
     sidecar.candidates.length !== expected.candidateCount ||
     sidecar.narrativeResponses.length !== expected.narrativeResponseCount ||
-    sidecar.runtimeAttemptEvidence.length !== expected.runtimeAttemptEvidenceCount
+    sidecar.runtimeAttemptEvidence.length !== expected.runtimeAttemptEvidenceCount ||
+    sidecar.serviceTier !== expected.serviceTier ||
+    sidecar.pricingVersion !== expected.pricingVersion
   ) {
     throw new Error("Interrupted sidecar evidence counts do not match checkpoint");
   }
@@ -270,7 +297,9 @@ export function verifyInterruptedSidecar(
           latencyMs: 0,
           model: unknown.model,
           phase: unknown.phase,
+          requestedServiceTier: unknown.serviceTier,
           responseId: null,
+          serviceTier: null,
           usage: ZERO_USAGE,
         },
         reservationId: unknown.id,
@@ -311,12 +340,14 @@ export function buildInterruptionReceipt(
     checkpointId: checkpoint.id,
     finishedAt: new Date().toISOString(),
     knownAttemptCostUsd: evidence.knownAttemptCostUsd,
+    pricingVersion: checkpoint.expectedSidecar.pricingVersion,
     promptVersion: checkpoint.expectedSidecar.promptVersion,
     reconciliationGitSha,
     runId: checkpoint.runId,
     sidecarPath: checkpoint.sidecarPath,
     sidecarSha256: evidence.sidecarSha256,
     sourceGitSha: checkpoint.sourceGitSha,
+    serviceTier: checkpoint.expectedSidecar.serviceTier,
     syntheticAttempts: evidence.syntheticAttempts,
     totalExposureUsd: ledgerSnapshot.totalExposureUsd,
     unknownReservationCostUsd,

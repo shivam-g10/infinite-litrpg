@@ -72,6 +72,32 @@ describe("Luna world-tick adapters", () => {
     expect(JSON.stringify(body.text.format)).not.toMatch(/"items":\[/u);
   });
 
+  it("binds explicit Flex to the native beta request and response", async () => {
+    const response = betaResponse([
+      messageItem(
+        JSON.stringify({ intents: [{ c: "actor-one", ...intentCandidate() }] }),
+        "root",
+        "final_answer",
+      ),
+    ]);
+    response.service_tier = "flex";
+    const create = vi.fn().mockResolvedValue(response);
+    const tickRequest = request(true);
+    tickRequest.policy = {
+      budget: new ChapterCostBudget(1),
+      maxRetries: 0,
+      serviceTier: "flex",
+    };
+
+    const result = await runLunaWorldTick(client({ create, parse: vi.fn() }), tickRequest);
+
+    expect((create.mock.calls[0]?.[0] as { service_tier?: string }).service_tier).toBe("flex");
+    expect(result.calls[0]).toMatchObject({
+      requestedServiceTier: "flex",
+      serviceTier: "flex",
+    });
+  });
+
   it("extracts only root final text", () => {
     const output = [
       messageItem("child answer", "child", "final_answer"),
@@ -261,6 +287,7 @@ function betaResponse(output: readonly unknown[]): BetaResponse {
     id: "resp_beta",
     incomplete_details: null,
     output: output as BetaResponseOutputItem[],
+    service_tier: "default",
     status: "completed",
     usage: openAIUsage(),
   } as unknown as BetaResponse;
@@ -276,6 +303,7 @@ function parsedIntentCandidate(
     incomplete_details: null,
     output: [],
     output_text: JSON.stringify(value),
+    service_tier: "default",
     status: "completed",
     usage: openAIUsage(),
   } as unknown as Response;

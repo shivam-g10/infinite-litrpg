@@ -36,7 +36,9 @@ describe("live interruption reconciliation", () => {
           latencyMs: 0,
           model: "gpt-5.6-luna",
           phase: "narration",
+          requestedServiceTier: "standard",
           responseId: null,
+          serviceTier: null,
           usage: {
             cacheWriteTokens: 0,
             cachedInputTokens: 0,
@@ -51,6 +53,39 @@ describe("live interruption reconciliation", () => {
       },
     ]);
     expect(evidence.knownAttemptCostUsd).toBe(0.010074);
+  });
+
+  it("preserves Flex requested tier while unknown observed tier stays null", () => {
+    const baseRaw = JSON.parse(sidecarText()) as Record<string, unknown>;
+    const raw = JSON.stringify({
+      ...baseRaw,
+      pricingVersion: "openai-flex-explicit-no-cache-2026-07-20",
+      reportVersion: 9,
+      serviceTier: "flex",
+    });
+    const standard = checkpointFor(raw);
+    const checkpoint = InterruptionCheckpointSchema.parse({
+      ...standard,
+      expectedSidecar: {
+        ...standard.expectedSidecar,
+        pricingVersion: "openai-flex-explicit-no-cache-2026-07-20",
+        reportVersion: 9,
+        serviceTier: "flex",
+      },
+      knownReservations: standard.knownReservations.map((reservation) => ({
+        ...reservation,
+        serviceTier: "flex",
+      })),
+      unknownReservations: standard.unknownReservations.map((reservation) => ({
+        ...reservation,
+        serviceTier: "flex",
+      })),
+    });
+
+    expect(verifyInterruptedSidecar(raw, checkpoint).syntheticAttempts[0]?.attempt).toMatchObject({
+      requestedServiceTier: "flex",
+      serviceTier: null,
+    });
   });
 
   it("rejects changed sidecars, run IDs, evidence counts, and retry shape", () => {

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import {
   CHARACTER_IDS,
+  RUNTIME_SCHEMA_VERSION,
   type BackgroundIntentCandidate,
   NARRATIVE_AUDIT_DIMENSIONS,
   type NarrativeAudit,
@@ -13,6 +14,7 @@ import type OpenAI from "openai";
 import type { Response, ResponseUsage } from "openai/resources/responses/responses";
 import { describe, expect, it, vi } from "vitest";
 
+import { FLEX_PRICING_VERSION, PRICING_VERSION } from "../openai/usage";
 import { StoryStore } from "../storage/story-store";
 import {
   canonicalizeNarrativeAuditOutput,
@@ -106,164 +108,202 @@ describe("StoryService", () => {
     store.close();
   });
 
-  it("audits prose before one atomic chapter commit", async () => {
-    const store = new StoryStore();
-    const oversizedProse = Array.from({ length: 1_301 }, (_, index) => `excess${index}`).join(" ");
-    const prose = Array.from({ length: 900 }, (_, index) => `ember${index}`).join(" ");
-    const proseHash = createHash("sha256").update(prose).digest("hex");
-    const frame = {
-      choices: [
-        {
-          action: { type: "wait" },
-          description: "Wait and watch the road for movement.",
-          id: "choice-1",
-          milestoneId: null,
+  it.each([
+    {
+      expectedPricingVersion: PRICING_VERSION,
+      requestedTier: "standard" as const,
+      responseTier: "default" as const,
+    },
+    {
+      expectedPricingVersion: FLEX_PRICING_VERSION,
+      requestedTier: "flex" as const,
+      responseTier: "flex" as const,
+    },
+  ])(
+    "audits prose before one atomic chapter commit on $requestedTier",
+    async ({ expectedPricingVersion, requestedTier, responseTier }) => {
+      const store = new StoryStore();
+      const oversizedProse = Array.from({ length: 1_301 }, (_, index) => `excess${index}`).join(
+        " ",
+      );
+      const prose = Array.from({ length: 900 }, (_, index) => `ember${index}`).join(" ");
+      const proseHash = createHash("sha256").update(prose).digest("hex");
+      const frame = {
+        choices: [
+          {
+            action: { type: "wait" },
+            description: "Wait and watch the road for movement.",
+            id: "choice-1",
+            milestoneId: null,
+          },
+          {
+            action: { subjectId: "ash-road", type: "investigate" },
+            description: "Inspect the ash road for a fresh trail.",
+            id: "choice-2",
+            milestoneId: null,
+          },
+        ],
+        terminal: false,
+        title: "The Ash Road",
+      } as const;
+      const audit: NarrativeAudit = {
+        approved: true,
+        evidence: NARRATIVE_AUDIT_DIMENSIONS.map((dimension) => ({
+          detail: "The chapter obeys the selected viewpoint and committed action.",
+          dimension,
+          issueCode: "pass",
+        })),
+        leakedFactIds: [],
+        proseHash,
+        scores: {
+          arcProgress: 2,
+          characterAutonomy: 2,
+          choiceFulfillment: 2,
+          continuity: 2,
+          litrpgMechanics: 2,
+          povSafety: 2,
+          prose: 2,
         },
-        {
-          action: { subjectId: "ash-road", type: "investigate" },
-          description: "Inspect the ash road for a fresh trail.",
-          id: "choice-2",
-          milestoneId: null,
+      };
+      const parse = vi
+        .fn()
+        .mockResolvedValueOnce(parsedResponse(frame, "resp_frame", usage(), responseTier))
+        .mockResolvedValueOnce(parsedResponse(audit, "resp_audit", usage(), responseTier));
+      const stream = vi
+        .fn()
+        .mockReturnValueOnce(
+          fakeStream(oversizedProse, "resp_narration_rejected", usage(), responseTier),
+        )
+        .mockReturnValueOnce(fakeStream(prose, "resp_narration_approved", usage(), responseTier));
+      const client = {
+        responses: { create: parse, stream },
+      } as unknown as OpenAI;
+      const draftRejections: (readonly ValidationIssue[])[] = [];
+      const narrativeCandidates: NarrativeCandidateEvidence[] = [];
+      const runtimeAttempts: TraceEnvelope["attempts"] = [];
+      const runtimeTurns: NarrativeTurnIdentity[] = [];
+      const service = new StoryService(store, client, {
+        ...options(),
+        onNarrativeDraftRejected: (issues) => draftRejections.push(issues),
+        onNarrativeCandidate: (candidate) => narrativeCandidates.push(candidate),
+        onRuntimeAttempt: (attempt, turn) => {
+          runtimeAttempts.push(attempt);
+          runtimeTurns.push(turn);
         },
-      ],
-      terminal: false,
-      title: "The Ash Road",
-    } as const;
-    const audit: NarrativeAudit = {
-      approved: true,
-      evidence: NARRATIVE_AUDIT_DIMENSIONS.map((dimension) => ({
-        detail: "The chapter obeys the selected viewpoint and committed action.",
-        dimension,
-        issueCode: "pass",
-      })),
-      leakedFactIds: [],
-      proseHash,
-      scores: {
-        arcProgress: 2,
-        characterAutonomy: 2,
-        choiceFulfillment: 2,
-        continuity: 2,
-        litrpgMechanics: 2,
-        povSafety: 2,
-        prose: 2,
-      },
-    };
-    const parse = vi
-      .fn()
-      .mockResolvedValueOnce(parsedResponse(frame, "resp_frame"))
-      .mockResolvedValueOnce(parsedResponse(audit, "resp_audit"));
-    const stream = vi
-      .fn()
-      .mockReturnValueOnce(fakeStream(oversizedProse, "resp_narration_rejected"))
-      .mockReturnValueOnce(fakeStream(prose, "resp_narration_approved"));
-    const client = {
-      responses: { create: parse, stream },
-    } as unknown as OpenAI;
-    const draftRejections: (readonly ValidationIssue[])[] = [];
-    const narrativeCandidates: NarrativeCandidateEvidence[] = [];
-    const runtimeAttempts: TraceEnvelope["attempts"] = [];
-    const runtimeTurns: NarrativeTurnIdentity[] = [];
-    const service = new StoryService(store, client, {
-      ...options(),
-      onNarrativeDraftRejected: (issues) => draftRejections.push(issues),
-      onNarrativeCandidate: (candidate) => narrativeCandidates.push(candidate),
-      onRuntimeAttempt: (attempt, turn) => {
-        runtimeAttempts.push(attempt);
-        runtimeTurns.push(turn);
-      },
-    });
-    const selected = service.selectPov("rowan-ashborn");
-    const replayed: string[] = [];
-    const command = {
-      choiceId: selected.chapter.choices[0]?.id ?? "missing",
-      expectedWorldVersion: 1,
-      requestId: "00000000-0000-4000-8000-000000000001",
-      type: "take_action" as const,
-    };
+        serviceTier: requestedTier,
+      });
+      const selected = service.selectPov("rowan-ashborn");
+      const replayed: string[] = [];
+      const command = {
+        choiceId: selected.chapter.choices[0]?.id ?? "missing",
+        expectedWorldVersion: 1,
+        requestId: "00000000-0000-4000-8000-000000000001",
+        type: "take_action" as const,
+      };
 
-    await expect(
-      service.takeTurn(command, (chunk) => {
-        expect(store.loadChapters("ashen-crown-v1")).toHaveLength(1);
-        replayed.push(chunk);
-        if (replayed.join("").length === prose.length) {
-          throw new Error("Replay consumer disconnected after commit");
-        }
-      }),
-    ).rejects.toThrow("Replay consumer disconnected after commit");
-    const result = await service.takeTurn(command);
+      await expect(
+        service.takeTurn(command, (chunk) => {
+          expect(store.loadChapters("ashen-crown-v1")).toHaveLength(1);
+          replayed.push(chunk);
+          if (replayed.join("").length === prose.length) {
+            throw new Error("Replay consumer disconnected after commit");
+          }
+        }),
+      ).rejects.toThrow("Replay consumer disconnected after commit");
+      const result = await service.takeTurn(command);
 
-    expect(result.world).toMatchObject({ chapter: 1, version: 2 });
-    expect(result.chapter).toMatchObject({ title: "The Ash Road" });
-    expect(result.chapter.prose.split(/\s+/u)).toHaveLength(900);
-    expect(result.godMode).toMatchObject({ gateResult: "passed" });
-    expect(result.godMode).toMatchObject({ schemaVersion: "1.1.0-runtime-candidates-4" });
-    expect(store.loadChapters("ashen-crown-v1")).toHaveLength(1);
-    expect(replayed.join("")).toBe(prose);
-    expect(store.loadFailedTurnTraces("ashen-crown-v1")).toEqual([]);
-    expect(parse).toHaveBeenCalledTimes(2);
-    expect(stream).toHaveBeenCalledTimes(2);
-    expect(draftRejections).toHaveLength(1);
-    expect(draftRejections[0]?.some(({ code }) => code === "INVALID_SCHEMA")).toBe(true);
-    expect(narrativeCandidates).toHaveLength(2);
-    expect(narrativeCandidates[0]).toMatchObject({
-      accepted: false,
-      deterministicIssues: [expect.objectContaining({ code: "INVALID_SCHEMA" })],
-      narratorAttempt: 0,
-      narratorResponseId: "resp_narration_rejected",
-      rawProse: oversizedProse,
-      rawWordCount: 1_301,
-      rejectionStage: "deterministic",
-    });
-    expect(narrativeCandidates[1]).toMatchObject({
-      accepted: true,
-      auditResponseId: "resp_audit",
-      mergedProse: prose,
-      narratorAttempt: 1,
-      narratorResponseId: "resp_narration_approved",
-      rejectionStage: "accepted",
-    });
-    expect(runtimeAttempts).toContainEqual(
-      expect.objectContaining({ errorCode: "NARRATIVE_AUDIT_REJECTED", phase: "narration" }),
-    );
-    const committedChapter = store.loadChapter("ashen-crown-v1", 1);
-    if (!committedChapter) throw new Error("Committed chapter missing");
-    const committedTrace = store.loadTrace(committedChapter.traceId);
-    if (!committedTrace) throw new Error("Committed trace missing");
-    const committedRunId = committedTrace.runId;
-    expect(new Set(runtimeTurns.map(({ turnId }) => turnId))).toEqual(new Set([committedRunId]));
-    expect(runtimeTurns.every(({ requestId }) => requestId === command.requestId)).toBe(true);
-    expect(narrativeCandidates.every(({ turn }) => turn.turnId === committedRunId)).toBe(true);
-    const calls = result.godMode.calls as readonly {
-      model: string;
-      phase: string;
-      retries: number;
-    }[];
-    expect(calls).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ model: "gpt-5.6-luna", phase: "intent" }),
-        expect.objectContaining({ model: "gpt-5.6-luna", phase: "narration" }),
-        expect.objectContaining({ model: "gpt-5.6-luna", phase: "audit" }),
-      ]),
-    );
-    expect(stream.mock.calls.map(([body]) => (body as { model?: string }).model)).toEqual([
-      "gpt-5.6-luna",
-      "gpt-5.6-luna",
-    ]);
-    expect(calls[1]?.retries).toBe(1);
-    const duplicate = await service.takeTurn(command);
-    expect(duplicate.world).toMatchObject({ chapter: 1, version: 2 });
-    expect(parse).toHaveBeenCalledTimes(2);
-    expect(stream).toHaveBeenCalledTimes(2);
-    await expect(
-      service.takeTurn({
-        ...command,
-        requestId: "00000000-0000-4000-8000-000000000002",
-      }),
-    ).rejects.toMatchObject({ status: 409 });
-    expect(service.exportJson()).not.toContain("Malachar contained the Void beneath his throne");
-    expect(service.exportJson("god")).toContain("Malachar contained the Void beneath his throne");
-    store.close();
-  });
+      expect(result.world).toMatchObject({ chapter: 1, version: 2 });
+      expect(result.chapter).toMatchObject({ title: "The Ash Road" });
+      expect(result.chapter.prose.split(/\s+/u)).toHaveLength(900);
+      expect(result.godMode).toMatchObject({ gateResult: "passed" });
+      expect(result.godMode).toMatchObject({ schemaVersion: RUNTIME_SCHEMA_VERSION });
+      expect(store.loadChapters("ashen-crown-v1")).toHaveLength(1);
+      expect(replayed.join("")).toBe(prose);
+      expect(store.loadFailedTurnTraces("ashen-crown-v1")).toEqual([]);
+      expect(parse).toHaveBeenCalledTimes(2);
+      expect(stream).toHaveBeenCalledTimes(2);
+      expect(draftRejections).toHaveLength(1);
+      expect(draftRejections[0]?.some(({ code }) => code === "INVALID_SCHEMA")).toBe(true);
+      expect(narrativeCandidates).toHaveLength(2);
+      expect(narrativeCandidates[0]).toMatchObject({
+        accepted: false,
+        deterministicIssues: [expect.objectContaining({ code: "INVALID_SCHEMA" })],
+        narratorAttempt: 0,
+        narratorResponseId: "resp_narration_rejected",
+        rawProse: oversizedProse,
+        rawWordCount: 1_301,
+        rejectionStage: "deterministic",
+      });
+      expect(narrativeCandidates[1]).toMatchObject({
+        accepted: true,
+        auditResponseId: "resp_audit",
+        mergedProse: prose,
+        narratorAttempt: 1,
+        narratorResponseId: "resp_narration_approved",
+        rejectionStage: "accepted",
+      });
+      expect(runtimeAttempts).toContainEqual(
+        expect.objectContaining({ errorCode: "NARRATIVE_AUDIT_REJECTED", phase: "narration" }),
+      );
+      const committedChapter = store.loadChapter("ashen-crown-v1", 1);
+      if (!committedChapter) throw new Error("Committed chapter missing");
+      const committedTrace = store.loadTrace(committedChapter.traceId);
+      if (!committedTrace) throw new Error("Committed trace missing");
+      expect(committedTrace.pricingVersion).toBe(expectedPricingVersion);
+      expect(
+        committedTrace.attempts.every(
+          ({ requestedServiceTier, serviceTier }) =>
+            requestedServiceTier === requestedTier && serviceTier === requestedTier,
+        ),
+      ).toBe(true);
+      expect(
+        committedTrace.calls.every(
+          ({ requestedServiceTier, serviceTier }) =>
+            requestedServiceTier === requestedTier && serviceTier === requestedTier,
+        ),
+      ).toBe(true);
+      const committedRunId = committedTrace.runId;
+      expect(new Set(runtimeTurns.map(({ turnId }) => turnId))).toEqual(new Set([committedRunId]));
+      expect(runtimeTurns.every(({ requestId }) => requestId === command.requestId)).toBe(true);
+      expect(narrativeCandidates.every(({ turn }) => turn.turnId === committedRunId)).toBe(true);
+      const calls = result.godMode.calls as readonly {
+        model: string;
+        phase: string;
+        retries: number;
+      }[];
+      expect(calls).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ model: "gpt-5.6-luna", phase: "intent" }),
+          expect.objectContaining({ model: "gpt-5.6-luna", phase: "narration" }),
+          expect.objectContaining({ model: "gpt-5.6-luna", phase: "audit" }),
+        ]),
+      );
+      expect(stream.mock.calls.map(([body]) => (body as { model?: string }).model)).toEqual([
+        "gpt-5.6-luna",
+        "gpt-5.6-luna",
+      ]);
+      expect(
+        parse.mock.calls.map(([body]) => (body as { service_tier?: string }).service_tier),
+      ).toEqual([responseTier, responseTier]);
+      expect(
+        stream.mock.calls.map(([body]) => (body as { service_tier?: string }).service_tier),
+      ).toEqual([responseTier, responseTier]);
+      expect(calls[1]?.retries).toBe(1);
+      const duplicate = await service.takeTurn(command);
+      expect(duplicate.world).toMatchObject({ chapter: 1, version: 2 });
+      expect(parse).toHaveBeenCalledTimes(2);
+      expect(stream).toHaveBeenCalledTimes(2);
+      await expect(
+        service.takeTurn({
+          ...command,
+          requestId: "00000000-0000-4000-8000-000000000002",
+        }),
+      ).rejects.toMatchObject({ status: 409 });
+      expect(service.exportJson()).not.toContain("Malachar contained the Void beneath his throne");
+      expect(service.exportJson("god")).toContain("Malachar contained the Void beneath his throne");
+      store.close();
+    },
+  );
 
   it("never echoes hidden canon into narration retries", async () => {
     const store = new StoryStore();
@@ -646,135 +686,171 @@ describe("StoryService", () => {
     store.close();
   });
 
-  it("stops after exhausted same-prose audit retries without regenerating narration", async () => {
-    const store = new StoryStore();
-    const firstProse = Array.from({ length: 900 }, (_, index) => `ember${index}`).join(" ");
-    const proseHash = createHash("sha256").update(firstProse).digest("hex");
-    const frame = {
-      choices: [
-        {
-          action: { type: "wait" },
-          description: "Wait and watch the road for movement.",
-          id: "choice-1",
-          milestoneId: null,
+  it.each([
+    {
+      expectedPricingVersion: PRICING_VERSION,
+      requestedTier: "standard" as const,
+      responseTier: "default" as const,
+    },
+    {
+      expectedPricingVersion: FLEX_PRICING_VERSION,
+      requestedTier: "flex" as const,
+      responseTier: "flex" as const,
+    },
+  ])(
+    "stops after exhausted same-prose audit retries on $requestedTier",
+    async ({ expectedPricingVersion, requestedTier, responseTier }) => {
+      const store = new StoryStore();
+      const firstProse = Array.from({ length: 900 }, (_, index) => `ember${index}`).join(" ");
+      const proseHash = createHash("sha256").update(firstProse).digest("hex");
+      const frame = {
+        choices: [
+          {
+            action: { type: "wait" },
+            description: "Wait and watch the road for movement.",
+            id: "choice-1",
+            milestoneId: null,
+          },
+          {
+            action: { subjectId: "ash-road", type: "investigate" },
+            description: "Inspect the ash road for a fresh trail.",
+            id: "choice-2",
+            milestoneId: null,
+          },
+        ],
+        terminal: false,
+        title: "The Ash Road",
+      } as const;
+      const audit: NarrativeAudit = {
+        approved: true,
+        evidence: NARRATIVE_AUDIT_DIMENSIONS.map((dimension) => ({
+          detail: "The chapter obeys the selected viewpoint and committed action.",
+          dimension,
+          issueCode: "pass",
+        })),
+        leakedFactIds: [],
+        proseHash,
+        scores: {
+          arcProgress: 2,
+          characterAutonomy: 2,
+          choiceFulfillment: 2,
+          continuity: 2,
+          litrpgMechanics: 2,
+          povSafety: 2,
+          prose: 2,
         },
+      };
+      const invalidAudit = {
+        ...audit,
+        approved: false,
+        leakedFactIds: ["invented-audit-fact"],
+      } as const;
+      const parse = vi
+        .fn()
+        .mockResolvedValueOnce(parsedResponse(frame, "resp_frame_retry", usage(), responseTier))
+        .mockResolvedValueOnce(
+          parsedResponse(invalidAudit, "resp_audit_bad_1", usage(), responseTier),
+        )
+        .mockResolvedValueOnce(
+          parsedResponse(invalidAudit, "resp_audit_bad_2", usage(), responseTier),
+        )
+        .mockResolvedValueOnce(
+          parsedResponse(invalidAudit, "resp_audit_bad_3", usage(), responseTier),
+        );
+      const stream = vi
+        .fn()
+        .mockReturnValueOnce(
+          fakeStream(firstProse, "resp_narration_audit_failed", usage(), responseTier),
+        );
+      const narrativeCandidates: NarrativeCandidateEvidence[] = [];
+      const runtimeTurns: NarrativeTurnIdentity[] = [];
+      const service = new StoryService(
+        store,
+        { responses: { create: parse, stream } } as unknown as OpenAI,
         {
-          action: { subjectId: "ash-road", type: "investigate" },
-          description: "Inspect the ash road for a fresh trail.",
-          id: "choice-2",
-          milestoneId: null,
+          ...options(),
+          onNarrativeCandidate: (candidate) => narrativeCandidates.push(candidate),
+          onRuntimeAttempt: (_attempt, turn) => runtimeTurns.push(turn),
+          serviceTier: requestedTier,
         },
-      ],
-      terminal: false,
-      title: "The Ash Road",
-    } as const;
-    const audit: NarrativeAudit = {
-      approved: true,
-      evidence: NARRATIVE_AUDIT_DIMENSIONS.map((dimension) => ({
-        detail: "The chapter obeys the selected viewpoint and committed action.",
-        dimension,
-        issueCode: "pass",
-      })),
-      leakedFactIds: [],
-      proseHash,
-      scores: {
-        arcProgress: 2,
-        characterAutonomy: 2,
-        choiceFulfillment: 2,
-        continuity: 2,
-        litrpgMechanics: 2,
-        povSafety: 2,
-        prose: 2,
-      },
-    };
-    const invalidAudit = {
-      ...audit,
-      approved: false,
-      leakedFactIds: ["invented-audit-fact"],
-    } as const;
-    const parse = vi
-      .fn()
-      .mockResolvedValueOnce(parsedResponse(frame, "resp_frame_retry"))
-      .mockResolvedValueOnce(parsedResponse(invalidAudit, "resp_audit_bad_1"))
-      .mockResolvedValueOnce(parsedResponse(invalidAudit, "resp_audit_bad_2"))
-      .mockResolvedValueOnce(parsedResponse(invalidAudit, "resp_audit_bad_3"));
-    const stream = vi
-      .fn()
-      .mockReturnValueOnce(fakeStream(firstProse, "resp_narration_audit_failed"));
-    const narrativeCandidates: NarrativeCandidateEvidence[] = [];
-    const runtimeTurns: NarrativeTurnIdentity[] = [];
-    const service = new StoryService(
-      store,
-      { responses: { create: parse, stream } } as unknown as OpenAI,
-      {
-        ...options(),
-        onNarrativeCandidate: (candidate) => narrativeCandidates.push(candidate),
-        onRuntimeAttempt: (_attempt, turn) => runtimeTurns.push(turn),
-      },
-    );
-    const selected = service.selectPov("rowan-ashborn");
+      );
+      const selected = service.selectPov("rowan-ashborn");
 
-    await expect(
-      service.takeTurn({
-        choiceId: selected.chapter.choices[0]?.id ?? "missing",
-        expectedWorldVersion: 1,
-        requestId: "00000000-0000-4000-8000-000000000003",
-        type: "take_action",
-      }),
-    ).rejects.toMatchObject({
-      code: "INVALID_OUTPUT",
-      message: "Narrative audit exhausted retries for the fixed prose",
-    });
+      await expect(
+        service.takeTurn({
+          choiceId: selected.chapter.choices[0]?.id ?? "missing",
+          expectedWorldVersion: 1,
+          requestId: "00000000-0000-4000-8000-000000000003",
+          type: "take_action",
+        }),
+      ).rejects.toMatchObject({
+        code: "INVALID_OUTPUT",
+        message: "Narrative audit exhausted retries for the fixed prose",
+      });
 
-    expect(store.loadChapters("ashen-crown-v1")).toHaveLength(0);
-    const failures = store.loadFailedTurnTraces("ashen-crown-v1");
-    expect(failures).toHaveLength(1);
-    const trace = failures[0];
-    if (!trace) throw new Error("Failed trace missing");
-    expect(trace.attempts).toHaveLength(5);
-    const failedAudits = trace.attempts.filter(
-      ({ errorCode, phase }) => phase === "audit" && errorCode === "INVALID_OUTPUT",
-    );
-    expect(failedAudits.map(({ responseId }) => responseId)).toEqual([
-      "resp_audit_bad_1",
-      "resp_audit_bad_2",
-      "resp_audit_bad_3",
-    ]);
-    expect(
-      trace.attempts.some(
-        ({ errorCode, phase, responseId }) =>
-          phase === "narration" &&
-          errorCode === "INVALID_OUTPUT" &&
-          responseId === "resp_narration_audit_failed",
-      ),
-    ).toBe(true);
-    const attemptCost = trace.attempts.reduce((sum, attempt) => sum + attempt.costUsd, 0);
-    const attemptTokens = trace.attempts.reduce(
-      (sum, attempt) => sum + attempt.usage.totalTokens,
-      0,
-    );
-    expect(trace.totalEstimatedCostUsd).toBe(attemptCost);
-    expect(trace.totalUsage.totalTokens).toBe(attemptTokens);
-    expect(new Set(runtimeTurns.map(({ turnId }) => turnId))).toEqual(new Set([trace.runId]));
-    expect(narrativeCandidates[0]?.turn.turnId).toBe(trace.runId);
-    expect(narrativeCandidates).toEqual([
-      expect.objectContaining({
-        accepted: false,
-        auditAttempts: expect.arrayContaining([
-          expect.objectContaining({ responseId: "resp_audit_bad_1" }),
-          expect.objectContaining({ responseId: "resp_audit_bad_2" }),
-          expect.objectContaining({ responseId: "resp_audit_bad_3" }),
-        ]),
-        narratorAttempt: 0,
-        narratorResponseId: "resp_narration_audit_failed",
-        rawProse: firstProse,
-        rejectionStage: "audit-invalid",
-      }),
-    ]);
-    expect(parse).toHaveBeenCalledTimes(4);
-    expect(stream).toHaveBeenCalledTimes(1);
-    store.close();
-  });
+      expect(store.loadChapters("ashen-crown-v1")).toHaveLength(0);
+      const failures = store.loadFailedTurnTraces("ashen-crown-v1");
+      expect(failures).toHaveLength(1);
+      const trace = failures[0];
+      if (!trace) throw new Error("Failed trace missing");
+      expect(trace.pricingVersion).toBe(expectedPricingVersion);
+      expect(
+        trace.attempts.every(
+          ({ requestedServiceTier, serviceTier }) =>
+            requestedServiceTier === requestedTier && serviceTier === requestedTier,
+        ),
+      ).toBe(true);
+      expect(trace.attempts).toHaveLength(5);
+      const failedAudits = trace.attempts.filter(
+        ({ errorCode, phase }) => phase === "audit" && errorCode === "INVALID_OUTPUT",
+      );
+      expect(failedAudits.map(({ responseId }) => responseId)).toEqual([
+        "resp_audit_bad_1",
+        "resp_audit_bad_2",
+        "resp_audit_bad_3",
+      ]);
+      expect(
+        trace.attempts.some(
+          ({ errorCode, phase, responseId }) =>
+            phase === "narration" &&
+            errorCode === "INVALID_OUTPUT" &&
+            responseId === "resp_narration_audit_failed",
+        ),
+      ).toBe(true);
+      const attemptCost = trace.attempts.reduce((sum, attempt) => sum + attempt.costUsd, 0);
+      const attemptTokens = trace.attempts.reduce(
+        (sum, attempt) => sum + attempt.usage.totalTokens,
+        0,
+      );
+      expect(trace.totalEstimatedCostUsd).toBe(attemptCost);
+      expect(trace.totalUsage.totalTokens).toBe(attemptTokens);
+      expect(new Set(runtimeTurns.map(({ turnId }) => turnId))).toEqual(new Set([trace.runId]));
+      expect(narrativeCandidates[0]?.turn.turnId).toBe(trace.runId);
+      expect(narrativeCandidates).toEqual([
+        expect.objectContaining({
+          accepted: false,
+          auditAttempts: expect.arrayContaining([
+            expect.objectContaining({ responseId: "resp_audit_bad_1" }),
+            expect.objectContaining({ responseId: "resp_audit_bad_2" }),
+            expect.objectContaining({ responseId: "resp_audit_bad_3" }),
+          ]),
+          narratorAttempt: 0,
+          narratorResponseId: "resp_narration_audit_failed",
+          rawProse: firstProse,
+          rejectionStage: "audit-invalid",
+        }),
+      ]);
+      expect(parse).toHaveBeenCalledTimes(4);
+      expect(stream).toHaveBeenCalledTimes(1);
+      expect(
+        parse.mock.calls.map(([body]) => (body as { service_tier?: string }).service_tier),
+      ).toEqual(Array.from({ length: 4 }, () => responseTier));
+      expect(
+        stream.mock.calls.map(([body]) => (body as { service_tier?: string }).service_tier),
+      ).toEqual([responseTier]);
+      store.close();
+    },
+  );
 
   it("blocks chapter 351 before any model method runs", async () => {
     const store = new StoryStore();
@@ -1409,6 +1485,7 @@ function parsedResponse<T>(
   output: T,
   id: string,
   responseUsage: ResponseUsage = usage(),
+  serviceTier: "default" | "flex" = "default",
 ): Response {
   const modelOutput = structuredCandidateOutput(output);
   return {
@@ -1417,6 +1494,7 @@ function parsedResponse<T>(
     incomplete_details: null,
     output: [],
     output_text: JSON.stringify(modelOutput),
+    service_tier: serviceTier,
     status: "completed",
     usage: responseUsage,
   } as unknown as Response;
@@ -1457,13 +1535,19 @@ function structuredCandidateOutput(output: unknown): unknown {
   };
 }
 
-function fakeStream(prose: string, id = "resp_narration", responseUsage: ResponseUsage = usage()) {
+function fakeStream(
+  prose: string,
+  id = "resp_narration",
+  responseUsage: ResponseUsage = usage(),
+  serviceTier: "default" | "flex" = "default",
+) {
   const response = {
     error: null,
     id,
     incomplete_details: null,
     output: [],
     output_text: prose,
+    service_tier: serviceTier,
     status: "completed",
     usage: responseUsage,
   } as unknown as Response;

@@ -1,4 +1,4 @@
-import { UsageSchema } from "@infinite-litrpg/shared";
+import { UsageSchema, type RuntimeServiceTier } from "@infinite-litrpg/shared";
 import type { BetaResponseUsage } from "openai/resources/beta/responses/responses";
 import type { ResponseUsage } from "openai/resources/responses/responses";
 import { z } from "zod";
@@ -7,9 +7,14 @@ import { OpenAIRuntimeError } from "./errors";
 import type { RuntimeModel } from "./models";
 
 export const PRICING_VERSION = "openai-standard-explicit-no-cache-2026-07-20" as const;
+export const FLEX_PRICING_VERSION = "openai-flex-explicit-no-cache-2026-07-20" as const;
 export const INPUT_TOKEN_COUNT_SAFETY_MARGIN = 512 as const;
 
-export interface MaximumRequestCostOptions {
+export interface ResponseCostOptions {
+  readonly serviceTier?: RuntimeServiceTier;
+}
+
+export interface MaximumRequestCostOptions extends ResponseCostOptions {
   readonly inputBilling?: "cache-write" | "uncached";
 }
 
@@ -108,7 +113,15 @@ export function addUsage(left: RuntimeUsage, right: RuntimeUsage): RuntimeUsage 
   };
 }
 
-export function estimateResponseCostUsd(model: RuntimeModel, usage: RuntimeUsage): number {
+export function pricingVersionForServiceTier(serviceTier: RuntimeServiceTier): string {
+  return serviceTier === "flex" ? FLEX_PRICING_VERSION : PRICING_VERSION;
+}
+
+export function estimateResponseCostUsd(
+  model: RuntimeModel,
+  usage: RuntimeUsage,
+  options: ResponseCostOptions = {},
+): number {
   const price = MODEL_PRICES[model];
   const ordinaryInputTokens = usage.inputTokens - usage.cachedInputTokens - usage.cacheWriteTokens;
   if (ordinaryInputTokens < 0) {
@@ -122,14 +135,14 @@ export function estimateResponseCostUsd(model: RuntimeModel, usage: RuntimeUsage
   const inputMultiplier = longContext ? price.longContextInputMultiplier : 1;
   const outputMultiplier = longContext ? price.longContextOutputMultiplier : 1;
 
-  return (
+  const standardCost =
     ((ordinaryInputTokens * price.inputUsdPerMillion +
       usage.cacheWriteTokens * price.inputUsdPerMillion * price.cacheWriteInputMultiplier +
       usage.cachedInputTokens * price.cachedInputUsdPerMillion) *
       inputMultiplier +
       usage.outputTokens * price.outputUsdPerMillion * outputMultiplier) /
-    1_000_000
-  );
+    1_000_000;
+  return standardCost * serviceTierPriceMultiplier(options.serviceTier ?? "standard");
 }
 
 export function estimateMaximumRequestCostUsd(
@@ -174,11 +187,15 @@ function estimateMaximumCostFromInputUpperBound(
   const outputMultiplier = longContext ? price.longContextOutputMultiplier : 1;
   const inputBillingMultiplier =
     options.inputBilling === "uncached" ? 1 : price.cacheWriteInputMultiplier;
-  return (
+  const standardCost =
     (inputTokenUpperBound * price.inputUsdPerMillion * inputBillingMultiplier * inputMultiplier +
       maxOutputTokens * price.outputUsdPerMillion * outputMultiplier) /
-    1_000_000
-  );
+    1_000_000;
+  return standardCost * serviceTierPriceMultiplier(options.serviceTier ?? "standard");
+}
+
+export function serviceTierPriceMultiplier(serviceTier: RuntimeServiceTier): number {
+  return serviceTier === "flex" ? 0.5 : 1;
 }
 
 function validateMaximumCostInputs(inputSize: number, maxOutputTokens: number): void {

@@ -55,6 +55,8 @@ From chapter 48 through 50 of each act, choices stay milestone-compatible. An in
 
 Use Responses API. Use strict structured outputs for state-changing calls. Measure before changing effort.
 
+Product requests explicitly send the Standard provider tier. The release-only full eval explicitly sends Flex. Runtime schema `1.1.0-runtime-candidates-5` records both requested and observed tier. Standard returns provider value `default`; Flex returns `flex`. Missing, `auto`, or mismatched values fail closed. Tier-specific pricing covers measured usage, byte and counted bounds, chapter budgets, durable reservations, and release projections.
+
 ## Multi-Agent Adapter
 
 - Native beta SDK path uses `client.beta.responses.create`, `multi_agent.enabled`, `max_concurrent_subagents: 3`, and `betas: ["responses_multi_agent=v1"]`. Raw HTTP and WebSocket use `OpenAI-Beta: responses_multi_agent=v1`.
@@ -85,6 +87,7 @@ Rollback everything on failure.
 - run ID, Git SHA, fixture ID, seed.
 - prompt and schema versions.
 - exact model slug, reasoning settings, response IDs.
+- requested service tier, observed service tier, and pricing-table version.
 - state-before hash, intents, accepted delta, state-after hash.
 - multi-agent output items.
 - tokens, cached tokens, reasoning tokens, latency, estimated cost.
@@ -96,6 +99,8 @@ Successful chapter traces include every attempt for that world version, includin
 Never store API key or raw environment.
 
 ## Planning Envelope
+
+These long-horizon estimates use Standard product pricing. Release-eval Flex pricing is a separate, exact, versioned projection.
 
 - Estimated full chapter before retries: about `$0.075`.
 - Estimated full chapter with 20 percent retry allowance: about `$0.09`.
@@ -120,12 +125,12 @@ Release evals add a durable global layer above the per-chapter budget:
 4. Settle known usage before parsing or validating model output. Keep the maximum reservation when usage is unknown.
 5. Atomically replace the JSON report after every committed chapter and at run end.
 
-SQLite uses WAL and full synchronous writes. A killed process leaves both its request reservation and run lock intact. An active provider reservation requires external reconciliation; deleting the ledger would destroy the `$3` safety proof.
+Ledger version 2 stores the requested service tier on every reservation. Opening a version 1 ledger adds Standard to historical rows in one immediate transaction and verifies that exact nano-USD exposure did not change. SQLite uses WAL and full synchronous writes. A killed process leaves both its request reservation and run lock intact. An active provider reservation requires external reconciliation; deleting the ledger would destroy the `$3` safety proof.
 
 An explicit stale-run takeover is allowed only when the recorded process is dead, the caller supplies the exact old run ID, and no provider reservation remains active. It transfers the lock in one immediate transaction without changing exposure. The new run must still reconcile its source report before it can reserve a request.
 
 If one exact request remains active after process death, a separate tracked interruption checkpoint must bind the source commit, immutable sidecar hash, run and turn identities, every reservation, and recovery-code hashes. The no-network reconciler verifies all fields in one immediate transaction, converts only the registered unknown request to uncertain at full maximum, atomically writes and rereads a strict receipt, then releases the lock. Any live owner, different row owner, missing row, changed cost, changed artifact, or unregistered bridge fails closed.
 
-Version 7 reports retain authenticated contiguous chapter prefixes. Restoring chapter 1 restages the accepted `WorldDelta` from the seed fixture and verifies both state hashes. Retained results keep their source cap and Git SHA. New results use the current cap and Git SHA.
+Version 7 reports retain authenticated contiguous chapter prefixes. Version 8 adds complete raw narrative and canonical transition evidence. Version 9 adds strict service-tier and projection provenance. Full version 9 reports require Flex and recompute a tier-evidence gate across current attempts, calls, traces, and sidecars. Historical reports remain readable as Standard evidence. Restoring chapter 1 restages the accepted `WorldDelta` from the seed fixture and verifies both state hashes. Retained results keep their source cap and Git SHA. New results use the current cap and Git SHA.
 
 This ledger covers locally estimated Responses generation exposure. It does not claim provider-invoice equality because the project key cannot read organization usage and the input-token counting endpoint exposes no cost.

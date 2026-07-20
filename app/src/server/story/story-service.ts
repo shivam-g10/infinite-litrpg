@@ -20,6 +20,7 @@ import {
   type NarrativeAuditCandidate,
   type PlayerAction,
   type TraceEnvelope,
+  type RuntimeServiceTier,
   type ValidationIssue,
   type WorldDelta,
   type WorldState,
@@ -38,7 +39,6 @@ import OpenAI from "openai";
 import {
   ChapterCostBudget,
   OpenAIRuntimeError,
-  PRICING_VERSION,
   ZERO_USAGE,
   addUsage,
   createAuditedNarrationReplay,
@@ -50,6 +50,7 @@ import {
   type RuntimeCostHooks,
   type RuntimeUsage,
   type NarrationRawCandidateContext,
+  pricingVersionForServiceTier,
 } from "../openai";
 import { StaleWorldVersionError, StoryStore } from "../storage/story-store";
 import {
@@ -173,6 +174,7 @@ export interface StoryServiceOptions {
     attempt: TraceEnvelope["attempts"][number],
     turn: NarrativeTurnIdentity,
   ) => void;
+  readonly serviceTier?: RuntimeServiceTier;
 }
 
 export interface TakeChoiceCommand {
@@ -297,6 +299,8 @@ export class StoryService {
       worldVersionBefore: before.version,
     };
     const budget = new ChapterCostBudget(this.options.maxCostUsdPerChapter);
+    const serviceTier = this.options.serviceTier ?? "standard";
+    const pricingVersion = pricingVersionForServiceTier(serviceTier);
     const priorFailures = this.store
       .loadFailedTurnTraces(WORLD_ID)
       .filter((trace) => trace.worldVersion === before.version);
@@ -318,6 +322,7 @@ export class StoryService {
         currentAttempts.push(tracedAttempt);
         this.options.onRuntimeAttempt?.(tracedAttempt, turnIdentity);
       },
+      serviceTier,
       timeoutMs: 60_000,
     } as const;
     let turnCommitted = false;
@@ -800,7 +805,7 @@ export class StoryService {
         gitSha: currentGitSha(),
         intents: [...resolved.data.intents],
         multiAgentOutputItems,
-        pricingVersion: PRICING_VERSION,
+        pricingVersion,
         promptVersion: PROMPT_VERSION,
         runId,
         schemaVersion: RUNTIME_SCHEMA_VERSION,
@@ -869,7 +874,7 @@ export class StoryService {
           fixtureVersion: before.fixtureVersion,
           gateResult: "failed",
           gitSha: currentGitSha(),
-          pricingVersion: PRICING_VERSION,
+          pricingVersion,
           promptVersion: PROMPT_VERSION,
           requestId: command.requestId,
           runId: turnId,
@@ -1106,7 +1111,13 @@ function initialChoices(state: WorldState): readonly Choice[] {
 function toModelCall(
   call: Pick<
     RuntimeCallResult<unknown>,
-    "estimatedCostUsd" | "latencyMs" | "responseId" | "retries" | "usage"
+    | "estimatedCostUsd"
+    | "latencyMs"
+    | "responseId"
+    | "retries"
+    | "usage"
+    | "requestedServiceTier"
+    | "serviceTier"
   >,
   model: ModelCallTrace["model"],
   phase: ModelCallTrace["phase"],
@@ -1121,8 +1132,10 @@ function toModelCall(
     phase,
     reasoningEffort: "none",
     refusal: false,
+    requestedServiceTier: call.requestedServiceTier,
     responseId: call.responseId,
     retries: call.retries,
+    serviceTier: call.serviceTier,
     timedOut: false,
     usage: call.usage,
   };

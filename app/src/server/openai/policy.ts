@@ -2,9 +2,11 @@ import { randomUUID } from "node:crypto";
 
 import type { BetaResponseUsage } from "openai/resources/beta/responses/responses";
 import type { ResponseUsage } from "openai/resources/responses/responses";
+import type { RuntimeServiceTier } from "@infinite-litrpg/shared";
 
 import { asRuntimeError, OpenAIRuntimeError } from "./errors";
 import type { RuntimeModel } from "./models";
+import { parseRuntimeServiceTier } from "./models";
 import {
   addUsage,
   estimateResponseCostUsd,
@@ -22,6 +24,7 @@ export interface RuntimePolicy {
   readonly costHooks?: RuntimeCostHooks;
   readonly maxRetries?: number;
   readonly onAttempt?: (attempt: RuntimeAttempt) => void;
+  readonly serviceTier?: RuntimeServiceTier;
   readonly timeoutMs?: number;
 }
 
@@ -31,6 +34,7 @@ export interface RuntimeCostReservation {
   readonly id: string;
   readonly maximumCostUsd: number;
   readonly model: RuntimeModel;
+  readonly serviceTier: RuntimeServiceTier;
 }
 
 export interface RuntimeCostSettlement {
@@ -51,7 +55,9 @@ export interface RuntimeAttempt {
   readonly errorCode: OpenAIRuntimeError["code"] | null;
   readonly latencyMs: number;
   readonly model: RuntimeModel;
+  readonly requestedServiceTier: RuntimeServiceTier;
   readonly responseId: string | null;
+  readonly serviceTier: RuntimeServiceTier | null;
   readonly usage: RuntimeUsage;
 }
 
@@ -59,8 +65,10 @@ export interface RuntimeCallResult<T> {
   readonly data: T;
   readonly estimatedCostUsd: number;
   readonly latencyMs: number;
+  readonly requestedServiceTier: RuntimeServiceTier;
   readonly responseId: string;
   readonly retries: number;
+  readonly serviceTier: RuntimeServiceTier;
   readonly usage: RuntimeUsage;
 }
 
@@ -152,6 +160,7 @@ interface RetriedRequestOptions<TResponse, TData> {
   ) => EvaluatedResponse<TData> | Promise<EvaluatedResponse<TData>>;
   readonly getUsage: (response: TResponse) => ResponseUsageValue;
   readonly getResponseId: (response: TResponse) => string;
+  readonly getServiceTier: (response: TResponse) => ProviderResponseServiceTier;
   readonly invoke: (signal: AbortSignal, attempt: number) => Promise<TResponse>;
   readonly maximumCostUsd: number | ((attempt: number) => number | Promise<number>);
   readonly model: RuntimeModel;
@@ -159,10 +168,14 @@ interface RetriedRequestOptions<TResponse, TData> {
   readonly policy: RuntimePolicy;
 }
 
+type ProviderResponseServiceTier =
+  "auto" | "default" | "flex" | "priority" | "scale" | null | undefined;
+
 export async function runRetriedRequest<TResponse, TData>({
   agentId = null,
   evaluate,
   getResponseId,
+  getServiceTier,
   getUsage,
   invoke,
   maximumCostUsd,
@@ -172,6 +185,7 @@ export async function runRetriedRequest<TResponse, TData>({
 }: RetriedRequestOptions<TResponse, TData>): Promise<RuntimeCallResult<TData>> {
   const maxRetries = validateMaxRetries(policy.maxRetries ?? MAX_RETRIES);
   const timeoutMs = validateTimeout(policy.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  const requestedServiceTier = parseRuntimeServiceTier(policy.serviceTier ?? "standard");
   const startedAt = performance.now();
   let aggregateUsage = ZERO_USAGE;
   let aggregateCostUsd = 0;
@@ -190,6 +204,7 @@ export async function runRetriedRequest<TResponse, TData>({
           id: reservationId,
           maximumCostUsd: reservedCostUsd,
           model,
+          serviceTier: requestedServiceTier,
         }),
       );
     }
@@ -200,14 +215,18 @@ export async function runRetriedRequest<TResponse, TData>({
     let attemptUsage = ZERO_USAGE;
     let providerUsageKnown = false;
     let responseId: string | null = null;
+    let responseServiceTier: RuntimeServiceTier | null = null;
     aggregateCostUsd += reservedCostUsd;
     try {
       const response = await withTimeout((signal) => invoke(signal, attempt), timeoutMs);
       responseId = getResponseId(response);
       observe?.(response);
       const usage = mapResponseUsage(getUsage(response));
-      const costUsd = estimateResponseCostUsd(model, usage);
       attemptUsage = usage;
+      responseServiceTier = canonicalResponseServiceTier(getServiceTier(response));
+      const costUsd = estimateResponseCostUsd(model, usage, {
+        serviceTier: responseServiceTier,
+      });
       attemptCostUsd = costUsd;
       providerUsageKnown = true;
       aggregateUsage = addUsage(aggregateUsage, usage);
@@ -219,6 +238,12 @@ export async function runRetriedRequest<TResponse, TData>({
         localSettlementError = error;
       }
       if (localSettlementError !== null) throw localSettlementError;
+      if (responseServiceTier !== requestedServiceTier) {
+        throw new OpenAIRuntimeError(
+          "INVALID_USAGE",
+          `OpenAI returned ${responseServiceTier} processing for a ${requestedServiceTier} request`,
+        );
+      }
       const evaluated = await evaluate(response);
 
       attemptReported = true;
@@ -230,7 +255,9 @@ export async function runRetriedRequest<TResponse, TData>({
           errorCode: null,
           latencyMs: Math.max(0, Math.round(performance.now() - attemptStartedAt)),
           model,
+          requestedServiceTier,
           responseId,
+          serviceTier: responseServiceTier,
           usage: attemptUsage,
         });
       } catch (error) {
@@ -247,8 +274,10 @@ export async function runRetriedRequest<TResponse, TData>({
         data: evaluated.data,
         estimatedCostUsd: aggregateCostUsd,
         latencyMs: Math.max(0, Math.round(performance.now() - startedAt)),
+        requestedServiceTier,
         responseId: evaluated.responseId,
         retries: attempt,
+        serviceTier: responseServiceTier,
         usage: aggregateUsage,
       };
     } catch (error) {
@@ -263,7 +292,9 @@ export async function runRetriedRequest<TResponse, TData>({
             errorCode: runtimeError.code,
             latencyMs: Math.max(0, Math.round(performance.now() - attemptStartedAt)),
             model,
+            requestedServiceTier,
             responseId,
+            serviceTier: responseServiceTier,
             usage: attemptUsage,
           });
         } catch (hookError) {
@@ -295,6 +326,15 @@ export async function runRetriedRequest<TResponse, TData>({
   }
 
   throw new OpenAIRuntimeError("TRANSPORT_ERROR", "OpenAI retry loop ended unexpectedly");
+}
+
+function canonicalResponseServiceTier(value: ProviderResponseServiceTier): RuntimeServiceTier {
+  if (value === "default") return "standard";
+  if (value === "flex") return "flex";
+  throw new OpenAIRuntimeError(
+    "INVALID_USAGE",
+    `OpenAI returned unpriced service tier ${value ?? "missing"}`,
+  );
 }
 
 function invokeCostHook(callback: () => void): void {

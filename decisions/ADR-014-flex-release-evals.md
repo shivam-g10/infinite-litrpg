@@ -20,6 +20,13 @@ The earlier `$0.207336` Standard projection used the cache-write rate for saved 
 - One full live run may start only after code reproduces the `$0.104494` projection from exact inputs, every non-live gate passes, an independent review finds no blocker, a clean commit passes clean-clone verification, and durable exposure still equals `$2.811082175`.
 - Never retry the full run automatically.
 
+## Implementation
+
+- Runtime schema `1.1.0-runtime-candidates-5` records requested and observed tier on attempts and calls.
+- Live report version 9 requires tier-specific pricing, the exact matrix projection, complete current service-tier evidence, and Flex for the full suite. Versions 5 through 8 remain readable as historical Standard evidence.
+- Durable ledger version 2 stores tier per reservation. Its version 1 migration assigns Standard to historical rows and verifies exposure is unchanged before commit.
+- The full npm script selects Flex. Product runtime and smoke keep explicit Standard defaults.
+
 ## Reason
 
 Flex halves token prices while keeping the same Responses API and GPT-5.6 models. It preserves the evaluated behavior and leaves `$0.084423825` projected budget margin.

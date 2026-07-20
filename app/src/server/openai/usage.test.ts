@@ -8,10 +8,12 @@ import {
   estimateMaximumCountedRequestCostUsd,
   estimateMaximumRequestCostUsd,
   estimateResponseCostUsd,
+  FLEX_PRICING_VERSION,
   INPUT_TOKEN_COUNT_SAFETY_MARGIN,
   mapResponseUsage,
   MODEL_PRICES,
   PRICING_VERSION,
+  pricingVersionForServiceTier,
 } from "./usage";
 
 describe("OpenAI runtime models and accounting", () => {
@@ -51,6 +53,24 @@ describe("OpenAI runtime models and accounting", () => {
     );
   });
 
+  it("prices Flex at half Standard and binds a distinct pricing version", () => {
+    expect(FLEX_PRICING_VERSION).toBe("openai-flex-explicit-no-cache-2026-07-20");
+    expect(pricingVersionForServiceTier("standard")).toBe(PRICING_VERSION);
+    expect(pricingVersionForServiceTier("flex")).toBe(FLEX_PRICING_VERSION);
+    const usage = mapResponseUsage(openAIUsage());
+    for (const model of RUNTIME_MODELS) {
+      const standard = estimateResponseCostUsd(model, usage);
+      const flex = estimateResponseCostUsd(model, usage, { serviceTier: "flex" });
+      expect(flex).toBeCloseTo(standard / 2, 12);
+    }
+    expect(
+      estimateMaximumCountedRequestCostUsd("gpt-5.6-luna", 2_947, 450, {
+        inputBilling: "uncached",
+        serviceTier: "flex",
+      }),
+    ).toBeCloseTo(0.0030795, 10);
+  });
+
   it("applies long-context input and output multipliers", () => {
     const usage = mapResponseUsage({
       input_tokens: 272_001,
@@ -59,20 +79,28 @@ describe("OpenAI runtime models and accounting", () => {
       output_tokens_details: { reasoning_tokens: 0 },
       total_tokens: 272_101,
     });
-    expect(estimateResponseCostUsd("gpt-5.6-luna", usage)).toBeCloseTo(0.544902, 10);
+    const standard = estimateResponseCostUsd("gpt-5.6-luna", usage);
+    expect(standard).toBeCloseTo(0.544902, 10);
+    expect(estimateResponseCostUsd("gpt-5.6-luna", usage, { serviceTier: "flex" })).toBeCloseTo(
+      standard / 2,
+      12,
+    );
   });
 
   it("bills cache writes at 1.25 times uncached input", () => {
+    const cacheWriteUsage = {
+      cacheWriteTokens: 100,
+      cachedInputTokens: 0,
+      inputTokens: 100,
+      outputTokens: 0,
+      reasoningTokens: 0,
+      totalTokens: 100,
+    };
+    const standard = estimateResponseCostUsd("gpt-5.6-luna", cacheWriteUsage);
+    expect(standard).toBeCloseTo(0.000125, 10);
     expect(
-      estimateResponseCostUsd("gpt-5.6-luna", {
-        cacheWriteTokens: 100,
-        cachedInputTokens: 0,
-        inputTokens: 100,
-        outputTokens: 0,
-        reasoningTokens: 0,
-        totalTokens: 100,
-      }),
-    ).toBeCloseTo(0.000125, 10);
+      estimateResponseCostUsd("gpt-5.6-luna", cacheWriteUsage, { serviceTier: "flex" }),
+    ).toBeCloseTo(standard / 2, 12);
   });
 
   it("reserves counted input with a 512-token margin and maximum output", () => {
@@ -98,6 +126,15 @@ describe("OpenAI runtime models and accounting", () => {
         inputBilling: "uncached",
       }),
     ).toBeCloseTo(0.006159, 10);
+    const standardByteBound = estimateMaximumRequestCostUsd("gpt-5.6-luna", 2_947, 450, {
+      inputBilling: "uncached",
+    });
+    expect(
+      estimateMaximumRequestCostUsd("gpt-5.6-luna", 2_947, 450, {
+        inputBilling: "uncached",
+        serviceTier: "flex",
+      }),
+    ).toBeCloseTo(standardByteBound / 2, 12);
   });
 
   it("locks the failed Rowan audit boundary at the remaining release budget", () => {

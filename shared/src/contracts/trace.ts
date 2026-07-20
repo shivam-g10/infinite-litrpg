@@ -15,6 +15,7 @@ import { PersistedWorldIntentSchema, WorldIntentSchema } from "./intent";
 
 export const RuntimeModelSchema = z.enum(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
 export const ReasoningEffortSchema = z.enum(["none", "low", "medium", "high", "xhigh", "max"]);
+export const RuntimeServiceTierSchema = z.enum(["standard", "flex"]);
 
 export const UsageSchema = z
   .object({
@@ -37,8 +38,10 @@ export const ModelCallTraceSchema = z
     phase: z.enum(["intent", "narration", "audit", "genesis", "recovery", "finale"]),
     reasoningEffort: ReasoningEffortSchema,
     refusal: z.boolean(),
+    requestedServiceTier: RuntimeServiceTierSchema.default("standard"),
     responseId: z.string().regex(/^resp?_[A-Za-z0-9_-]+$/u),
     retries: z.number().int().min(0).max(2),
+    serviceTier: RuntimeServiceTierSchema.default("standard"),
     timedOut: z.boolean(),
     usage: UsageSchema,
   })
@@ -53,10 +56,12 @@ export const RuntimeAttemptTraceSchema = z
     latencyMs: z.number().int().min(0),
     model: RuntimeModelSchema,
     phase: z.enum(["intent", "narration", "audit", "genesis", "recovery", "finale"]),
+    requestedServiceTier: RuntimeServiceTierSchema.default("standard"),
     responseId: z
       .string()
       .regex(/^resp?_[A-Za-z0-9_-]+$/u)
       .nullable(),
+    serviceTier: RuntimeServiceTierSchema.nullable().default("standard"),
     usage: UsageSchema,
   })
   .strict();
@@ -140,4 +145,5 @@ export const FailedTurnTraceSchema = z
 export type ModelCallTrace = z.infer<typeof ModelCallTraceSchema>;
 export type FailedTurnTrace = z.infer<typeof FailedTurnTraceSchema>;
 export type PersistedTraceEnvelope = z.infer<typeof PersistedTraceEnvelopeSchema>;
+export type RuntimeServiceTier = z.infer<typeof RuntimeServiceTierSchema>;
 export type TraceEnvelope = z.infer<typeof TraceEnvelopeSchema>;

@@ -25,6 +25,33 @@ afterEach(() => {
 });
 
 describe("durable live spend ledger", () => {
+  it("migrates a version-one ledger in place without changing exposure", () => {
+    const filename = temporaryLedgerPath();
+    createVersionOneLedger(filename);
+
+    const migrated = new LiveSpendLedger(filename, 3);
+    expect(migrated.snapshot()).toMatchObject({
+      activeReservationCount: 0,
+      knownReservationCostUsd: 0.010074,
+      priorSpendUsd: 2.786385175,
+      totalExposureUsd: 2.811082175,
+      uncertainReservationCostUsd: 0.014623,
+    });
+    migrated.close();
+
+    const database = new Database(filename, { readonly: true });
+    try {
+      expect(database.prepare("SELECT version FROM ledger_meta WHERE id = 1").get()).toEqual({
+        version: 2,
+      });
+      expect(database.prepare("SELECT DISTINCT service_tier FROM reservations").all()).toEqual([
+        { service_tier: "standard" },
+      ]);
+    } finally {
+      database.close();
+    }
+  });
+
   it("keeps an in-flight reservation across process reopen", () => {
     const filename = temporaryLedgerPath();
     const runId = randomUUID();
@@ -73,6 +100,35 @@ describe("durable live spend ledger", () => {
       totalExposureUsd: 2.79,
       uncertainReservationCostUsd: 0.05,
     });
+    ledger.releaseRun(runId);
+    ledger.close();
+  });
+
+  it("stores the requested service tier with every reservation", () => {
+    const filename = temporaryLedgerPath();
+    const ledger = new LiveSpendLedger(filename, 3);
+    const runId = randomUUID();
+    ledger.acquireRun(runId);
+    ledger.synchronizeBaseline(runId, {
+      attemptCostUsd: 0,
+      priorSpendUsd: 0,
+      sourceReportSha256: SOURCE_A,
+    });
+    ledger
+      .createCostHooks(runId)
+      .reserve({ ...reservation("flex-reservation", 0.05), serviceTier: "flex" });
+
+    const database = new Database(filename);
+    try {
+      expect(
+        database
+          .prepare("SELECT service_tier FROM reservations WHERE id = ?")
+          .get("flex-reservation"),
+      ).toEqual({ service_tier: "flex" });
+    } finally {
+      database.close();
+    }
+    ledger.createCostHooks(runId).markUncertain("flex-reservation");
     ledger.releaseRun(runId);
     ledger.close();
   });
@@ -409,6 +465,35 @@ describe("durable live spend ledger", () => {
     recovered.close();
   });
 
+  it("reconciles an interrupted Flex reservation without coercing it to Standard", () => {
+    const filename = temporaryLedgerPath();
+    const staleRun = randomUUID();
+    const first = new LiveSpendLedger(filename, 3);
+    first.acquireRun(staleRun);
+    first.synchronizeBaseline(staleRun, RECOVERY_BASELINE);
+    first
+      .createCostHooks(staleRun)
+      .reserve({ ...reservation("unknown-flex-interruption", 0.05), serviceTier: "flex" });
+    first.close();
+    markOwnerProcessDead(filename);
+
+    const recovered = new LiveSpendLedger(filename, 3);
+    recovered.claimInterruptedRunAtMaximum(staleRun, {
+      baseline: RECOVERY_BASELINE,
+      knownReservations: [],
+      unknownReservations: [
+        { ...expectedUnknownReservation("unknown-flex-interruption", 0.05), serviceTier: "flex" },
+      ],
+    });
+    expect(recovered.snapshot()).toMatchObject({
+      activeReservationCount: 0,
+      totalExposureUsd: 2.75,
+      uncertainReservationCostUsd: 0.05,
+    });
+    recovered.releaseRun(staleRun);
+    recovered.close();
+  });
+
   it("reclaims an already charged interruption only after the replacement owner dies", () => {
     const filename = temporaryLedgerPath();
     const staleRun = randomUUID();
@@ -560,6 +645,7 @@ function reservation(id: string, maximumCostUsd: number) {
     id,
     maximumCostUsd,
     model: "gpt-5.6-terra" as const,
+    serviceTier: "standard" as const,
   };
 }
 
@@ -597,6 +683,58 @@ function setReservationOwner(filename: string, reservationId: string, runId: str
   const database = new Database(filename);
   try {
     database.prepare("UPDATE reservations SET run_id = ? WHERE id = ?").run(runId, reservationId);
+  } finally {
+    database.close();
+  }
+}
+
+function createVersionOneLedger(filename: string): void {
+  const database = new Database(filename);
+  try {
+    database.exec(`
+      CREATE TABLE ledger_meta (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        version INTEGER NOT NULL,
+        total_cap_nano INTEGER NOT NULL,
+        prior_spend_nano INTEGER,
+        baseline_attempt_nano INTEGER NOT NULL,
+        source_report_sha256 TEXT
+      );
+      CREATE TABLE run_lock (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        run_id TEXT NOT NULL,
+        pid INTEGER NOT NULL,
+        started_at TEXT NOT NULL
+      );
+      CREATE TABLE reservations (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        agent_id TEXT,
+        attempt INTEGER NOT NULL,
+        model TEXT NOT NULL,
+        max_nano INTEGER NOT NULL,
+        actual_nano INTEGER,
+        status TEXT NOT NULL CHECK (status IN ('active', 'known', 'uncertain')),
+        created_at TEXT NOT NULL,
+        settled_at TEXT
+      );
+    `);
+    database
+      .prepare(
+        `INSERT INTO ledger_meta (
+           id, version, total_cap_nano, prior_spend_nano, baseline_attempt_nano,
+           source_report_sha256
+         ) VALUES (1, 1, 3000000000, 2786385175, 0, ?)`,
+      )
+      .run(`fresh:${"a".repeat(40)}`);
+    const insert = database.prepare(
+      `INSERT INTO reservations (
+         id, run_id, agent_id, attempt, model, max_nano, actual_nano, status,
+         created_at, settled_at
+       ) VALUES (?, ?, NULL, 0, 'gpt-5.6-luna', ?, ?, ?, ?, ?)`,
+    );
+    insert.run("known-v1", randomUUID(), 20_000_000, 10_074_000, "known", "now", "now");
+    insert.run("uncertain-v1", randomUUID(), 14_623_000, null, "uncertain", "now", "now");
   } finally {
     database.close();
   }
