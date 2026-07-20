@@ -17,7 +17,7 @@ flowchart LR
     F --> G["App-owned legal chapter frame"]
     T --> N["Luna POV narrator"]
     K["POV KnowledgeLedger"] --> N
-    N -->|800 to 899 words only| L["Bounded Luna continuation"]
+    N -->|750 to 899 words only| L["Bounded Luna continuation"]
     L --> Q["Narrative contract audit"]
     G --> Q
     N --> Q["Narrative contract audit"]
@@ -36,7 +36,7 @@ flowchart LR
 7. Stage prospective state in memory. Canon remains at current version.
 8. Give Luna only POV-safe option descriptions. Luna returns a title and ranks option IDs. Application code owns terminal state, actions, choice IDs, descriptions, and milestone targets, then reruns deterministic safety and legality checks.
 9. Give Luna only POV-safe context and prospective visible events.
-10. Target 900 to 925 words and reject outside the absolute 900 to 1,300 word range. When an otherwise-valid draft is 800 to 899 words, Luna may add one bounded, tail-only continuation. The merged prose reruns every deterministic gate.
+10. Target 900 to 925 words and reject outside the absolute 900 to 1,300 word range. When an otherwise-valid draft is 750 to 899 words, Luna may add one bounded, tail-only continuation. The request still targets a merge through 925 words; deterministic acceptance permits a small overshoot through 949. The merged prose reruns every deterministic gate and the full audit.
 11. Run the independent Luna narrative contract audit over the final prose.
 12. Atomically commit delta, knowledge, chapter, trace metadata, usage, cost, and next version.
 

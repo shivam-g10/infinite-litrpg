@@ -24,7 +24,15 @@ A full run requires a clean committed worktree. The npm full script selects Flex
 
 Current HEAD must equal the source checkpoint or differ only in committed non-runtime tests and release documentation. A legacy bridge additionally requires the exact audited hashes of every changed runtime file. Every source report must match a full-file SHA-256 and metadata entry in tracked `evals/resume-checkpoints.json`. Inspect and register each failed report before another resume. Never auto-resume an unregistered artifact.
 
-Prompt `1.4.11` requires a fresh twelve-cycle matrix after folding exact prior exposure into the ledger. Prompts `1.4.9` and `1.4.10` remain registered baseline evidence; they do not count toward the changed narration, audit, recovery, cache, and evidence route. The first fresh run was interrupted. Exact conservative exposure is `$2.811082175`; headroom is `$0.188917825`. Code reproduces the corrected Standard projection `$0.208988` and Flex projection `$0.104494`; only Flex fits, with projected final exposure `$2.915576175`. No generation command is authorized until full non-live gates, independent review, clean commit, clean-clone verification, and exact ledger preflight pass. Run the full command once. Never rerun automatically.
+The first prompt `1.4.11` Flex matrix completed both Rowan chapters and failed on Elara chapter 1 after 19 known attempts costing `$0.029972`. Exact durable exposure is `$2.841054175`; headroom is `$0.158945825`. Its strict version 9 report has SHA-256 `447f860a0e918198d246fef37671f16db3664ef76887fba390eaaabc77f9eddd`. Even charging another full clean Flex projection of `$0.104494` would end at `$2.945548175`, leaving `$0.054451825`.
+
+That report established the recovery baseline: drafts of 789, 850, and 768 words; the 850-word draft received 91 continuation words and was rejected against a requested maximum of 75. Recovery now accepts sole-word-count failures from 750 to 899 words. The model request still targets a 900-to-925-word merge with the same byte and token caps. Deterministic acceptance may reach 949 words, then the unchanged 900-to-1,300 validator and full independent audit run. The failed report must be registered, all non-live gates and clean-clone verification must pass, and explicit user authority is required before this resume command:
+
+```powershell
+npm run evals:live:full -- --prior-spend-usd 2.811082175 --chapter-cap-usd 0.0424 --resume-report evals/reports/live-full-sequential-prompt-1.4.11-flex-1.json
+```
+
+Never resume automatically.
 
 Runner must load root `.env`, redact secrets, write reports under ignored `evals/reports/`, and return nonzero on gate failure.
 

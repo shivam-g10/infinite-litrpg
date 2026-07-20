@@ -2,7 +2,7 @@
 
 - Updated: 2026-07-20
 - Layer: Release evaluation
-- Current phase: Phase 5 single paid Flex release matrix
+- Current phase: Phase 5 Flex recovery checkpoint
 - Repository: initialized on `main`
 - Remote: `git@github.com:shivam-g10/infinite-litrpg.git`
 - Initial commit: `39b19a2` (`chore: scaffold agent workflow`)
@@ -21,13 +21,14 @@
 
 ## Current Blockers
 
-- The fresh prompt `1.4.11` run was killed by the local shell timeout during Rowan chapter 1 narration retry. The unknown provider request is permanently charged at its full `$0.014623` reservation. No chapter committed.
-- Durable exposure is `$2.811082175`; headroom is `$0.188917825`. The corrected Standard projection is `$0.208988`, so another Standard matrix cannot fit. Explicit Flex request, pricing, reservation, trace, sidecar, interruption, resume, and report binding reproduce the behavior-preserving `$0.104494` projection offline. Full non-live gates, independent review, clean checkpoint, clean-clone verification, and exact ledger preflight pass.
+- The first paid Flex matrix completed Rowan chapters 1 and 2, then failed Elara chapter 1. Drafts were 789, 850, and 768 words. A coherent 91-word continuation for the 850-word draft was rejected against the requested 50-to-75-word range.
+- Durable exposure is `$2.841054175`; headroom is `$0.158945825`. Nineteen known Flex attempts cost `$0.029972`. There is no run lock, active reservation, or uncertain Flex reservation.
+- ADR-015 has the nonpaid fix and named regression. Recovery now covers 750 to 899 words, keeps the model target at 900 to 925, accepts a deterministic overshoot only through 949, then reruns the unchanged absolute validator and full audit.
 - The twelve-cycle matrix, six-POV zero-leak proof, and review packets remain open.
 
 ## Next Action
 
-Run `npm run evals:live:full -- --prior-spend-usd 2.811082175 --chapter-cap-usd 0.0424` once with a long outer timeout. Inspect its strict version 9 report. Never rerun automatically.
+Commit the reviewed recovery checkpoint, run clean-clone verification, and repeat exact ledger preflight. Then stop for explicit user authority before resuming the registered report. Never rerun automatically.
 
 ## Evidence Log
 
@@ -140,5 +141,9 @@ Run `npm run evals:live:full -- --prior-spend-usd 2.811082175 --chapter-cap-usd 
 - 2026-07-20 Flex independent review: 147 focused Flex tests and both real version 7 report parses passed. Review found no P0 through P2 defect. One stale resume error string and two test-only lint warnings were fixed; the full gate then passed without warnings. No generation ran.
 - 2026-07-20 Flex clean checkpoint: commit `b744bba` (`feat(evals): bind Flex release pricing`) contains the reviewed runtime, report, ledger migration, regressions, and release docs. `npm run verify:clean-clone` exited 0 in 48.4 seconds with a fresh install, 218 tests, all offline evals, production build, 17 E2E passes with one intentional desktop skip, both security scans, 526 licenses, and zero vulnerabilities green.
 - 2026-07-20 ledger version 2 preflight: additive migration assigned Standard to all four historical reservations and preserved exact nano-USD exposure. Readback found zero run lock, zero active reservations, three known Standard reservations totaling `$0.010074`, one uncertain Standard reservation at `$0.014623`, prior spend `$2.786385175`, total exposure `$2.811082175`, and headroom `$0.188917825`. No generation ran.
+- 2026-07-20 first paid Flex matrix: `npm run evals:live:full -- --prior-spend-usd 2.811082175 --chapter-cap-usd 0.0424` exited 1 after two of twelve chapters. Rowan chapters 1 and 2 passed at 918 and 910 words, `$0.007248` and `$0.0082815`, 20,361 and 15,692 ms streaming latency, approved audits, exact replay, and no leaks. Elara chapter 1 produced 789, 850, and 768-word drafts. The 850-word draft received a coherent 91-word continuation but the old recovery ceiling was 75. Nineteen known Flex attempts cost `$0.029972`; cumulative durable exposure is `$2.841054175`; headroom is `$0.158945825`. Report SHA-256 is `447f860a0e918198d246fef37671f16db3664ef76887fba390eaaabc77f9eddd`; sidecar SHA-256 is `80f067fcf0f63828f4a5a4eb4178a7fd2afb167afc73dd95c67d41c2a1e503e8`.
+- 2026-07-20 short-recovery test-first baseline: the 750-word eligibility and exact 850 plus 91 acceptance cases failed before implementation. ADR-015 separates the unchanged 900-to-925 model target from a deterministic merged ceiling of 949. Focused prompt and StoryService tests pass 44 cases, including 749 rejection, integrated 768 plus 132 recovery, 789 eligibility, preserved 812 plus 88 recovery, exact 850 plus 91 recovery, over-ceiling rejection, full validation, full audit, and release-cap accounting. No generation ran.
+- 2026-07-20 short-recovery full non-live gate: `npm run check`, `npm audit --audit-level=low`, and `git diff --check` exited 0. Format, lint, strict typecheck, 221 tests across 16 files, all six offline gates with 1,000 simulations and chapter 351 blocked, production build, 17 E2E passes with one intentional desktop skip, secret scan across 174 working files plus ignored reports and Git history, client-bundle scan, 526 package licenses, and zero vulnerabilities passed. Exact report parsing and the tracked checkpoint retained `rowan-ashborn:1` and `rowan-ashborn:2`, left five POVs pending, preserved all `$0.029972` attempts, and matched four audited bridge hashes. No generation ran.
+- 2026-07-20 short-recovery independent review: 76 focused story and resume tests plus strict typecheck passed. The reviewer replayed the exact 850 plus 91 prose to a valid 941-word deterministic chapter, verified the strict v9 parser, checkpoint bridge, Rowan retention, cost cap, provenance, and security, and found no P0 or P1. One P2 timing-label drift was corrected to the report's exact streaming latencies. No generation ran.
 
 Add exact command, date, exit code, cost, and report path after every future milestone gate.

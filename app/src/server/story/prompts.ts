@@ -146,9 +146,13 @@ export function buildNarrationPrompt(
 }
 
 export const MAX_NARRATION_RECOVERY_PROMPT_BYTES = 1_200;
+export const MIN_NARRATION_RECOVERY_DRAFT_WORDS = 750;
+export const MAX_NARRATION_RECOVERY_DRAFT_WORDS = 899;
+export const MAX_NARRATION_RECOVERY_MERGED_WORDS = 949;
 export const NARRATION_RECOVERY_INSTRUCTIONS = "Return continuation only.";
 
 export interface NarrationRecoveryPrompt {
+  readonly acceptanceMaximumAdditionalWords: number;
   readonly input: string;
   readonly instructions: string;
   readonly maxOutputTokens: number;
@@ -158,11 +162,17 @@ export interface NarrationRecoveryPrompt {
 
 export function buildNarrationRecoveryPrompt(prose: string): NarrationRecoveryPrompt {
   const words = prose.trim().split(/\s+/u).filter(Boolean);
-  if (words.length < 800 || words.length > 899) {
-    throw new Error("Narration recovery requires a draft between 800 and 899 words");
+  if (
+    words.length < MIN_NARRATION_RECOVERY_DRAFT_WORDS ||
+    words.length > MAX_NARRATION_RECOVERY_DRAFT_WORDS
+  ) {
+    throw new Error(
+      `Narration recovery requires a draft between ${MIN_NARRATION_RECOVERY_DRAFT_WORDS} and ${MAX_NARRATION_RECOVERY_DRAFT_WORDS} words`,
+    );
   }
   const minimumAdditionalWords = 900 - words.length;
   const maximumAdditionalWords = 925 - words.length;
+  const acceptanceMaximumAdditionalWords = MAX_NARRATION_RECOVERY_MERGED_WORDS - words.length;
   const maxOutputTokens = Math.min(230, maximumAdditionalWords * 2);
   let excerptWords = words.slice(-120);
   const serialize = () =>
@@ -185,6 +195,7 @@ export function buildNarrationRecoveryPrompt(prose: string): NarrationRecoveryPr
     throw new Error("Narration recovery prompt exceeds its byte cap");
   }
   return {
+    acceptanceMaximumAdditionalWords,
     input,
     instructions: NARRATION_RECOVERY_INSTRUCTIONS,
     maxOutputTokens,

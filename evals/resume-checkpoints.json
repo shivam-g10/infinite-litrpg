@@ -77,6 +77,35 @@
       "reportSha256": "7d907207f8cfa4b1806820d8ae23fdab7acf7a418624bf74b4d953c7eccc82c8",
       "reportVersion": 7,
       "sourceGitSha": "a4f34af649055e4dfa52448aa3a8a66425577c1b"
+    },
+    {
+      "adapterMode": "sequential",
+      "bridgeFiles": [
+        {
+          "path": "app/src/server/story/prompts.test.ts",
+          "sha256": "2edeb168f2af79ae8d8b40bdb0d8435e2f3aecab923ade1a594cc8cc78ab2bf4"
+        },
+        {
+          "path": "app/src/server/story/prompts.ts",
+          "sha256": "5dc09e18a55328ef9426afc10172d97655aa00824c307bc1863cf5d20c774590"
+        },
+        {
+          "path": "app/src/server/story/story-service.ts",
+          "sha256": "a808e0c99a5b7859f46a1472bb90e97bc0524668faf3d36b4a06c81e2777edaf"
+        },
+        {
+          "path": "decisions/ADR-015-short-narration-recovery.md",
+          "sha256": "72d31f763c364f3956750adf39d1e7f31a6e30d7f5a24b4ad12583cf3d01bddd"
+        }
+      ],
+      "chapterCostCapUsd": 0.0424,
+      "id": "prompt-1-4-11-flex-rowan-pair",
+      "priorSpendUsd": 2.811082175,
+      "promptVersion": "1.4.11",
+      "reportSha256": "447f860a0e918198d246fef37671f16db3664ef76887fba390eaaabc77f9eddd",
+      "reportVersion": 9,
+      "serviceTier": "flex",
+      "sourceGitSha": "4d47dfb7c748b9d620a81f37a849bf4c96b14edb"
     }
   ],
   "version": 2

@@ -61,6 +61,8 @@ import {
   buildLunaCoordinatorInstructions,
   buildNarrationPrompt,
   buildNarrationRecoveryPrompt,
+  MAX_NARRATION_RECOVERY_DRAFT_WORDS,
+  MIN_NARRATION_RECOVERY_DRAFT_WORDS,
   selectBackgroundActors,
 } from "./prompts";
 
@@ -558,14 +560,14 @@ export class StoryService {
                     const continuationWords = countWords(continuation);
                     const accepted =
                       continuationWords >= recoveryPrompt.minimumAdditionalWords &&
-                      continuationWords <= recoveryPrompt.maximumAdditionalWords;
+                      continuationWords <= recoveryPrompt.acceptanceMaximumAdditionalWords;
                     const rejectionReason = accepted
                       ? null
-                      : `Continuation must contain ${recoveryPrompt.minimumAdditionalWords} to ${recoveryPrompt.maximumAdditionalWords} words`;
+                      : `Continuation must contain ${recoveryPrompt.minimumAdditionalWords} to ${recoveryPrompt.acceptanceMaximumAdditionalWords} words`;
                     recoveryEvidence = {
                       accepted,
                       attempt: recoveryContext.attempt,
-                      maximumAdditionalWords: recoveryPrompt.maximumAdditionalWords,
+                      maximumAdditionalWords: recoveryPrompt.acceptanceMaximumAdditionalWords,
                       minimumAdditionalWords: recoveryPrompt.minimumAdditionalWords,
                       prose: continuation,
                       rejectionReason,
@@ -1192,8 +1194,8 @@ function countWords(value: string): number {
 function canRecoverShortNarration(prose: string, issues: readonly ValidationIssue[]): boolean {
   const words = countWords(prose);
   return (
-    words >= 800 &&
-    words <= 899 &&
+    words >= MIN_NARRATION_RECOVERY_DRAFT_WORDS &&
+    words <= MAX_NARRATION_RECOVERY_DRAFT_WORDS &&
     issues.length === 1 &&
     issues[0]?.code === "INVALID_SCHEMA" &&
     issues[0].path === "prose" &&

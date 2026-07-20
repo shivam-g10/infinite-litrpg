@@ -608,28 +608,48 @@ describe("background actor selection", () => {
     }
   });
 
-  it("bounds a tail-only 800-word narration recovery request", () => {
-    const prose = Array.from({ length: 800 }, (_, index) => `ember${index}`).join(" ");
+  it("bounds a tail-only 750-word narration recovery request", () => {
+    const prose = Array.from({ length: 750 }, (_, index) => `ember${index}`).join(" ");
     const recovery = buildNarrationRecoveryPrompt(prose);
     const requestBytes = new TextEncoder().encode(
       `${recovery.instructions}\n${recovery.input}\n`,
     ).byteLength;
 
-    expect(recovery.minimumAdditionalWords).toBe(100);
-    expect(recovery.maximumAdditionalWords).toBe(125);
+    expect(recovery.minimumAdditionalWords).toBe(150);
+    expect(recovery.maximumAdditionalWords).toBe(175);
+    expect(recovery.acceptanceMaximumAdditionalWords).toBe(199);
     expect(recovery.maxOutputTokens).toBe(230);
     expect(requestBytes).toBeLessThanOrEqual(MAX_NARRATION_RECOVERY_PROMPT_BYTES);
     expect(
-      estimateMaximumRequestCostUsd("gpt-5.6-luna", requestBytes, recovery.maxOutputTokens),
+      estimateMaximumRequestCostUsd("gpt-5.6-luna", requestBytes, recovery.maxOutputTokens, {
+        inputBilling: "uncached",
+      }),
     ).toBeLessThanOrEqual(0.00355);
+    expect(
+      estimateMaximumRequestCostUsd("gpt-5.6-luna", requestBytes, recovery.maxOutputTokens, {
+        inputBilling: "uncached",
+        serviceTier: "flex",
+      }),
+    ).toBeLessThanOrEqual(0.001546);
     expect(recovery.input).not.toContain("ember0");
-    expect(recovery.input).toContain("ember799");
-    expect(() => buildNarrationRecoveryPrompt("ember ".repeat(799))).toThrow("800 and 899");
+    expect(recovery.input).toContain("ember749");
+    expect(() => buildNarrationRecoveryPrompt("ember ".repeat(749))).toThrow("750 and 899");
 
-    const shortGap = buildNarrationRecoveryPrompt("ember ".repeat(872));
-    expect(shortGap.minimumAdditionalWords).toBe(28);
-    expect(shortGap.maximumAdditionalWords).toBe(53);
-    expect(shortGap.maxOutputTokens).toBe(106);
+    for (const liveDraftWordCount of [768, 789]) {
+      expect(buildNarrationRecoveryPrompt("ember ".repeat(liveDraftWordCount))).toMatchObject({
+        acceptanceMaximumAdditionalWords: 949 - liveDraftWordCount,
+        minimumAdditionalWords: 900 - liveDraftWordCount,
+      });
+    }
+
+    const observedGap = buildNarrationRecoveryPrompt("ember ".repeat(850));
+    expect(observedGap.minimumAdditionalWords).toBe(50);
+    expect(observedGap.maximumAdditionalWords).toBe(75);
+    expect(observedGap.acceptanceMaximumAdditionalWords).toBe(99);
+    expect(observedGap.maxOutputTokens).toBe(150);
+    expect(JSON.parse(observedGap.input)).toMatchObject({ maximumAdditionalWords: 75 });
+    expect(91).toBeGreaterThanOrEqual(observedGap.minimumAdditionalWords);
+    expect(91).toBeLessThanOrEqual(observedGap.acceptanceMaximumAdditionalWords);
   });
 });
 

@@ -409,11 +409,34 @@ describe("StoryService", () => {
     store.close();
   });
 
-  it("repairs an 812-word draft with three background agents under the release cap", async () => {
+  it.each([
+    {
+      continuationWordCount: 132,
+      expectedMaximumAdditionalWords: 181,
+      name: "the live 768-word lower eligibility path",
+      rawWordCount: 768,
+    },
+    {
+      continuationWordCount: 88,
+      expectedMaximumAdditionalWords: 137,
+      name: "the existing 812 plus 88 word three-agent path",
+      rawWordCount: 812,
+    },
+    {
+      continuationWordCount: 91,
+      expectedMaximumAdditionalWords: 99,
+      name: "the live 850 plus 91 word defect",
+      rawWordCount: 850,
+    },
+  ])("repairs $name under the release cap", async (testCase) => {
     const store = new StoryStore();
-    const rawProse = Array.from({ length: 812 }, () => "ember").join(" ");
-    const continuation = Array.from({ length: 88 }, () => "cinder").join(" ");
+    const rawProse = Array.from({ length: testCase.rawWordCount }, () => "ember").join(" ");
+    const continuation = Array.from(
+      { length: testCase.continuationWordCount },
+      () => "cinder",
+    ).join(" ");
     const prose = `${rawProse} ${continuation}`;
+    const mergedWordCount = testCase.rawWordCount + testCase.continuationWordCount;
     const proseHash = createHash("sha256").update(prose).digest("hex");
     const actorIds = ["lucan-aurelis", "maelin-rook", "nyra-vale"] as const;
     const meteredUsage = usage(1_000, 200);
@@ -531,17 +554,17 @@ describe("StoryService", () => {
       accepted: true,
       auditResponseId: "resp_audit_three",
       mergedProse: prose,
-      mergedWordCount: 900,
+      mergedWordCount,
       narratorResponseId: "resp_narration_three",
       rawProse,
-      rawWordCount: 812,
+      rawWordCount: testCase.rawWordCount,
       recovery: {
         accepted: true,
-        maximumAdditionalWords: 113,
-        minimumAdditionalWords: 88,
+        maximumAdditionalWords: testCase.expectedMaximumAdditionalWords,
+        minimumAdditionalWords: 900 - testCase.rawWordCount,
         prose: continuation,
         responseId: "resp_recovery_three",
-        wordCount: 88,
+        wordCount: testCase.continuationWordCount,
       },
     });
     const calls = result.godMode.calls as readonly {
@@ -579,10 +602,13 @@ describe("StoryService", () => {
     store.close();
   });
 
-  it("records an out-of-range recovery before retrying narration", async () => {
+  it.each([
+    { name: "below the minimum", rejectedWordCount: 10 },
+    { name: "above the acceptance ceiling", rejectedWordCount: 130 },
+  ])("records recovery $name before retrying narration", async ({ rejectedWordCount }) => {
     const store = new StoryStore();
     const rawProse = "ember ".repeat(820).trim();
-    const rejectedContinuation = "cinder ".repeat(10).trim();
+    const rejectedContinuation = "cinder ".repeat(rejectedWordCount).trim();
     const finalProse = "ash ".repeat(900).trim();
     const frame = {
       choices: [
@@ -666,11 +692,11 @@ describe("StoryService", () => {
       rawWordCount: 820,
       recovery: {
         accepted: false,
-        maximumAdditionalWords: 105,
+        maximumAdditionalWords: 129,
         minimumAdditionalWords: 80,
         prose: rejectedContinuation,
         responseId: "resp_bad_recovery",
-        wordCount: 10,
+        wordCount: rejectedWordCount,
       },
       rejectionStage: "recovery",
     });
