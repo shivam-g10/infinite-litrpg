@@ -153,4 +153,4 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 
 ## Current Milestone
 
-Phase 5 release eval: checkpoint `35a341c` is independently reviewed, fully green, and clean-clone verified. Fold exact `$2.735142975` exposure into a fresh ledger chain and run all twelve Luna-narrated current-route chapters at a `$0.0424` chapter cap. Every request stays under the immutable `$3` global cap.
+Phase 5 release eval: the clean prompt `1.4.10` run committed Rowan chapter 1, then failed Rowan chapter 2 after two rejected recoveries and one audit rejection. Register and analyze exact report `7d907207…`, add regressions before changing AI behavior, and prove the next route fits the remaining `$0.213614825` headroom. Do not make another paid call before every non-live gate passes from a clean commit.

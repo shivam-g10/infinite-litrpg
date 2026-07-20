@@ -2,7 +2,7 @@
 
 - Updated: 2026-07-20
 - Layer: Release evaluation
-- Current phase: Phase 5 prompt `1.4.10` fresh paid matrix
+- Current phase: Phase 5 prompt `1.4.10` failed-live analysis
 - Repository: initialized on `main`
 - Remote: `git@github.com:shivam-g10/infinite-litrpg.git`
 - Initial commit: `39b19a2` (`chore: scaffold agent workflow`)
@@ -21,12 +21,12 @@
 
 ## Current Blockers
 
-- The fresh twelve-cycle sequential prompt `1.4.10` report has not run. Prompt `1.4.9` Rowan and Elara pairs remain baseline evidence only.
-- Conservative generation headroom is `$0.264857025`, or `$0.02207141875` for each of twelve fresh chapters. No paid call is allowed until every prompt `1.4.10` non-live gate and a clean committed checkpoint pass.
+- The fresh sequential prompt `1.4.10` run stopped after Rowan chapter 1. Rowan chapter 2 exhausted narration recovery and audit retries. The current report is not a full release matrix.
+- Conservative generation headroom is `$0.213614825`. No further paid call is allowed until the failed report is registered, root cause has regression coverage, all non-live gates pass, and the next route is proven affordable.
 
 ## Next Action
 
-Run the fresh twelve-chapter live chain with prior spend `$2.735142975` and chapter cap `$0.0424`. Stop after any failure and reconcile the durable ledger before another request.
+Finish failed-run quality and budget analysis. Establish regressions before changing AI behavior. Do not spend again until the reviewed route and durable ledger prove a safe next command.
 
 ## Evidence Log
 
@@ -120,5 +120,6 @@ Run the fresh twelve-chapter live chain with prior spend `$2.735142975` and chap
 - 2026-07-20 prompt `1.4.10` corrected full non-live gate: `npm run check` and `npm audit` exited 0. Format, lint, strict typecheck, 144 tests across 14 files, all six offline gates with 1,000 simulations and chapter 351 blocked, production build, 17 E2E passes with one intentional desktop skip, secret scan across 159 working files plus ignored reports and Git history, client-bundle scan, 526 package licenses, and zero vulnerabilities passed. Independent evaluation reran 57 focused tests, typecheck, offline evals, the six-POV byte probe, and the exact version 7 artifact probe. Final read-only review found no blocker.
 - 2026-07-20 prompt `1.4.10` clean checkpoint: commit `35a341c` (`feat(story): route narration through Luna`) contains the reviewed runtime, regressions, ADR, and release docs. `npm run verify:clean-clone` exited 0 in 49.2 seconds with 144 tests, all offline evals, build, 17 E2E passes with one intentional skip, security, 526 licenses, and zero vulnerabilities green.
 - 2026-07-20 fresh-run ledger preflight: read-only SQLite inspection found no run lock, no active or uncertain reservation, eleven known reservations totaling `69506375` nano-USD, baseline attempts `174579650` nano-USD, and prior spend `2491056950` nano-USD. Exact durable exposure remains `$2.735142975`; headroom remains `$0.264857025`.
+- 2026-07-20 prompt `1.4.10` fresh full command `npm run evals:live:full -- --prior-spend-usd 2.735142975 --chapter-cap-usd 0.0424` exited 1 after one of twelve chapters. Rowan chapter 1 committed 911 words at `$0.01705675` with approved audit and exact replay. Rowan chapter 2 produced drafts of 820, 872, and 800 words; two bounded continuations missed their narrow continuation ranges, while the final merged draft reached audit. The audit rejected continuity and POV safety, described Rowan's allowed reincarnation identity as forbidden, and named forbidden fact `malachar-contained-the-void`. Fifteen known attempts cost `$0.0512422`; cumulative durable exposure is `$2.786385175`; headroom is `$0.213614825`. There is no run lock and no active or uncertain reservation. Archived report: `evals/reports/live-full-sequential-prompt-1.4.10-1.json`, SHA-256 `7d907207f8cfa4b1806820d8ae23fdab7acf7a418624bf74b4d953c7eccc82c8`.
 
 Add exact command, date, exit code, cost, and report path after every future milestone gate.

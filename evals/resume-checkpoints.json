@@ -66,6 +66,17 @@
       "reportSha256": "ccd1c9cd70a459e892810fd7dcf5cb353c90986cd227135d69eee751878ce063",
       "reportVersion": 7,
       "sourceGitSha": "fc182c4c84639e2524c372d6f47a2c53496daeb7"
+    },
+    {
+      "adapterMode": "sequential",
+      "bridgeFiles": [],
+      "chapterCostCapUsd": 0.0424,
+      "id": "prompt-1-4-10-rowan-prefix-v7",
+      "priorSpendUsd": 2.735142975,
+      "promptVersion": "1.4.10",
+      "reportSha256": "7d907207f8cfa4b1806820d8ae23fdab7acf7a418624bf74b4d953c7eccc82c8",
+      "reportVersion": 7,
+      "sourceGitSha": "a4f34af649055e4dfa52448aa3a8a66425577c1b"
     }
   ],
   "version": 2
