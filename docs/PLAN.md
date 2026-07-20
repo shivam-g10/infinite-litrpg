@@ -178,4 +178,4 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 
 ## Current Milestone
 
-Phase 5 release eval: the canon-preserving re-narration slice and hard `$3` preflight are implemented. The strict three-target full report, 263 tests, offline evals, build, E2E, security, licenses, dependency audit, and two independent focused audits pass. The registered settled receipt remains the source; no provider call ran. Next: commit and clean-clone verify this checkpoint, then request fresh authority for the exact `$0.0135` three-target Flex command.
+Phase 5 release eval: commit `3fe329b` contains the canon-preserving re-narration slice and hard `$3` preflight. The strict three-target full report, 263 tests, offline evals, build, E2E, security, licenses, dependency audit, three independent audits, real settled-receipt probe, and isolated clean-clone gate pass. The registered settled receipt remains the source; no provider call ran. Next: obtain fresh authority for the exact `$0.0135` three-target Flex command.
