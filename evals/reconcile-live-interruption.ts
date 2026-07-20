@@ -17,13 +17,15 @@ import {
   pricingVersionForServiceTier,
 } from "../app/src/server/openai";
 import {
+  LIVE_SPEND_EXTENDED_TOTAL_CAP_USD,
+  LIVE_SPEND_ORIGINAL_TOTAL_CAP_USD,
   LiveSpendLedger,
   type InterruptedRunExpectation,
   type LiveSpendSnapshot,
 } from "./live-spend-ledger";
 
 const ROOT = process.cwd();
-const TOTAL_CAP_USD = 3;
+const MAX_TOTAL_CAP_USD = LIVE_SPEND_EXTENDED_TOTAL_CAP_USD;
 const CHECKPOINTS_PATH = resolve(ROOT, "evals", "interruption-checkpoints.json");
 const LEDGER_PATH = resolve(ROOT, "evals", "reports", "live-spend-ledger.db");
 const MONEY_EPSILON_USD = 0.000_000_1;
@@ -37,6 +39,12 @@ const NON_RUNTIME_BRIDGE_PATHS = new Set([
 const Sha256Schema = z.string().regex(/^[a-f0-9]{64}$/u);
 const GitShaSchema = z.string().regex(/^[a-f0-9]{40}$/u);
 const RuntimeModelSchema = z.enum(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
+const TotalCostCapSchema = z
+  .union([
+    z.literal(LIVE_SPEND_ORIGINAL_TOTAL_CAP_USD),
+    z.literal(LIVE_SPEND_EXTENDED_TOTAL_CAP_USD),
+  ])
+  .default(LIVE_SPEND_ORIGINAL_TOTAL_CAP_USD);
 const TurnIdentitySchema = z
   .object({
     chapter: z.number().int().min(1).max(2),
@@ -57,11 +65,11 @@ const BridgeFileSchema = z
   .strict();
 const KnownReservationSchema = z
   .object({
-    actualCostUsd: z.number().positive().max(TOTAL_CAP_USD),
+    actualCostUsd: z.number().positive().max(MAX_TOTAL_CAP_USD),
     agentId: z.string().min(1).max(240).nullable(),
     attempt: z.number().int().min(0).max(2),
     id: z.string().min(1).max(240),
-    maximumCostUsd: z.number().positive().max(TOTAL_CAP_USD),
+    maximumCostUsd: z.number().positive().max(MAX_TOTAL_CAP_USD),
     model: RuntimeModelSchema,
     serviceTier: RuntimeServiceTierSchema.default("standard"),
   })
@@ -71,7 +79,7 @@ const UnknownReservationSchema = z
     agentId: z.string().min(1).max(240).nullable(),
     attempt: z.number().int().min(0).max(2),
     id: z.string().min(1).max(240),
-    maximumCostUsd: z.number().positive().max(TOTAL_CAP_USD),
+    maximumCostUsd: z.number().positive().max(MAX_TOTAL_CAP_USD),
     model: RuntimeModelSchema,
     phase: z.enum(["intent", "narration", "audit", "genesis", "recovery", "finale"]),
     serviceTier: RuntimeServiceTierSchema.default("standard"),
@@ -81,7 +89,7 @@ const UnknownReservationSchema = z
 
 export const InterruptionCheckpointSchema = z
   .object({
-    baselineAttemptCostUsd: z.number().min(0).max(TOTAL_CAP_USD),
+    baselineAttemptCostUsd: z.number().min(0).max(MAX_TOTAL_CAP_USD),
     bridgeFiles: z.array(BridgeFileSchema).max(20),
     expectedSidecar: z
       .object({
@@ -97,13 +105,14 @@ export const InterruptionCheckpointSchema = z
       .strict(),
     id: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/u),
     knownReservations: z.array(KnownReservationSchema).max(1_000),
-    priorSpendUsd: z.number().min(0).max(TOTAL_CAP_USD),
+    priorSpendUsd: z.number().min(0).max(MAX_TOTAL_CAP_USD),
     receiptPath: z.string().min(1).max(1_000),
     runId: z.string().uuid(),
     sidecarPath: z.string().min(1).max(1_000),
     sidecarSha256: Sha256Schema,
     sourceGitSha: GitShaSchema,
     sourceReportSha256: z.string().regex(/^(?:[a-f0-9]{64}|fresh:[a-f0-9]{40})$/u),
+    totalCapUsd: TotalCostCapSchema,
     unknownReservations: z.array(UnknownReservationSchema).length(1),
   })
   .strict()
@@ -166,7 +175,7 @@ const LiveSpendSnapshotSchema = z
     knownReservationCostUsd: z.number().min(0),
     priorSpendUsd: z.number().min(0),
     sourceReportSha256: z.string().nullable(),
-    totalCapUsd: z.number().positive(),
+    totalCapUsd: TotalCostCapSchema,
     totalExposureUsd: z.number().min(0),
     uncertainReservationCostUsd: z.number().min(0),
   })
@@ -177,7 +186,7 @@ export const InterruptionReceiptSchema = z
     budgetLedger: LiveSpendSnapshotSchema,
     checkpointId: z.string().min(1).max(240),
     finishedAt: z.string().datetime(),
-    knownAttemptCostUsd: z.number().min(0).max(TOTAL_CAP_USD),
+    knownAttemptCostUsd: z.number().min(0).max(MAX_TOTAL_CAP_USD),
     pricingVersion: z.string().min(1).max(240).default(PRICING_VERSION),
     promptVersion: z.string().min(1).max(240),
     reconciliationGitSha: GitShaSchema,
@@ -187,8 +196,8 @@ export const InterruptionReceiptSchema = z
     sourceGitSha: GitShaSchema,
     serviceTier: RuntimeServiceTierSchema.default("standard"),
     syntheticAttempts: z.array(SyntheticAttemptSchema).length(1),
-    totalExposureUsd: z.number().min(0).max(TOTAL_CAP_USD),
-    unknownReservationCostUsd: z.number().positive().max(TOTAL_CAP_USD),
+    totalExposureUsd: z.number().min(0).max(MAX_TOTAL_CAP_USD),
+    unknownReservationCostUsd: z.number().positive().max(MAX_TOTAL_CAP_USD),
     version: z.literal(1),
   })
   .strict();
@@ -331,6 +340,7 @@ export function buildInterruptionReceipt(
     ledgerSnapshot.sourceReportSha256 !== checkpoint.sourceReportSha256 ||
     !costsMatch(ledgerSnapshot.knownReservationCostUsd, evidence.knownAttemptCostUsd) ||
     !costsMatch(ledgerSnapshot.uncertainReservationCostUsd, unknownReservationCostUsd) ||
+    !costsMatch(ledgerSnapshot.totalCapUsd, checkpoint.totalCapUsd) ||
     !costsMatch(ledgerSnapshot.totalExposureUsd, expectedExposure)
   ) {
     throw new Error("Reconciled ledger does not match interruption evidence");
@@ -376,7 +386,7 @@ async function main(): Promise<void> {
     knownReservations: checkpoint.knownReservations,
     unknownReservations: checkpoint.unknownReservations,
   };
-  const ledger = new LiveSpendLedger(LEDGER_PATH, TOTAL_CAP_USD);
+  const ledger = new LiveSpendLedger(LEDGER_PATH, checkpoint.totalCapUsd);
   let claimed = false;
   let released = false;
   try {

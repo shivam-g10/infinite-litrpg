@@ -6,7 +6,7 @@ import { join } from "node:path";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { LiveSpendLedger } from "./live-spend-ledger";
+import { LiveSpendLedger, preflightLiveSpendCap } from "./live-spend-ledger";
 
 const SOURCE_A = "a".repeat(64);
 const SOURCE_B = "b".repeat(64);
@@ -25,6 +25,102 @@ afterEach(() => {
 });
 
 describe("durable live spend ledger", () => {
+  it("previews a cap increase without mutating the ledger", () => {
+    const filename = temporaryLedgerPath();
+    const ledger = new LiveSpendLedger(filename, 3);
+    ledger.close();
+
+    const preview = preflightLiveSpendCap(filename, 3.021);
+
+    expect(preview).toMatchObject({
+      currentTotalCapUsd: 3,
+      migrationRequired: true,
+      projectedHeadroomUsd: 3.021,
+      requestedTotalCapUsd: 3.021,
+      totalExposureUsd: 0,
+    });
+    const database = new Database(filename, { readonly: true });
+    try {
+      expect(database.prepare("SELECT total_cap_nano FROM ledger_meta WHERE id = 1").get()).toEqual(
+        {
+          total_cap_nano: 3_000_000_000,
+        },
+      );
+    } finally {
+      database.close();
+    }
+  });
+
+  it("allows cap preflight through only the named stale lock", () => {
+    const filename = temporaryLedgerPath();
+    const ledger = new LiveSpendLedger(filename, 3);
+    const runId = randomUUID();
+    ledger.acquireRun(runId);
+
+    expect(() => preflightLiveSpendCap(filename, 3.021)).toThrow("matching stale run");
+    expect(() =>
+      preflightLiveSpendCap(filename, 3.021, { allowedLockedRunId: randomUUID() }),
+    ).toThrow("matching stale run");
+    expect(preflightLiveSpendCap(filename, 3.021, { allowedLockedRunId: runId })).toMatchObject({
+      migrationRequired: true,
+      totalExposureUsd: 0,
+    });
+
+    ledger.releaseRun(runId);
+    ledger.close();
+  });
+
+  it("preflights the real carried-baseline shape without folding it", () => {
+    const filename = temporaryLedgerPath();
+    const ledger = new LiveSpendLedger(filename, 3);
+    const runId = randomUUID();
+    ledger.acquireRun(runId);
+    ledger.synchronizeBaseline(runId, {
+      attemptCostUsd: 0.178101,
+      priorSpendUsd: 2.811082175,
+      sourceReportSha256: "90374f2e4ca49fe390fc6c64cd9412579efa7cdaa2c7e291f1b8a772127ea1bc",
+    });
+    const hooks = ledger.createCostHooks(runId);
+    hooks.reserve(reservation("carried-known", 0.005));
+    hooks.settle({ actualCostUsd: 0.004246, id: "carried-known" });
+    ledger.releaseRun(runId);
+    ledger.close();
+
+    expect(preflightLiveSpendCap(filename, 3.021)).toMatchObject({
+      baselineAttemptCostUsd: 0.178101,
+      knownReservationCostUsd: 0.004246,
+      migrationRequired: true,
+      priorSpendUsd: 2.811082175,
+      totalExposureUsd: 2.993429175,
+      uncertainReservationCostUsd: 0,
+    });
+  });
+
+  it("requires an explicit one-way cap migration and preserves exposure", () => {
+    const filename = temporaryLedgerPath();
+    const initial = new LiveSpendLedger(filename, 3);
+    const runId = randomUUID();
+    initial.acquireRun(runId);
+    initial.synchronizeBaseline(runId, RECOVERY_BASELINE);
+    initial.releaseRun(runId);
+    initial.close();
+
+    expect(() => new LiveSpendLedger(filename, 3.021)).toThrow("explicit cap increase");
+    const migrated = new LiveSpendLedger(filename, 3);
+    const migrationRunId = randomUUID();
+    migrated.acquireRun(migrationRunId);
+    migrated.synchronizeBaseline(migrationRunId, RECOVERY_BASELINE);
+    migrated.increaseTotalCap(migrationRunId, 3.021);
+    expect(migrated.snapshot()).toMatchObject({
+      headroomUsd: 0.321,
+      totalCapUsd: 3.021,
+      totalExposureUsd: 2.7,
+    });
+    migrated.releaseRun(migrationRunId);
+    migrated.close();
+    expect(() => new LiveSpendLedger(filename, 3)).toThrow("cannot decrease");
+  });
+
   it("migrates a version-one ledger in place without changing exposure", () => {
     const filename = temporaryLedgerPath();
     createVersionOneLedger(filename);

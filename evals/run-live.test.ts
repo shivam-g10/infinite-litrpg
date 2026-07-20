@@ -35,6 +35,8 @@ import {
   Version6LiveReportSchema,
   Version7LiveReportSchema,
   Version8LiveReportSchema,
+  assertExtendedTotalCapPlan,
+  assertLiveSpendPreflightMatchesBaseline,
   assertRenarrationPlanFits,
   assertRenarrationReplacement,
   assertCommittedReportMatchesSidecar,
@@ -49,6 +51,7 @@ import {
   parseLiveReport,
   parseRenarrate,
   parseRerunFrom,
+  parseTotalCapUsd,
   prepareResume,
   projectedCumulativeCostUsd,
   readNarrativeEvidenceSidecar,
@@ -74,6 +77,122 @@ const REQUIREMENTS: ResumeRequirements = {
 const STANDARD_REQUIREMENTS: ResumeRequirements = { ...REQUIREMENTS, serviceTier: "standard" };
 
 describe("live report version 9", () => {
+  it("bounds an explicit total cap and keeps it in current report evidence", () => {
+    expect(parseTotalCapUsd([])).toBe(3);
+    expect(parseTotalCapUsd(["--total-cap-usd", "3.021"])).toBe(3.021);
+    expect(() => parseTotalCapUsd(["--total-cap-usd", "3", "--total-cap-usd", "3.021"])).toThrow(
+      "only once",
+    );
+    expect(() => parseTotalCapUsd(["--total-cap-usd", "3.021000001"])).toThrow();
+    expect(() => parseTotalCapUsd(["--total-cap-usd", "2.999"])).toThrow();
+
+    const report = fakeSmokeReport();
+    report.totalCostCapUsd = 3.021;
+    report.budgetLedger.totalCapUsd = 3.021;
+    report.budgetLedger.headroomUsd = 3.021 - report.cumulativeCostUsd;
+    expect(LiveReportSchema.safeParse(report).success).toBe(true);
+    expect(
+      LiveReportSchema.safeParse({
+        ...report,
+        budgetLedger: { ...report.budgetLedger, totalCapUsd: 3 },
+      }).success,
+    ).toBe(false);
+
+    const projection = assertRenarrationPlanFits(2.811082175, 0.182347, 2, 0.0135, 3.021);
+    expect(projection).toEqual({
+      headroomAfterProjectionUsd: 0.000570825,
+      projectedFinalExposureUsd: 3.020429175,
+      projectedMatrixCostUsd: 0.027,
+    });
+    const extendedPlan = {
+      adapterMode: "sequential" as const,
+      chapterCostCapUsd: 0.0135,
+      priorSpendUsd: 2.811082175,
+      renarrate: [
+        { chapter: 1 as const, povId: "elara-voss" as const },
+        { chapter: 1 as const, povId: "lucan-aurelis" as const },
+      ],
+      reportSha256: "d935b56ed039e560ac067c2ec268ed7780b9daf196497e3ffde6349be2c02e0a",
+      rerunFrom: [],
+      serviceTier: "flex" as const,
+      suite: "full" as const,
+      totalCapUsd: 3.021,
+    };
+    expect(() => assertExtendedTotalCapPlan(extendedPlan)).not.toThrow();
+    expect(() =>
+      assertExtendedTotalCapPlan({
+        ...extendedPlan,
+        renarrate: [...extendedPlan.renarrate].reverse(),
+      }),
+    ).toThrow("exact Elara then Lucan");
+    expect(() =>
+      assertExtendedTotalCapPlan({ ...extendedPlan, reportSha256: "b".repeat(64) }),
+    ).toThrow("exact Elara then Lucan");
+    expect(() =>
+      assertLiveSpendPreflightMatchesBaseline(
+        {
+          baselineAttemptCostUsd: 0.178101,
+          currentTotalCapUsd: 3,
+          knownReservationCostUsd: 0.004246,
+          migrationRequired: true,
+          priorSpendUsd: 2.811082175,
+          projectedHeadroomUsd: 0.027570825,
+          requestedTotalCapUsd: 3.021,
+          sourceReportSha256: "90374f2e4ca49fe390fc6c64cd9412579efa7cdaa2c7e291f1b8a772127ea1bc",
+          totalExposureUsd: 2.993429175,
+          uncertainReservationCostUsd: 0,
+        },
+        {
+          attemptCostUsd: 0.182347,
+          mode: "resume",
+          priorSpendUsd: 2.811082175,
+        },
+      ),
+    ).not.toThrow();
+    expect(() =>
+      assertLiveSpendPreflightMatchesBaseline(
+        {
+          baselineAttemptCostUsd: 0.178101,
+          currentTotalCapUsd: 3,
+          knownReservationCostUsd: 0.004246,
+          migrationRequired: true,
+          priorSpendUsd: 2.811082175,
+          projectedHeadroomUsd: 0.027570825,
+          requestedTotalCapUsd: 3.021,
+          sourceReportSha256: "90374f2e4ca49fe390fc6c64cd9412579efa7cdaa2c7e291f1b8a772127ea1bc",
+          totalExposureUsd: 2.993429176,
+          uncertainReservationCostUsd: 0,
+        },
+        {
+          attemptCostUsd: 0.182347,
+          mode: "resume",
+          priorSpendUsd: 2.811082175,
+        },
+      ),
+    ).toThrow("authenticated run baseline");
+    expect(() =>
+      assertLiveSpendPreflightMatchesBaseline(
+        {
+          baselineAttemptCostUsd: 0.178101,
+          currentTotalCapUsd: 3,
+          knownReservationCostUsd: 0.004246,
+          migrationRequired: false,
+          priorSpendUsd: 2.811082175,
+          projectedHeadroomUsd: 0.006570825,
+          requestedTotalCapUsd: 3,
+          sourceReportSha256: "a".repeat(64),
+          totalExposureUsd: 2.993429175,
+          uncertainReservationCostUsd: 0,
+        },
+        {
+          attemptCostUsd: 0,
+          mode: "fresh",
+          priorSpendUsd: 2.993429175,
+        },
+      ),
+    ).not.toThrow();
+  });
+
   it("uses no reasoning for budgeted re-narration audits", () => {
     expect(RENARRATION_AUDIT_REASONING_EFFORT).toBe("none");
     expect(RENARRATION_AUDIT_MAX_OUTPUT_TOKENS).toBe(64);
@@ -378,6 +497,34 @@ describe("live report version 9", () => {
     expect(Version7LiveReportSchema.safeParse(candidate).success).toBe(false);
     expect(Version6LiveReportSchema.safeParse(version6).success).toBe(true);
     expect(LegacyLiveReportSchema.safeParse(version5).success).toBe(true);
+    expect(
+      Version8LiveReportSchema.safeParse({
+        ...version8,
+        budgetLedger: {
+          ...(version8.budgetLedger as Record<string, unknown>),
+          headroomUsd: 1.021,
+          totalCapUsd: 3.021,
+        },
+        totalCostCapUsd: 3.021,
+      }).success,
+    ).toBe(false);
+    expect(
+      Version7LiveReportSchema.safeParse({
+        ...version7,
+        budgetLedger: {
+          ...(version7.budgetLedger as Record<string, unknown>),
+          headroomUsd: 1.021,
+          totalCapUsd: 3.021,
+        },
+        totalCostCapUsd: 3.021,
+      }).success,
+    ).toBe(false);
+    expect(
+      Version6LiveReportSchema.safeParse({ ...version6, totalCostCapUsd: 3.021 }).success,
+    ).toBe(false);
+    expect(LegacyLiveReportSchema.safeParse({ ...version5, totalCostCapUsd: 3.021 }).success).toBe(
+      false,
+    );
     expect(LiveReportSchema.safeParse({ ...candidate, version: 4 }).success).toBe(false);
     expect(
       [candidate, version8, version7, version6, version5].map(

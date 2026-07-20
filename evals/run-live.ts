@@ -51,7 +51,14 @@ import {
   type CanonicalRenarrationResult,
 } from "../app/src/server/story/story-service";
 import { StoryStore } from "../app/src/server/storage/story-store";
-import { LiveSpendLedger, type LiveSpendSnapshot } from "./live-spend-ledger";
+import {
+  LIVE_SPEND_EXTENDED_TOTAL_CAP_USD,
+  LIVE_SPEND_ORIGINAL_TOTAL_CAP_USD,
+  LiveSpendLedger,
+  preflightLiveSpendCap,
+  type LiveSpendCapPreflight,
+  type LiveSpendSnapshot,
+} from "./live-spend-ledger";
 import {
   assertPrompt1411FullMatrixFits,
   projectPrompt1411FullMatrixCostUsd,
@@ -62,7 +69,13 @@ const REPORT_DIRECTORY = resolve(ROOT, "evals", "reports");
 const RESUME_CHECKPOINTS_PATH = resolve(ROOT, "evals", "resume-checkpoints.json");
 const LIVE_SPEND_LEDGER_PATH = resolve(REPORT_DIRECTORY, "live-spend-ledger.db");
 const DEFAULT_PER_CHAPTER_CAP_USD = 0.1;
-const TOTAL_CAP_USD = 3;
+const TOTAL_CAP_USD = LIVE_SPEND_ORIGINAL_TOTAL_CAP_USD;
+const MAX_TOTAL_CAP_USD = LIVE_SPEND_EXTENDED_TOTAL_CAP_USD;
+const EXTENDED_CAP_CORRECTION_REPORT_SHA256 =
+  "d935b56ed039e560ac067c2ec268ed7780b9daf196497e3ffde6349be2c02e0a";
+const EXTENDED_CAP_CORRECTION_PRIOR_SPEND_USD = 2.811082175;
+const EXTENDED_CAP_CORRECTION_CHAPTER_CAP_USD = 0.0135;
+const EXTENDED_CAP_CORRECTION_TARGETS = ["elara-voss:1", "lucan-aurelis:1"] as const;
 const LEGACY_REPORT_VERSION = 5;
 const VERSION_6_REPORT_VERSION = 6;
 const VERSION_7_REPORT_VERSION = 7;
@@ -79,16 +92,20 @@ const RESUME_NON_RUNTIME_PATHS = new Set([
   "app/src/server/story/story-service.test.ts",
   "app/src/server/openai/policy.test.ts",
   "decisions/ADR-011-durable-live-eval-budget.md",
+  "decisions/ADR-020-explicit-live-cap-extension.md",
   "docs/ARCHITECTURE.md",
   "docs/PLAN.md",
   "docs/STATUS.md",
   "evals/README.md",
   "evals/live-spend-ledger.test.ts",
+  "evals/reconcile-live-interruption.test.ts",
+  "evals/reconcile-settled-live-run.test.ts",
   "evals/resume-checkpoints.json",
   "evals/run-live-restore.test.ts",
   "evals/run-live.test.ts",
 ]);
 const MAX_RESUME_CHANGED_PATHS = MAX_RESUME_BRIDGE_FILES + RESUME_NON_RUNTIME_PATHS.size;
+const TotalCostCapSchema = z.union([z.literal(TOTAL_CAP_USD), z.literal(MAX_TOTAL_CAP_USD)]);
 
 const PovIdSchema = z.enum(CHARACTER_IDS);
 const AdapterModeSchema = z.enum(["native-multi-agent", "sequential"]);
@@ -116,7 +133,7 @@ const ResumeCheckpointRegistrySchema = z
             bridgeFiles: z.array(BridgeFileSchema).max(MAX_RESUME_BRIDGE_FILES),
             chapterCostCapUsd: z.number().positive().max(DEFAULT_PER_CHAPTER_CAP_USD),
             id: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/u),
-            priorSpendUsd: z.number().min(0).max(TOTAL_CAP_USD),
+            priorSpendUsd: z.number().min(0).max(MAX_TOTAL_CAP_USD),
             promptVersion: z.string().min(1).max(240),
             reportSha256: Sha256Schema,
             reportVersion: z.union([
@@ -226,7 +243,7 @@ export const LiveResultSchema = z
     audit: NarrativeAuditSchema,
     canonicalNarrativeInput: CanonicalNarrativeInputEvidenceSchema.optional(),
     chapter: z.number().int().min(1).max(2),
-    costUsd: z.number().min(0).max(TOTAL_CAP_USD),
+    costUsd: z.number().min(0).max(MAX_TOTAL_CAP_USD),
     latencyMs: z.number().int().min(0),
     povId: PovIdSchema,
     prose: z.string().min(1).max(20_000),
@@ -380,13 +397,13 @@ const BaseLiveReportSchema = z
     gates: GateSchema,
     nativeRequested: z.boolean(),
     povFilter: PovIdSchema.nullable(),
-    priorSpendUsd: z.number().min(0).max(TOTAL_CAP_USD),
+    priorSpendUsd: z.number().min(0).max(MAX_TOTAL_CAP_USD),
     projectedMaximumCumulativeCostUsd: z.number().min(0),
     promptVersion: z.string().min(1).max(240),
     results: z.array(LiveResultSchema).max(12),
     startedAt: z.string().datetime(),
     suite: z.enum(["full", "smoke"]),
-    totalCostCapUsd: z.literal(TOTAL_CAP_USD),
+    totalCostCapUsd: TotalCostCapSchema,
     totalCostUsd: z.number().min(0),
   })
   .strict();
@@ -394,7 +411,7 @@ const BaseLiveReportSchema = z
 const LegacyResumeSchema = z
   .object({
     discardedResultCount: z.number().int().min(0).max(12),
-    existingAttemptCostUsd: z.number().min(0).max(TOTAL_CAP_USD),
+    existingAttemptCostUsd: z.number().min(0).max(MAX_TOTAL_CAP_USD),
     retainedPovIds: z.array(PovIdSchema).max(6),
     sourceReportPath: z.string().min(1).max(4_000),
   })
@@ -412,7 +429,7 @@ const HistoricalResumeSchema = z
   .object({
     changedPaths: z.array(z.string().min(1).max(1_000)).max(MAX_RESUME_CHANGED_PATHS),
     discardedResultCount: z.number().int().min(0).max(12),
-    existingAttemptCostUsd: z.number().min(0).max(TOTAL_CAP_USD),
+    existingAttemptCostUsd: z.number().min(0).max(MAX_TOTAL_CAP_USD),
     retainedPovIds: z.array(PovIdSchema).max(6),
     retainedResultGitShas: z.array(RetainedResultGitShaSchema).max(12),
     sourceChapterCostCapUsd: z.number().positive().max(DEFAULT_PER_CHAPTER_CAP_USD),
@@ -553,11 +570,11 @@ const LiveSpendSnapshotSchema = z
   .object({
     activeReservationCount: z.literal(0),
     baselineAttemptCostUsd: z.number().min(0),
-    headroomUsd: z.number().min(0).max(TOTAL_CAP_USD),
+    headroomUsd: z.number().min(0).max(MAX_TOTAL_CAP_USD),
     knownReservationCostUsd: z.number().min(0),
-    priorSpendUsd: z.number().min(0).max(TOTAL_CAP_USD),
+    priorSpendUsd: z.number().min(0).max(MAX_TOTAL_CAP_USD),
     sourceReportSha256: z.string().min(1).max(80),
-    totalCapUsd: z.literal(TOTAL_CAP_USD),
+    totalCapUsd: TotalCostCapSchema,
     totalExposureUsd: z.number().min(0),
     uncertainReservationCostUsd: z.number().min(0),
   })
@@ -1062,6 +1079,9 @@ type DurableReportForRefinement = z.infer<typeof BaseLiveReportSchema> & {
 
 function refineDurableReport(report: DurableReportForRefinement, context: z.RefinementCtx): void {
   refineReportCommon(report, context);
+  if (report.version !== REPORT_VERSION && !costsMatch(report.totalCostCapUsd, TOTAL_CAP_USD)) {
+    context.addIssue({ code: "custom", message: "Historical report changed the fixed total cap" });
+  }
   const supersededTurnIds = new Set(report.supersededTurnIds ?? []);
   if (supersededTurnIds.size !== (report.supersededTurnIds?.length ?? 0)) {
     context.addIssue({
@@ -1426,11 +1446,13 @@ function refineDurableReport(report: DurableReportForRefinement, context: z.Refi
   }
 
   const ledger = report.budgetLedger;
+  const totalCapUsd = report.totalCostCapUsd;
   const expectedBaseline = report.resume?.existingAttemptCostUsd ?? 0;
   const expectedNewExposure = report.totalCostUsd - expectedBaseline;
   const expectedLedgerSource = report.resume?.sourceReportSha256 ?? `fresh:${report.sourceGitSha}`;
   if (
     !costsMatch(ledger.priorSpendUsd, report.priorSpendUsd) ||
+    !costsMatch(ledger.totalCapUsd, totalCapUsd) ||
     !costsMatch(ledger.baselineAttemptCostUsd, expectedBaseline) ||
     ledger.sourceReportSha256 !== expectedLedgerSource ||
     !costsMatch(
@@ -1438,7 +1460,7 @@ function refineDurableReport(report: DurableReportForRefinement, context: z.Refi
       expectedNewExposure,
     ) ||
     !costsMatch(ledger.totalExposureUsd, report.cumulativeCostUsd) ||
-    !costsMatch(ledger.headroomUsd, Math.max(0, TOTAL_CAP_USD - report.cumulativeCostUsd))
+    !costsMatch(ledger.headroomUsd, Math.max(0, totalCapUsd - report.cumulativeCostUsd))
   ) {
     context.addIssue({ code: "custom", message: "Durable spend ledger does not match report" });
   }
@@ -1458,7 +1480,7 @@ function refineDurableReport(report: DurableReportForRefinement, context: z.Refi
   refineGateValue(
     report,
     "totalCostWithinCap",
-    ledger.totalExposureUsd <= TOTAL_CAP_USD + MONEY_EPSILON_USD,
+    ledger.totalExposureUsd <= totalCapUsd + MONEY_EPSILON_USD,
     context,
   );
 
@@ -2515,6 +2537,9 @@ function refineLegacyCostGates(
   report: z.infer<typeof BaseLiveReportSchema>,
   context: z.RefinementCtx,
 ): void {
+  if (!costsMatch(report.totalCostCapUsd, TOTAL_CAP_USD)) {
+    context.addIssue({ code: "custom", message: "Legacy report changed the fixed total cap" });
+  }
   const expectedResultCount = report.suite === "smoke" ? 1 : CHARACTER_IDS.length * 2;
   refineGateValue(
     report,
@@ -2528,7 +2553,7 @@ function refineLegacyCostGates(
   refineGateValue(
     report,
     "totalCostWithinCap",
-    report.cumulativeCostUsd <= TOTAL_CAP_USD + MONEY_EPSILON_USD,
+    report.cumulativeCostUsd <= report.totalCostCapUsd + MONEY_EPSILON_USD,
     context,
   );
 }
@@ -2601,6 +2626,9 @@ export function createLiveRunFinalizationState(): LiveRunFinalizationState {
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const suite = parseSuite(args);
+  const preflightOnly = args.includes("--preflight-only");
+  const totalCapExplicit = args.includes("--total-cap-usd");
+  const totalCapUsd = parseTotalCapUsd(args);
   const nativeRequested = args.includes("--native");
   const adapterMode = nativeRequested ? "native-multi-agent" : "sequential";
   const povFilter = parsePov(args);
@@ -2623,6 +2651,12 @@ async function main(): Promise<void> {
   if (renarrate.length > 0 && povFilter !== null) {
     throw new Error("--renarrate cannot be combined with --pov");
   }
+  if (preflightOnly && (suite !== "full" || resumeReportArgument === null)) {
+    throw new Error("--preflight-only requires the full suite and --resume-report");
+  }
+  if (preflightOnly && recoverStaleRunId !== null) {
+    throw new Error("--preflight-only cannot recover a stale run");
+  }
   const perChapterCapUsd = parseUsdFlag(
     args,
     "--chapter-cap-usd",
@@ -2630,7 +2664,7 @@ async function main(): Promise<void> {
     false,
     DEFAULT_PER_CHAPTER_CAP_USD,
   );
-  const priorSpendUsd = parseUsdFlag(args, "--prior-spend-usd", 0, true, TOTAL_CAP_USD);
+  const priorSpendUsd = parseUsdFlag(args, "--prior-spend-usd", 0, true, totalCapUsd);
   const serviceTier = RuntimeServiceTierSchema.parse(
     parseOptionalFlag(args, "--service-tier") ?? "standard",
   );
@@ -2645,19 +2679,29 @@ async function main(): Promise<void> {
   const narrativeEvidencePath = reportPath.replace(/\.json$/u, ".narrative-candidates.json");
   let cleanPathProjection: ReturnType<typeof assertPrompt1411FullMatrixFits> | null =
     suite === "full" && renarrate.length === 0
-      ? assertPrompt1411FullMatrixFits(priorSpendUsd, serviceTier, TOTAL_CAP_USD)
+      ? assertPrompt1411FullMatrixFits(priorSpendUsd, serviceTier, totalCapUsd)
       : null;
   if (suite === "full" && !args.includes("--confirm-cost")) {
     throw new Error("Full live eval requires --confirm-cost");
   }
   if (suite === "full") assertCleanGitCheckpoint();
-  config({ path: resolve(ROOT, ".env"), quiet: true });
   const sourceGitSha = currentGitSha();
   process.env.GIT_SHA = sourceGitSha;
   const resumeReportPath =
     resumeReportArgument === null ? null : resolve(ROOT, resumeReportArgument);
   const resumeSource = resumeReportPath === null ? null : readLiveReport(resumeReportPath);
   const resumeReport = resumeSource?.report ?? null;
+  assertExtendedTotalCapPlan({
+    adapterMode,
+    chapterCostCapUsd: perChapterCapUsd,
+    priorSpendUsd,
+    renarrate,
+    reportSha256: resumeSource?.sha256 ?? null,
+    rerunFrom,
+    serviceTier,
+    suite,
+    totalCapUsd,
+  });
   if (recoverStaleRunId !== null && existsSync(reportPath) && existsSync(narrativeEvidencePath)) {
     const committedSource = readLiveReport(reportPath);
     const committedReport =
@@ -2689,12 +2733,16 @@ async function main(): Promise<void> {
         committedReport.povFilter !== povFilter ||
         !costsMatch(committedReport.priorSpendUsd, priorSpendUsd) ||
         !costsMatch(committedReport.chapterCostCapUsd, perChapterCapUsd) ||
+        !costsMatch(committedReport.totalCostCapUsd, totalCapUsd) ||
         committedReport.serviceTier !== serviceTier ||
         committedReport.pricingVersion !== pricingVersion
       ) {
         throw new Error("Committed report recovery arguments do not match the original run");
       }
-      const recoveryLedger = new LiveSpendLedger(LIVE_SPEND_LEDGER_PATH, TOTAL_CAP_USD);
+      const recoveryLedger = new LiveSpendLedger(
+        LIVE_SPEND_LEDGER_PATH,
+        committedReport.totalCostCapUsd,
+      );
       try {
         recoveryLedger.completeRunAfterCommittedReport(
           recoverStaleRunId,
@@ -2759,10 +2807,65 @@ async function main(): Promise<void> {
       existingAttemptCostUsd,
       pendingChapterCount,
       perChapterCapUsd,
-      TOTAL_CAP_USD,
+      totalCapUsd,
     );
     projectedMaximumCumulativeCostUsd = cleanPathProjection.projectedFinalExposureUsd;
   }
+  const ledgerExists = existsSync(LIVE_SPEND_LEDGER_PATH);
+  if (!ledgerExists && totalCapUsd !== TOTAL_CAP_USD) {
+    throw new Error("Extended total cap requires the existing durable $3 ledger");
+  }
+  const capPreflight = ledgerExists
+    ? preflightLiveSpendCap(
+        LIVE_SPEND_LEDGER_PATH,
+        totalCapUsd,
+        recoverStaleRunId === null ? {} : { allowedLockedRunId: recoverStaleRunId },
+      )
+    : {
+        baselineAttemptCostUsd: 0,
+        currentTotalCapUsd: totalCapUsd,
+        knownReservationCostUsd: 0,
+        migrationRequired: false,
+        priorSpendUsd: 0,
+        projectedHeadroomUsd: totalCapUsd,
+        requestedTotalCapUsd: totalCapUsd,
+        sourceReportSha256: null,
+        totalExposureUsd: 0,
+        uncertainReservationCostUsd: 0,
+      };
+  if (ledgerExists) {
+    assertLiveSpendPreflightMatchesBaseline(capPreflight, {
+      attemptCostUsd: existingAttemptCostUsd,
+      mode: resumeSource === null ? "fresh" : "resume",
+      priorSpendUsd,
+    });
+  }
+  if (preflightOnly) {
+    console.log(
+      JSON.stringify(
+        {
+          adapterMode,
+          chapterCostCapUsd: perChapterCapUsd,
+          existingAttemptCostUsd,
+          ledger: capPreflight,
+          mode: "preflight-only",
+          projectedFinalHeadroomUsd: cleanPathProjection?.headroomAfterProjectionUsd ?? null,
+          projectedFinalExposureUsd: projectedMaximumCumulativeCostUsd,
+          projectedMaximumNewProviderCostUsd: cleanPathProjection?.projectedMatrixCostUsd ?? null,
+          providerRequestMade: false,
+          reportSha256: resumeSource?.sha256 ?? null,
+          targets: (resumePreparation?.renarrationSources ?? []).map(({ result }) =>
+            resultKey(result.povId, result.chapter),
+          ),
+          totalCapUsd,
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+  config({ path: resolve(ROOT, ".env"), quiet: true });
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("OPENAI_API_KEY is not configured");
   const client = new OpenAI({ apiKey });
@@ -2810,7 +2913,7 @@ async function main(): Promise<void> {
     },
   );
   const renarrationResults: LiveResult[] = [];
-  const ledger = new LiveSpendLedger(LIVE_SPEND_LEDGER_PATH, TOTAL_CAP_USD);
+  const ledger = new LiveSpendLedger(LIVE_SPEND_LEDGER_PATH, capPreflight.currentTotalCapUsd);
   const liveRunId = recoverStaleRunId ?? randomUUID();
   const ledgerBaseline = {
     attemptCostUsd: existingAttemptCostUsd,
@@ -2945,6 +3048,12 @@ async function main(): Promise<void> {
     }
     if (recoverStaleRunId === null) {
       ledger.synchronizeBaseline(liveRunId, ledgerBaseline);
+    }
+    if (capPreflight.migrationRequired) {
+      if (!totalCapExplicit) {
+        throw new Error("Live spend cap increase requires explicit --total-cap-usd");
+      }
+      ledger.increaseTotalCap(liveRunId, totalCapUsd);
     }
     const costHooks = ledger.createCostHooks(liveRunId);
 
@@ -3575,7 +3684,7 @@ export function buildLiveReport(
     traceCostMatchesAttempts:
       input.results.length === expected &&
       input.results.every((result) => resultTraceCostMatches(result)),
-    totalCostWithinCap: ledgerSnapshot.totalExposureUsd <= TOTAL_CAP_USD,
+    totalCostWithinCap: ledgerSnapshot.totalExposureUsd <= ledgerSnapshot.totalCapUsd,
   };
 
   return LiveReportSchema.parse({
@@ -3652,7 +3761,7 @@ export function buildLiveReport(
     serviceTier: input.serviceTier,
     startedAt: input.startedAt,
     suite: input.suite,
-    totalCostCapUsd: TOTAL_CAP_USD,
+    totalCostCapUsd: ledgerSnapshot.totalCapUsd,
     totalCostUsd,
     runtimeAttemptEvidence: input.runtimeAttemptEvidence,
     version: REPORT_VERSION,
@@ -4237,7 +4346,7 @@ export function assertRenarrationPlanFits(
   existingAttemptCostUsd: number,
   targetCount: number,
   chapterCostCapUsd: number,
-  totalCapUsd = TOTAL_CAP_USD,
+  totalCapUsd: number = TOTAL_CAP_USD,
 ): ReturnType<typeof assertPrompt1411FullMatrixFits> {
   if (!Number.isInteger(targetCount) || targetCount <= 0) {
     throw new Error("Re-narration cost preflight requires at least one exact target");
@@ -4258,6 +4367,63 @@ export function assertRenarrationPlanFits(
     );
   }
   return { headroomAfterProjectionUsd, projectedFinalExposureUsd, projectedMatrixCostUsd };
+}
+
+export function assertExtendedTotalCapPlan(input: {
+  readonly adapterMode: "native-multi-agent" | "sequential";
+  readonly chapterCostCapUsd: number;
+  readonly priorSpendUsd: number;
+  readonly renarrate: readonly RerunFrom[];
+  readonly reportSha256: string | null;
+  readonly rerunFrom: readonly RerunFrom[];
+  readonly serviceTier: RuntimeServiceTier;
+  readonly suite: "full" | "smoke";
+  readonly totalCapUsd: number;
+}): void {
+  if (input.totalCapUsd === TOTAL_CAP_USD) return;
+  const targets = input.renarrate.map(({ chapter, povId }) => `${povId}:${chapter}`);
+  if (
+    input.totalCapUsd !== MAX_TOTAL_CAP_USD ||
+    input.adapterMode !== "sequential" ||
+    input.suite !== "full" ||
+    input.serviceTier !== "flex" ||
+    input.reportSha256 !== EXTENDED_CAP_CORRECTION_REPORT_SHA256 ||
+    roundNanoUsd(input.priorSpendUsd) !== EXTENDED_CAP_CORRECTION_PRIOR_SPEND_USD ||
+    roundNanoUsd(input.chapterCostCapUsd) !== EXTENDED_CAP_CORRECTION_CHAPTER_CAP_USD ||
+    input.rerunFrom.length !== 0 ||
+    !isDeepStrictEqual(targets, EXTENDED_CAP_CORRECTION_TARGETS)
+  ) {
+    throw new Error("The $3.021 cap is locked to the exact Elara then Lucan correction plan");
+  }
+}
+
+export function assertLiveSpendPreflightMatchesBaseline(
+  preflight: LiveSpendCapPreflight,
+  baseline: {
+    readonly attemptCostUsd: number;
+    readonly mode: "fresh" | "resume";
+    readonly priorSpendUsd: number;
+  },
+): void {
+  const expectedExposureUsd = roundNanoUsd(baseline.priorSpendUsd + baseline.attemptCostUsd);
+  const exposureMatches = roundNanoUsd(preflight.totalExposureUsd) === expectedExposureUsd;
+  const carriedAttemptCostUsd = roundNanoUsd(
+    preflight.baselineAttemptCostUsd +
+      preflight.knownReservationCostUsd +
+      preflight.uncertainReservationCostUsd,
+  );
+  const resumeBaselineMismatch =
+    roundNanoUsd(preflight.priorSpendUsd) !== roundNanoUsd(baseline.priorSpendUsd) ||
+    carriedAttemptCostUsd !== roundNanoUsd(baseline.attemptCostUsd) ||
+    preflight.sourceReportSha256 === null;
+  const freshFoldAllowed = baseline.attemptCostUsd === 0;
+  if (
+    !exposureMatches ||
+    (baseline.mode === "resume" && resumeBaselineMismatch) ||
+    (baseline.mode === "fresh" && !freshFoldAllowed)
+  ) {
+    throw new Error("Live spend preflight does not match the authenticated run baseline");
+  }
 }
 
 export function hasExactFullMatrix(results: readonly LiveResult[]): boolean {
@@ -4476,6 +4642,14 @@ function parseOptionalFlag(args: readonly string[], name: string): string | null
   return value;
 }
 
+export function parseTotalCapUsd(args: readonly string[]): 3 | 3.021 {
+  const value = parseUsdFlag(args, "--total-cap-usd", TOTAL_CAP_USD, false, MAX_TOTAL_CAP_USD);
+  if (value !== TOTAL_CAP_USD && value !== MAX_TOTAL_CAP_USD) {
+    throw new Error("--total-cap-usd must be exactly 3 or 3.021");
+  }
+  return value;
+}
+
 function parseUsdFlag(
   args: readonly string[],
   name: string,
@@ -4483,6 +4657,9 @@ function parseUsdFlag(
   allowZero: boolean,
   maximum: number,
 ): number {
+  if (args.filter((argument) => argument === name).length > 1) {
+    throw new Error(`${name} may appear only once`);
+  }
   const index = args.indexOf(name);
   if (index === -1) return fallback;
   const value = Number(args[index + 1]);
@@ -4612,7 +4789,9 @@ function percentile(values: readonly number[], quantile: number): number {
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   void main().catch((error: unknown) => {
-    const apiKey = process.env.OPENAI_API_KEY ?? "";
+    const apiKey = process.argv.includes("--preflight-only")
+      ? ""
+      : (process.env.OPENAI_API_KEY ?? "");
     const safe = safeError(error, apiKey || "never-match-empty-key");
     console.error(`${safe.code}: ${safe.message}`);
     process.exitCode = 1;

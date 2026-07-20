@@ -6,6 +6,10 @@ import type { RuntimeServiceTier } from "@infinite-litrpg/shared";
 
 const LEDGER_VERSION = 2;
 const NANO_USD = 1_000_000_000;
+export const LIVE_SPEND_ORIGINAL_TOTAL_CAP_USD = 3 as const;
+export const LIVE_SPEND_EXTENDED_TOTAL_CAP_USD = 3.021 as const;
+const ORIGINAL_TOTAL_CAP_NANO = 3_000_000_000;
+const EXTENDED_TOTAL_CAP_NANO = 3_021_000_000;
 
 export interface LiveSpendBaseline {
   readonly attemptCostUsd: number;
@@ -23,6 +27,23 @@ export interface LiveSpendSnapshot {
   readonly totalCapUsd: number;
   readonly totalExposureUsd: number;
   readonly uncertainReservationCostUsd: number;
+}
+
+export interface LiveSpendCapPreflight {
+  readonly baselineAttemptCostUsd: number;
+  readonly currentTotalCapUsd: number;
+  readonly knownReservationCostUsd: number;
+  readonly migrationRequired: boolean;
+  readonly priorSpendUsd: number;
+  readonly projectedHeadroomUsd: number;
+  readonly requestedTotalCapUsd: number;
+  readonly sourceReportSha256: string | null;
+  readonly totalExposureUsd: number;
+  readonly uncertainReservationCostUsd: number;
+}
+
+export interface LiveSpendCapPreflightOptions {
+  readonly allowedLockedRunId?: string;
 }
 
 interface MetaRow {
@@ -135,13 +156,17 @@ export class LiveSpendLedger {
       )
       .run(LEDGER_VERSION, totalCapNano);
     let meta = this.readMeta();
-    if (meta.total_cap_nano !== totalCapNano) {
-      this.db.close();
-      throw new Error("Live spend ledger total cap does not match this runner");
-    }
     if (meta.version === 1) {
       this.migrateVersionOneLedger();
       meta = this.readMeta();
+    }
+    if (meta.total_cap_nano > totalCapNano) {
+      this.db.close();
+      throw new Error("Live spend ledger total cap cannot decrease");
+    }
+    if (meta.total_cap_nano < totalCapNano) {
+      this.db.close();
+      throw new Error("Live spend ledger requires an explicit cap increase");
     }
     if (meta.version !== LEDGER_VERSION || meta.total_cap_nano !== totalCapNano) {
       this.db.close();
@@ -159,6 +184,39 @@ export class LiveSpendLedger {
       this.db
         .prepare("INSERT INTO run_lock (id, run_id, pid, started_at) VALUES (1, ?, ?, ?)")
         .run(runId, process.pid, new Date().toISOString());
+    });
+    transaction.immediate();
+  }
+
+  increaseTotalCap(runId: string, requestedTotalCapUsd: number): void {
+    validateRunId(runId);
+    const requestedTotalCapNano = usdToNano(requestedTotalCapUsd, "requested total cap");
+    const transaction = this.db.transaction(() => {
+      this.assertRunOwner(runId);
+      const meta = this.readMeta();
+      const exposureNano = this.totalExposureNano();
+      if (
+        meta.total_cap_nano !== ORIGINAL_TOTAL_CAP_NANO ||
+        requestedTotalCapNano !== EXTENDED_TOTAL_CAP_NANO
+      ) {
+        throw new Error("Live spend ledger supports only the explicit $3 to $3.021 cap increase");
+      }
+      if (this.countReservations("active") !== 0) {
+        throw new Error("Live spend ledger cap increase requires zero active reservations");
+      }
+      if (requestedTotalCapNano < exposureNano) {
+        throw new Error("Live spend ledger cap cannot fall below durable exposure");
+      }
+      const updated = this.db
+        .prepare("UPDATE ledger_meta SET total_cap_nano = ? WHERE id = 1 AND total_cap_nano = ?")
+        .run(requestedTotalCapNano, ORIGINAL_TOTAL_CAP_NANO);
+      if (
+        updated.changes !== 1 ||
+        this.readMeta().total_cap_nano !== requestedTotalCapNano ||
+        this.totalExposureNano() !== exposureNano
+      ) {
+        throw new Error("Live spend ledger cap migration changed durable exposure");
+      }
     });
     transaction.immediate();
   }
@@ -542,21 +600,7 @@ export class LiveSpendLedger {
   }
 
   snapshot(): LiveSpendSnapshot {
-    const meta = this.readMeta();
-    const knownNano = this.sumReservationNano("known");
-    const uncertainNano = this.sumReservationNano("uncertain");
-    const exposureNano = this.totalExposureNano();
-    return {
-      activeReservationCount: this.countReservations("active"),
-      baselineAttemptCostUsd: nanoToUsd(meta.baseline_attempt_nano),
-      headroomUsd: nanoToUsd(Math.max(0, meta.total_cap_nano - exposureNano)),
-      knownReservationCostUsd: nanoToUsd(knownNano),
-      priorSpendUsd: nanoToUsd(meta.prior_spend_nano ?? 0),
-      sourceReportSha256: meta.source_report_sha256,
-      totalCapUsd: nanoToUsd(meta.total_cap_nano),
-      totalExposureUsd: nanoToUsd(exposureNano),
-      uncertainReservationCostUsd: nanoToUsd(uncertainNano),
-    };
+    return snapshotFromDatabase(this.db);
   }
 
   releaseRun(runId: string): void {
@@ -683,15 +727,7 @@ export class LiveSpendLedger {
   }
 
   private readMeta(): MetaRow {
-    const row = this.db
-      .prepare(
-        `SELECT version, total_cap_nano, prior_spend_nano, baseline_attempt_nano,
-                source_report_sha256
-           FROM ledger_meta WHERE id = 1`,
-      )
-      .get() as MetaRow | undefined;
-    if (!row) throw new Error("Live spend ledger metadata is missing");
-    return row;
+    return readMetaFromDatabase(this.db);
   }
 
   private readRunLock(): RunLockRow | undefined {
@@ -718,9 +754,7 @@ export class LiveSpendLedger {
   }
 
   private readSum(sql: string, ...parameters: unknown[]): number {
-    const row = this.db.prepare(sql).get(...parameters) as SumRow | undefined;
-    if (!row || !Number.isSafeInteger(row.value)) throw new Error("Invalid live spend ledger sum");
-    return row.value;
+    return readSafeSum(this.db, sql, ...parameters);
   }
 
   private settledReservationNano(): number {
@@ -756,6 +790,121 @@ export class LiveSpendLedger {
       )
     );
   }
+}
+
+export function preflightLiveSpendCap(
+  filename: string,
+  requestedTotalCapUsd: number,
+  options: LiveSpendCapPreflightOptions = {},
+): LiveSpendCapPreflight {
+  const requestedTotalCapNano = usdToNano(requestedTotalCapUsd, "requested total cap");
+  if (
+    requestedTotalCapNano !== ORIGINAL_TOTAL_CAP_NANO &&
+    requestedTotalCapNano !== EXTENDED_TOTAL_CAP_NANO
+  ) {
+    throw new Error("Live spend ledger supports only total caps $3 and $3.021");
+  }
+  const db = new Database(filename, { fileMustExist: true, readonly: true });
+  try {
+    const meta = readMetaFromDatabase(db);
+    if (meta.version !== LEDGER_VERSION) {
+      throw new Error("Live spend ledger must be migrated before cap preflight");
+    }
+    const snapshot = snapshotFromDatabase(db);
+    const runLocks = db.prepare("SELECT run_id FROM run_lock").all() as {
+      readonly run_id: string;
+    }[];
+    if (requestedTotalCapNano < meta.total_cap_nano) {
+      throw new Error("Live spend ledger total cap cannot decrease");
+    }
+    if (
+      requestedTotalCapNano > meta.total_cap_nano &&
+      (meta.total_cap_nano !== ORIGINAL_TOTAL_CAP_NANO ||
+        requestedTotalCapNano !== EXTENDED_TOTAL_CAP_NANO)
+    ) {
+      throw new Error("Live spend ledger supports only the explicit $3 to $3.021 cap increase");
+    }
+    if (snapshot.activeReservationCount !== 0) {
+      throw new Error("Live spend ledger preflight requires zero active reservations");
+    }
+    if (
+      runLocks.length !== 0 &&
+      (runLocks.length !== 1 || runLocks[0]?.run_id !== options.allowedLockedRunId)
+    ) {
+      throw new Error("Live spend ledger preflight requires an unlocked or matching stale run");
+    }
+    const exposureNano = usdToNano(snapshot.totalExposureUsd, "durable exposure");
+    if (requestedTotalCapNano < exposureNano) {
+      throw new Error("Live spend ledger cap cannot fall below durable exposure");
+    }
+    return {
+      baselineAttemptCostUsd: snapshot.baselineAttemptCostUsd,
+      currentTotalCapUsd: snapshot.totalCapUsd,
+      knownReservationCostUsd: snapshot.knownReservationCostUsd,
+      migrationRequired: requestedTotalCapNano > meta.total_cap_nano,
+      priorSpendUsd: snapshot.priorSpendUsd,
+      projectedHeadroomUsd: nanoToUsd(requestedTotalCapNano - exposureNano),
+      requestedTotalCapUsd: nanoToUsd(requestedTotalCapNano),
+      sourceReportSha256: snapshot.sourceReportSha256,
+      totalExposureUsd: snapshot.totalExposureUsd,
+      uncertainReservationCostUsd: snapshot.uncertainReservationCostUsd,
+    };
+  } finally {
+    db.close();
+  }
+}
+
+function snapshotFromDatabase(db: Database.Database): LiveSpendSnapshot {
+  const meta = readMetaFromDatabase(db);
+  const activeCount = readSafeSum(
+    db,
+    "SELECT COUNT(*) AS value FROM reservations WHERE status = 'active'",
+  );
+  const knownNano = readSafeSum(
+    db,
+    "SELECT COALESCE(SUM(actual_nano), 0) AS value FROM reservations WHERE status = 'known'",
+  );
+  const uncertainNano = readSafeSum(
+    db,
+    "SELECT COALESCE(SUM(max_nano), 0) AS value FROM reservations WHERE status = 'uncertain'",
+  );
+  const reservationExposureNano = readSafeSum(
+    db,
+    `SELECT COALESCE(SUM(
+       CASE WHEN status = 'known' THEN actual_nano ELSE max_nano END
+     ), 0) AS value FROM reservations`,
+  );
+  const exposureNano =
+    (meta.prior_spend_nano ?? 0) + meta.baseline_attempt_nano + reservationExposureNano;
+  return {
+    activeReservationCount: activeCount,
+    baselineAttemptCostUsd: nanoToUsd(meta.baseline_attempt_nano),
+    headroomUsd: nanoToUsd(Math.max(0, meta.total_cap_nano - exposureNano)),
+    knownReservationCostUsd: nanoToUsd(knownNano),
+    priorSpendUsd: nanoToUsd(meta.prior_spend_nano ?? 0),
+    sourceReportSha256: meta.source_report_sha256,
+    totalCapUsd: nanoToUsd(meta.total_cap_nano),
+    totalExposureUsd: nanoToUsd(exposureNano),
+    uncertainReservationCostUsd: nanoToUsd(uncertainNano),
+  };
+}
+
+function readMetaFromDatabase(db: Database.Database): MetaRow {
+  const row = db
+    .prepare(
+      `SELECT version, total_cap_nano, prior_spend_nano, baseline_attempt_nano,
+              source_report_sha256
+         FROM ledger_meta WHERE id = 1`,
+    )
+    .get() as MetaRow | undefined;
+  if (!row) throw new Error("Live spend ledger metadata is missing");
+  return row;
+}
+
+function readSafeSum(db: Database.Database, sql: string, ...parameters: unknown[]): number {
+  const row = db.prepare(sql).get(...parameters) as SumRow | undefined;
+  if (!row || !Number.isSafeInteger(row.value)) throw new Error("Invalid live spend ledger sum");
+  return row.value;
 }
 
 function validateInterruptedReservation(reservation: {

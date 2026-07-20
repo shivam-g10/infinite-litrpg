@@ -23,6 +23,7 @@
     "evals": "tsx evals/run-offline.ts",
     "evals:live:smoke": "tsx evals/run-live.ts --suite smoke",
     "evals:live:full": "tsx evals/run-live.ts --suite full --confirm-cost --service-tier flex",
+    "evals:live:full:preflight": "tsx evals/run-live.ts --suite full --confirm-cost --service-tier flex --preflight-only",
     "evals:live:reconcile": "tsx evals/reconcile-live-interruption.ts",
     "evals:live:reconcile-settled": "tsx evals/reconcile-settled-live-run.ts",
     "evals:review-packets": "tsx evals/review-packets.ts",

@@ -10,6 +10,8 @@ import { z } from "zod";
 
 import { pricingVersionForServiceTier } from "../app/src/server/openai/usage";
 import {
+  LIVE_SPEND_EXTENDED_TOTAL_CAP_USD,
+  LIVE_SPEND_ORIGINAL_TOTAL_CAP_USD,
   LiveSpendLedger,
   type InterruptedKnownReservation,
   type LiveSpendSnapshot,
@@ -33,7 +35,7 @@ import {
 } from "./run-live";
 
 const ROOT = process.cwd();
-const TOTAL_CAP_USD = 3;
+const MAX_TOTAL_CAP_USD = LIVE_SPEND_EXTENDED_TOTAL_CAP_USD;
 const CHECKPOINTS_PATH = resolve(ROOT, "evals", "settled-run-checkpoints.json");
 const RESUME_CHECKPOINTS_PATH = resolve(ROOT, "evals", "resume-checkpoints.json");
 const LEDGER_PATH = resolve(ROOT, "evals", "reports", "live-spend-ledger.db");
@@ -57,6 +59,12 @@ const GitShaSchema = z.string().regex(/^[a-f0-9]{40}$/u);
 const PovIdSchema = z.enum(CHARACTER_IDS);
 const RuntimeModelSchema = z.enum(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
 const PhaseSchema = z.enum(["intent", "narration", "audit", "genesis", "recovery", "finale"]);
+const TotalCostCapSchema = z
+  .union([
+    z.literal(LIVE_SPEND_ORIGINAL_TOTAL_CAP_USD),
+    z.literal(LIVE_SPEND_EXTENDED_TOTAL_CAP_USD),
+  ])
+  .default(LIVE_SPEND_ORIGINAL_TOTAL_CAP_USD);
 const BridgeFileSchema = z
   .object({ path: z.string().min(1).max(1_000), sha256: Sha256Schema })
   .strict();
@@ -65,11 +73,11 @@ const RerunFromSchema = z
   .strict();
 const SettledReservationSchema = z
   .object({
-    actualCostUsd: z.number().positive().max(TOTAL_CAP_USD),
+    actualCostUsd: z.number().positive().max(MAX_TOTAL_CAP_USD),
     agentId: z.string().min(1).max(240).nullable(),
     attempt: z.number().int().min(0).max(2),
     id: z.string().uuid(),
-    maximumCostUsd: z.number().positive().max(TOTAL_CAP_USD),
+    maximumCostUsd: z.number().positive().max(MAX_TOTAL_CAP_USD),
     model: RuntimeModelSchema,
     phase: PhaseSchema,
     serviceTier: RuntimeServiceTierSchema,
@@ -78,7 +86,7 @@ const SettledReservationSchema = z
 
 export const SettledRunCheckpointSchema = z
   .object({
-    baselineAttemptCostUsd: z.number().min(0).max(TOTAL_CAP_USD),
+    baselineAttemptCostUsd: z.number().min(0).max(MAX_TOTAL_CAP_USD),
     bridgeFiles: z.array(BridgeFileSchema).min(1).max(20),
     expectedSidecar: z
       .object({
@@ -107,7 +115,7 @@ export const SettledRunCheckpointSchema = z
     knownReservations: z.array(SettledReservationSchema).min(1).max(100),
     outputReportPath: z.string().min(1).max(1_000),
     pricingVersion: z.string().min(1).max(240),
-    priorSpendUsd: z.number().min(0).max(TOTAL_CAP_USD),
+    priorSpendUsd: z.number().min(0).max(MAX_TOTAL_CAP_USD),
     promptVersion: z.string().min(1).max(240),
     rerunFrom: z.array(RerunFromSchema).min(1).max(CHARACTER_IDS.length),
     runId: z.string().uuid(),
@@ -119,6 +127,7 @@ export const SettledRunCheckpointSchema = z
     sourceReportPath: z.string().min(1).max(1_000),
     sourceReportSha256: Sha256Schema,
     startedAt: z.string().datetime(),
+    totalCapUsd: TotalCostCapSchema,
   })
   .strict()
   .superRefine((checkpoint, context) => {
@@ -214,7 +223,8 @@ export function verifySettledArtifacts(
   if (
     source.report.version !== 9 ||
     source.sha256 !== checkpoint.sourceReportSha256 ||
-    !costsMatch(source.report.totalCostUsd, checkpoint.baselineAttemptCostUsd)
+    !costsMatch(source.report.totalCostUsd, checkpoint.baselineAttemptCostUsd) ||
+    source.report.totalCostCapUsd > checkpoint.totalCapUsd
   ) {
     throw new Error("Settled source report does not match registered baseline");
   }
@@ -401,7 +411,7 @@ async function main(): Promise<void> {
   );
   const resumePreparation = canonicalResumePreparation;
 
-  const ledger = new LiveSpendLedger(LEDGER_PATH, TOTAL_CAP_USD);
+  const ledger = new LiveSpendLedger(LEDGER_PATH, checkpoint.totalCapUsd);
   const ledgerExpectation = {
     baseline: {
       attemptCostUsd: checkpoint.baselineAttemptCostUsd,
@@ -518,7 +528,7 @@ export function materializeFailureReport(
     cleanPathProjection: assertPrompt1411FullMatrixFits(
       checkpoint.priorSpendUsd,
       checkpoint.serviceTier,
-      TOTAL_CAP_USD,
+      checkpoint.totalCapUsd,
     ),
     draftRejections,
     existingAttemptCostUsd: resumePreparation.existingAttemptCostUsd,

@@ -388,7 +388,7 @@
       "bridgeFiles": [
         {
           "path": "README.md",
-          "sha256": "e42ba2879aa4fdce10d8c1d8bdd033401c91a0ab9b6aba220c6a72e5f87c2cc5"
+          "sha256": "425aac97b34a79a7fb7d698c8a4cc3e64261295894984224243f32d4f4327876"
         },
         {
           "path": "app/e2e/story.spec.ts",
@@ -507,12 +507,24 @@
           "sha256": "a3db8c74031bd2591cf797944db97961a442b84f80a343c102e78d80636b41d5"
         },
         {
+          "path": "evals/live-spend-ledger.ts",
+          "sha256": "0723bc481ce7f7f34edd26ea89fa74d6cfb35b1c682681db154cca6210f1aa79"
+        },
+        {
+          "path": "evals/reconcile-live-interruption.ts",
+          "sha256": "2edd2691a740c1f8d42f35b6fc4d1c3b0be10d36a276316bb4ef8ba8ee4b717b"
+        },
+        {
+          "path": "evals/reconcile-settled-live-run.ts",
+          "sha256": "1a6cb5d795d5e036ca3e529e8316cb6fcea32f5dfc56c0c72249b1f34187c74e"
+        },
+        {
           "path": "evals/run-live.ts",
-          "sha256": "6d8a736814e09955ccc55edacf0723c5d978d2f9546c4c531bd1a37421f01e43"
+          "sha256": "e1e61911768ff05ea28275248430a7282bbfadaa214280e17ed542e60183859e"
         },
         {
           "path": "package.json",
-          "sha256": "a4110c9ba53d30e5a93d965d9b7957da64b8eb25743fc7152ba3592d222c9b20"
+          "sha256": "7360e415779b1e0719d40d2b54325f42141c738b59ffcf035d958afc49d384da"
         },
         {
           "path": "research/2026-07-20-story-continuation-ux.md",

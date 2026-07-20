@@ -131,6 +131,24 @@ describe("live interruption reconciliation", () => {
     expect(InterruptionReceiptSchema.safeParse({ ...receipt, unexpected: true }).success).toBe(
       false,
     );
+    expect(checkpoint.totalCapUsd).toBe(3);
+
+    const extendedCheckpoint = InterruptionCheckpointSchema.parse({
+      ...checkpoint,
+      totalCapUsd: 3.021,
+    });
+    const extendedReceipt = buildInterruptionReceipt(extendedCheckpoint, evidence, SOURCE_GIT_SHA, {
+      ...receipt.budgetLedger,
+      headroomUsd: 0.209917825,
+      totalCapUsd: 3.021,
+    });
+    expect(extendedReceipt.budgetLedger.totalCapUsd).toBe(3.021);
+    expect(() =>
+      buildInterruptionReceipt(extendedCheckpoint, evidence, SOURCE_GIT_SHA, receipt.budgetLedger),
+    ).toThrow("does not match");
+    expect(
+      InterruptionCheckpointSchema.safeParse({ ...checkpoint, totalCapUsd: 3.0001 }).success,
+    ).toBe(false);
   });
 });
 

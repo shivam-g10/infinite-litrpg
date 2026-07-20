@@ -61,6 +61,13 @@ describe("settled live-run reconciliation", () => {
     expect(SettledRunCheckpointRegistrySchema.safeParse(registry).success).toBe(true);
 
     const checkpoint = registry.checkpoints[0] as Record<string, unknown>;
+    expect(SettledRunCheckpointSchema.parse(checkpoint).totalCapUsd).toBe(3);
+    expect(
+      SettledRunCheckpointSchema.safeParse({ ...checkpoint, totalCapUsd: 3.021 }).success,
+    ).toBe(true);
+    expect(
+      SettledRunCheckpointSchema.safeParse({ ...checkpoint, totalCapUsd: 3.0001 }).success,
+    ).toBe(false);
     const distinct = {
       ...checkpoint,
       id: "distinct-checkpoint",

@@ -102,9 +102,10 @@ Live API evals are separate and capped:
 ```powershell
 npm run evals:live:smoke
 npm run evals:live:full
+npm run evals:live:full:preflight
 ```
 
-The smoke command defaults to Standard. The full npm script requires explicit cost confirmation and selects Flex. Reports stay in ignored `evals/reports/`. See [eval gates](evals/README.md) and [current status](docs/STATUS.md).
+The smoke command defaults to Standard. The full npm script requires explicit cost confirmation and selects Flex. Preflight authenticates a full resume and its cost ceiling without loading an API key, creating a provider client, writing a report, or changing the spend ledger. Reports stay in ignored `evals/reports/`. See [eval gates](evals/README.md) and [current status](docs/STATUS.md).
 
 ## Safety
 

@@ -7,18 +7,20 @@ Evals define completion. Implement runner before live prompt work.
 - `npm run evals`: all offline deterministic gates.
 - `npm run evals:live:smoke`: smallest capped API suite.
 - `npm run evals:live:full`: release-only Flex suite with explicit cost confirmation.
+- `npm run evals:live:full:preflight`: full Flex resume authentication and cost proof with no API key, client, provider request, report write, or ledger mutation.
 - `npm run evals:live:reconcile`: registered no-network reconciliation for an interrupted unknown request.
 - `npm run evals:live:reconcile-settled`: registered no-network report materialization for a released run whose requests all settled.
 
 Live runs accept `--prior-spend-usd`, `--chapter-cap-usd`, and `--service-tier`. Report version 9 retains all version 8 canon, response, candidate, turn, stream, cost, and resume evidence. It also requires explicit requested and returned service tier on every current attempt and model call, tier-specific pricing version, exact clean-path projection, and a recomputed `serviceTierEvidenceComplete` gate. Selective resumes persist the exact human-rejected `rerunFrom` suffixes. Canon-preserving resumes instead persist exact `renarrate` targets plus source and replacement canonical hash, prose hash, request ID, and turn ID. The two modes are mutually exclusive. Paid source evidence remains append-only under `supersededTurnIds`, but each ID must fall inside the authenticated source evidence boundary. A settled finalization failure uses separate checkpoint-bound `settledFailure` provenance for its uncommitted evidence suffix. Neither kind can root current canon or satisfy a committed result. Older version 9 reports default new fields safely. A full version 9 report must use Flex. Missing, `auto`, mixed, mismatched, or retained poisoned tier evidence fails closed. Historical version 5 through 8 reports stay readable and default only their legacy tier provenance to Standard. An ignored atomic evidence sidecar survives interruption before chapter commit and carries the same tier and pricing bindings.
 
-The static projection stays visible even when it exceeds `$3`; it is not the authority after a partial run. The durable SQLite ledger at ignored `evals/reports/live-spend-ledger.db` is authoritative. Ledger version 2 binds every reservation to Standard or Flex. Opening a version 1 ledger migrates historical rows to Standard in one transaction and verifies exact exposure is unchanged. Every generation request reserves tier-priced maximum exposure before provider transport and rejects a request that could take cumulative local exposure above `$3`. Returned usage settles at the returned tier before response validation. Missing or ambiguous provider tier keeps the conservative reservation and fails.
+The static projection stays visible even when it exceeds the active cap; it is not the authority after a partial run. The durable SQLite ledger at ignored `evals/reports/live-spend-ledger.db` is authoritative. Ledger version 2 binds every reservation to Standard or Flex. Opening a version 1 ledger migrates historical rows to Standard in one transaction and verifies exact exposure is unchanged. The default cap remains `$3`. ADR-020 permits only one explicit `$3` to `$3.021` migration for the exact human-review correction plan. Preflight is read-only. The paid runner may migrate only after it owns the run lock and synchronizes the authenticated baseline. Every generation request reserves tier-priced maximum exposure before provider transport and rejects a request that could exceed the active cap. Returned usage settles at the returned tier before response validation. Missing or ambiguous provider tier keeps the conservative reservation and fails.
 
 All live suites share this ledger. Do not run an unrelated smoke while a release resume chain is open. After a chain closes, a fresh suite may start only when `--prior-spend-usd` exactly equals the ledger's current total exposure; the ledger then folds that total into the new prior without reclaiming spend.
 
 ```powershell
 npm run evals:live:smoke -- --prior-spend-usd 1.25 --chapter-cap-usd 0.10
 npm run evals:live:full -- --prior-spend-usd 2.811082175 --chapter-cap-usd 0.0424
+npm run evals:live:full:preflight -- --total-cap-usd 3.021 --prior-spend-usd 2.811082175 --chapter-cap-usd 0.0135 --resume-report evals/reports/live-full-sequential-renarrated.json --renarrate elara-voss:1 --renarrate lucan-aurelis:1
 ```
 
 A full run requires a clean committed worktree. The npm full script selects Flex; the product runtime and smoke default explicitly to Standard. The parser authenticates versions 5 through 9, but the current full command can resume only a version 9 Flex report with the same prior spend, adapter, prompt version, and service tier. Versions 5 through 8 remain readable Standard baseline evidence and cannot cross into the Flex chain. Versions 7 through 9 authenticate each contiguous chapter prefix. Version 9 refuses a retained current-evidence prefix whose tier gate is false. A retained chapter keeps its original Git SHA and source cap; a new chapter uses the current run cap. Chapter 1 state is reconstructed from the seed fixture, player intent, accepted delta, and both trace state hashes before chapter 2 runs.
@@ -33,9 +35,9 @@ Human review rejected Rowan chapter 2, Elara chapter 1, and Lucan chapter 1. The
 
 The authorized re-narration chain produced a corrected Rowan chapter 2, then failed to commit Elara and did not reach Lucan. Provider-free settlement materialized `evals/reports/live-full-sequential-renarrated-settled-2.json` at SHA-256 `90374f2e4ca49fe390fc6c64cd9412579efa7cdaa2c7e291f1b8a772127ea1bc`. A final Elara-only attempt used two known Flex requests costing `$0.004246`, then stopped before a request that could not fit its chapter budget. Its strict failure report has SHA-256 `d935b56ed039e560ac067c2ec268ed7780b9daf196497e3ffde6349be2c02e0a`.
 
-That strict failure report is registered under `prompt-1-4-11-flex-elara-renarration-failure-3` with 40 exact bridge hashes. Provider-free preparation authenticates Elara chapter 1 and Lucan chapter 1 and retains `$0.182347` existing attempt cost. Two `$0.0135` target ceilings project `$3.020429175` total exposure. The unchanged `$3` ledger rejects that plan; a one-way `$3.021` cap migration and `$0.027` maximum new provider exposure need new explicit user authority and regressions before a paid command is prepared.
+That strict failure report is registered under `prompt-1-4-11-flex-elara-renarration-failure-3` with exact bridge hashes. Provider-free preparation authenticates Elara chapter 1 and Lucan chapter 1 and retains `$0.182347` existing attempt cost. Two `$0.0135` target ceilings project `$0.027` maximum new provider exposure, `$3.020429175` total exposure, and `$0.000570825` final headroom under the exact `$3.021` cap.
 
-Current ledger exposure is `$2.993429175`; headroom is `$0.006570825`. There is no run lock and no active or uncertain reservation. Elara chapter 1 and Lucan chapter 1 still need eligible corrected prose. No paid command is prepared or authorized. Do not infer one from historical commands.
+The safe preflight command is the third command above. The paid command is identical except it uses `evals:live:full` instead of `evals:live:full:preflight`. Current ledger exposure is `$2.993429175`; headroom is `$0.006570825`. There is no run lock and no active or uncertain reservation. Elara chapter 1 and Lucan chapter 1 still need eligible corrected prose. The paid command is prepared but not authorized.
 
 Never resume automatically.
 
@@ -73,7 +75,8 @@ If a final report build failed after every request settled and the old runner re
 - Twelve complete API chapter cycles.
 - User action, up to three intents, one atomic commit, streamed chapter.
 - Required: twelve valid commits and zero hard violations.
-- POC total API budget: at most `$3`.
+- Original automated POC matrix budget: at most `$3`.
+- Explicit human-review correction allowance: at most `$3.021` total only under ADR-020 and fresh user authority.
 - Per-chapter target before regeneration: at most `$0.10`.
 
 ### 5. Long Horizon
