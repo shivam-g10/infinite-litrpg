@@ -23,6 +23,7 @@
     "evals": "tsx evals/run-offline.ts",
     "evals:live:smoke": "tsx evals/run-live.ts --suite smoke",
     "evals:live:full": "tsx evals/run-live.ts --suite full --confirm-cost",
+    "evals:live:reconcile": "tsx evals/reconcile-live-interruption.ts",
     "build": "npm run build --workspace @infinite-litrpg/app",
     "test:e2e": "playwright test",
     "security:secrets": "tsx scripts/secret-scan.ts",

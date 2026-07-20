@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 
 import { OpenAIRuntimeError, type RuntimeCostHooks } from "../app/src/server/openai";
+import type { RuntimeModel } from "../app/src/server/openai/models";
 
 const LEDGER_VERSION = 1;
 const NANO_USD = 1_000_000_000;
@@ -41,6 +42,36 @@ interface ReservationRow {
   readonly max_nano: number;
   readonly run_id: string;
   readonly status: "active" | "known" | "uncertain";
+}
+
+interface ReservationAuditRow extends ReservationRow {
+  readonly agent_id: string | null;
+  readonly attempt: number;
+  readonly id: string;
+  readonly model: RuntimeModel;
+}
+
+export interface InterruptedKnownReservation {
+  readonly actualCostUsd: number;
+  readonly agentId: string | null;
+  readonly attempt: number;
+  readonly id: string;
+  readonly maximumCostUsd: number;
+  readonly model: RuntimeModel;
+}
+
+export interface InterruptedUnknownReservation {
+  readonly agentId: string | null;
+  readonly attempt: number;
+  readonly id: string;
+  readonly maximumCostUsd: number;
+  readonly model: RuntimeModel;
+}
+
+export interface InterruptedRunExpectation {
+  readonly baseline: LiveSpendBaseline;
+  readonly knownReservations: readonly InterruptedKnownReservation[];
+  readonly unknownReservations: readonly InterruptedUnknownReservation[];
 }
 
 interface SumRow {
@@ -153,6 +184,102 @@ export class LiveSpendLedger {
         .run(process.pid, new Date().toISOString(), staleRunId);
       if (update.changes !== 1)
         throw new Error("Live spend stale run lock changed during recovery");
+    });
+    transaction.immediate();
+  }
+
+  claimInterruptedRunAtMaximum(staleRunId: string, expectation: InterruptedRunExpectation): void {
+    validateRunId(staleRunId);
+    validateShaOrFreshId(expectation.baseline.sourceReportSha256);
+    const priorSpendNano = usdToNano(expectation.baseline.priorSpendUsd, "prior spend");
+    const baselineAttemptNano = usdToNano(expectation.baseline.attemptCostUsd, "attempt cost");
+    const known = expectation.knownReservations.map((reservation) => ({
+      ...reservation,
+      actualNano: usdToNano(reservation.actualCostUsd, "known reservation actual cost"),
+      maximumNano: usdToNano(reservation.maximumCostUsd, "known reservation maximum cost"),
+    }));
+    const unknown = expectation.unknownReservations.map((reservation) => ({
+      ...reservation,
+      maximumNano: usdToNano(reservation.maximumCostUsd, "unknown reservation maximum cost"),
+    }));
+    if (unknown.length === 0) {
+      throw new Error("Interrupted run reconciliation requires an unknown reservation");
+    }
+    const expectedIds = new Set([...known, ...unknown].map(({ id }) => id));
+    if (expectedIds.size !== known.length + unknown.length) {
+      throw new Error("Interrupted reservation IDs must be unique");
+    }
+    for (const reservation of [...known, ...unknown]) {
+      validateInterruptedReservation(reservation);
+    }
+
+    const transaction = this.db.transaction(() => {
+      const existing = this.readRunLock();
+      if (!existing || existing.run_id !== staleRunId) {
+        throw new Error("Live spend stale run ID does not match the durable lock");
+      }
+      if (isProcessRunning(existing.pid)) {
+        throw new Error(`Live spend run ${staleRunId} still has a running owner process`);
+      }
+      const meta = this.readMeta();
+      if (
+        meta.prior_spend_nano !== priorSpendNano ||
+        meta.baseline_attempt_nano !== baselineAttemptNano ||
+        meta.source_report_sha256 !== expectation.baseline.sourceReportSha256
+      ) {
+        throw new Error("Interrupted ledger baseline does not exactly match registered checkpoint");
+      }
+      const rows = this.readAllReservations();
+      const rowsById = new Map(rows.map((row) => [row.id, row]));
+      const knownMatch = known.every((expected) => {
+        const row = rowsById.get(expected.id);
+        return (
+          row !== undefined &&
+          row.run_id === staleRunId &&
+          row.status === "known" &&
+          row.agent_id === expected.agentId &&
+          row.attempt === expected.attempt &&
+          row.model === expected.model &&
+          row.max_nano === expected.maximumNano &&
+          row.actual_nano === expected.actualNano
+        );
+      });
+      const unknownMatch = unknown.every((expected) => {
+        const row = rowsById.get(expected.id);
+        return (
+          row !== undefined &&
+          row.run_id === staleRunId &&
+          (row.status === "active" || row.status === "uncertain") &&
+          row.agent_id === expected.agentId &&
+          row.attempt === expected.attempt &&
+          row.model === expected.model &&
+          row.max_nano === expected.maximumNano &&
+          row.actual_nano === null
+        );
+      });
+      if (rows.length !== expectedIds.size || !knownMatch || !unknownMatch) {
+        throw new Error("Interrupted reservation rows do not exactly match registered checkpoint");
+      }
+      const settledAt = new Date().toISOString();
+      for (const { id } of unknown) {
+        this.db
+          .prepare(
+            `UPDATE reservations
+                SET status = 'uncertain', settled_at = ?
+              WHERE id = ? AND status = 'active'`,
+          )
+          .run(settledAt, id);
+      }
+      const update = this.db
+        .prepare(
+          `UPDATE run_lock
+              SET pid = ?, started_at = ?
+            WHERE id = 1 AND run_id = ?`,
+        )
+        .run(process.pid, settledAt, staleRunId);
+      if (update.changes !== 1) {
+        throw new Error("Live spend interruption lock changed during reconciliation");
+      }
     });
     transaction.immediate();
   }
@@ -352,6 +479,16 @@ export class LiveSpendLedger {
     return row;
   }
 
+  private readAllReservations(): ReservationAuditRow[] {
+    return this.db
+      .prepare(
+        `SELECT id, run_id, agent_id, attempt, model, max_nano, actual_nano, status
+           FROM reservations
+          ORDER BY id`,
+      )
+      .all() as ReservationAuditRow[];
+  }
+
   private readSum(sql: string, ...parameters: unknown[]): number {
     const row = this.db.prepare(sql).get(...parameters) as SumRow | undefined;
     if (!row || !Number.isSafeInteger(row.value)) throw new Error("Invalid live spend ledger sum");
@@ -390,6 +527,25 @@ export class LiveSpendLedger {
          ), 0) AS value FROM reservations`,
       )
     );
+  }
+}
+
+function validateInterruptedReservation(reservation: {
+  readonly agentId: string | null;
+  readonly attempt: number;
+  readonly id: string;
+  readonly maximumCostUsd: number;
+  readonly model: RuntimeModel;
+}): void {
+  if (
+    reservation.id.trim().length === 0 ||
+    (reservation.agentId !== null && reservation.agentId.trim().length === 0) ||
+    !Number.isInteger(reservation.attempt) ||
+    reservation.attempt < 0 ||
+    reservation.attempt > 2 ||
+    !["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"].includes(reservation.model)
+  ) {
+    throw new Error("Invalid interrupted reservation checkpoint");
   }
 }
 

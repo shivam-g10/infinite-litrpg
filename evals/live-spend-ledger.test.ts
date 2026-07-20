@@ -380,6 +380,147 @@ describe("durable live spend ledger", () => {
     blocked.close();
   });
 
+  it("claims an exact dead interruption and charges active requests at full reserve", () => {
+    const filename = temporaryLedgerPath();
+    const staleRun = randomUUID();
+    const first = new LiveSpendLedger(filename, 3);
+    first.acquireRun(staleRun);
+    first.synchronizeBaseline(staleRun, RECOVERY_BASELINE);
+    const hooks = first.createCostHooks(staleRun);
+    hooks.reserve(reservation("known-before-interruption", 0.1));
+    hooks.settle({ actualCostUsd: 0.04, id: "known-before-interruption" });
+    hooks.reserve(reservation("unknown-at-interruption", 0.05));
+    first.close();
+    markOwnerProcessDead(filename);
+
+    const recovered = new LiveSpendLedger(filename, 3);
+    recovered.claimInterruptedRunAtMaximum(staleRun, {
+      baseline: RECOVERY_BASELINE,
+      knownReservations: [expectedKnownReservation("known-before-interruption", 0.1, 0.04)],
+      unknownReservations: [expectedUnknownReservation("unknown-at-interruption", 0.05)],
+    });
+    expect(recovered.snapshot()).toMatchObject({
+      activeReservationCount: 0,
+      knownReservationCostUsd: 0.04,
+      totalExposureUsd: 2.79,
+      uncertainReservationCostUsd: 0.05,
+    });
+    recovered.releaseRun(staleRun);
+    recovered.close();
+  });
+
+  it("reclaims an already charged interruption only after the replacement owner dies", () => {
+    const filename = temporaryLedgerPath();
+    const staleRun = randomUUID();
+    const first = new LiveSpendLedger(filename, 3);
+    first.acquireRun(staleRun);
+    first.synchronizeBaseline(staleRun, RECOVERY_BASELINE);
+    first
+      .createCostHooks(staleRun)
+      .reserve(reservation("unknown-before-reconciliation-crash", 0.05));
+    first.close();
+    markOwnerProcessDead(filename);
+    const expectation = {
+      baseline: RECOVERY_BASELINE,
+      knownReservations: [],
+      unknownReservations: [
+        expectedUnknownReservation("unknown-before-reconciliation-crash", 0.05),
+      ],
+    } as const;
+
+    const interruptedReconciler = new LiveSpendLedger(filename, 3);
+    interruptedReconciler.claimInterruptedRunAtMaximum(staleRun, expectation);
+    expect(interruptedReconciler.snapshot().uncertainReservationCostUsd).toBe(0.05);
+    interruptedReconciler.close();
+    markOwnerProcessDead(filename);
+
+    const retry = new LiveSpendLedger(filename, 3);
+    retry.claimInterruptedRunAtMaximum(staleRun, expectation);
+    expect(retry.snapshot()).toMatchObject({
+      activeReservationCount: 0,
+      totalExposureUsd: 2.75,
+      uncertainReservationCostUsd: 0.05,
+    });
+    retry.releaseRun(staleRun);
+    retry.close();
+  });
+
+  it("rejects interruption reservations owned by another run", () => {
+    const filename = temporaryLedgerPath();
+    const staleRun = randomUUID();
+    const first = new LiveSpendLedger(filename, 3);
+    first.acquireRun(staleRun);
+    first.synchronizeBaseline(staleRun, RECOVERY_BASELINE);
+    first.createCostHooks(staleRun).reserve(reservation("wrong-owner-before-reconciliation", 0.05));
+    first.close();
+    markOwnerProcessDead(filename);
+    setReservationOwner(filename, "wrong-owner-before-reconciliation", randomUUID());
+
+    const recovered = new LiveSpendLedger(filename, 3);
+    expect(() =>
+      recovered.claimInterruptedRunAtMaximum(staleRun, {
+        baseline: RECOVERY_BASELINE,
+        knownReservations: [],
+        unknownReservations: [
+          expectedUnknownReservation("wrong-owner-before-reconciliation", 0.05),
+        ],
+      }),
+    ).toThrow("do not exactly match");
+    expect(recovered.snapshot()).toMatchObject({
+      activeReservationCount: 1,
+      totalExposureUsd: 2.75,
+      uncertainReservationCostUsd: 0,
+    });
+    recovered.close();
+  });
+
+  it("rejects live, incomplete, or mismatched interruption claims without mutation", () => {
+    const filename = temporaryLedgerPath();
+    const staleRun = randomUUID();
+    const first = new LiveSpendLedger(filename, 3);
+    first.acquireRun(staleRun);
+    first.synchronizeBaseline(staleRun, RECOVERY_BASELINE);
+    const hooks = first.createCostHooks(staleRun);
+    hooks.reserve(reservation("known-for-claim", 0.1));
+    hooks.settle({ actualCostUsd: 0.04, id: "known-for-claim" });
+    hooks.reserve(reservation("unknown-for-claim", 0.05));
+
+    const exact = {
+      baseline: RECOVERY_BASELINE,
+      knownReservations: [expectedKnownReservation("known-for-claim", 0.1, 0.04)],
+      unknownReservations: [expectedUnknownReservation("unknown-for-claim", 0.05)],
+    } as const;
+    expect(() => first.claimInterruptedRunAtMaximum(staleRun, exact)).toThrow("running owner");
+    first.close();
+    markOwnerProcessDead(filename);
+
+    const recovered = new LiveSpendLedger(filename, 3);
+    expect(() => recovered.claimInterruptedRunAtMaximum(randomUUID(), exact)).toThrow(
+      "does not match",
+    );
+    expect(() =>
+      recovered.claimInterruptedRunAtMaximum(staleRun, {
+        ...exact,
+        unknownReservations: [],
+      }),
+    ).toThrow("requires an unknown reservation");
+    expect(() =>
+      recovered.claimInterruptedRunAtMaximum(staleRun, {
+        ...exact,
+        unknownReservations: [expectedUnknownReservation("unknown-for-claim", 0.04)],
+      }),
+    ).toThrow("do not exactly match");
+    expect(recovered.snapshot()).toMatchObject({
+      activeReservationCount: 1,
+      knownReservationCostUsd: 0.04,
+      totalExposureUsd: 2.79,
+      uncertainReservationCostUsd: 0,
+    });
+    recovered.claimInterruptedRunAtMaximum(staleRun, exact);
+    recovered.releaseRun(staleRun);
+    recovered.close();
+  });
+
   it("keeps the stale lock when the source report omitted settled exposure", () => {
     const filename = temporaryLedgerPath();
     const staleRun = randomUUID();
@@ -422,10 +563,40 @@ function reservation(id: string, maximumCostUsd: number) {
   };
 }
 
+function expectedKnownReservation(id: string, maximumCostUsd: number, actualCostUsd: number) {
+  return {
+    actualCostUsd,
+    agentId: null,
+    attempt: 0,
+    id,
+    maximumCostUsd,
+    model: "gpt-5.6-terra" as const,
+  };
+}
+
+function expectedUnknownReservation(id: string, maximumCostUsd: number) {
+  return {
+    agentId: null,
+    attempt: 0,
+    id,
+    maximumCostUsd,
+    model: "gpt-5.6-terra" as const,
+  };
+}
+
 function markOwnerProcessDead(filename: string): void {
   const database = new Database(filename);
   try {
     database.prepare("UPDATE run_lock SET pid = ? WHERE id = 1").run(2_147_483_646);
+  } finally {
+    database.close();
+  }
+}
+
+function setReservationOwner(filename: string, reservationId: string, runId: string): void {
+  const database = new Database(filename);
+  try {
+    database.prepare("UPDATE reservations SET run_id = ? WHERE id = ?").run(runId, reservationId);
   } finally {
     database.close();
   }
