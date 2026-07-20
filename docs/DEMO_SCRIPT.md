@@ -16,6 +16,8 @@ Generation is variable. Start the final take only after one successful private r
 
 For no-cost layout rehearsal only, start from an empty `data/` directory and run `npm run demo:seed`. It restores the authenticated Rowan chapter-1 checkpoint from tracked evidence, verifies its result hash, and makes no model request. It refuses to overwrite a save. This path rehearses Reader, God Mode, continuation confirmation, and evidence timing; it does not replace the real click-to-result segment in the final video.
 
+The 2026-07-21 real-browser layout rehearsal completed Reader, God Mode, exact cost confirmation, cancel, trace, and return-to-Reader interactions in 87.4 seconds at 1280 by 720. Console warnings and errors: zero. Provider calls: zero. The final real-generation rehearsal and recording remain open gates.
+
 ## 0:00 to 0:18 — One Life
 
 Show six-character selection.

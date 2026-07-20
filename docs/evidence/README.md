@@ -18,4 +18,4 @@
 
 The committed artifact contains full accepted delta, player and background intents, every attempt and call, response identity, usage, cost, latency, model, tier, prompt and schema versions, state hashes, and final gate result. A regression parses it through the production persisted-trace schema and recomputes attempt totals.
 
-Chapter prose and full canonical input remain in the authenticated ignored live report. Final six-POV review packets will carry those fields after the twelve-cycle gate passes.
+Chapter prose and full canonical input remain in the authenticated ignored live report. The tracked six-POV [review packet set](../review-packets/) carries those fields and its completed human verdicts. Its manifest is rejected because three chapters need corrected prose.

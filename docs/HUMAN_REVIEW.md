@@ -22,7 +22,9 @@ Check:
 6. Desktop and phone widths have no horizontal overflow.
 7. Markdown and Reader JSON exports contain no hidden canon.
 
-Read and annotate all six reviewed POV samples in [SAMPLE_STORIES.md](SAMPLE_STORIES.md).
+Read and annotate all six curated passing POV samples in [SAMPLE_STORIES.md](SAMPLE_STORIES.md).
+
+For release review, use the complete authenticated [review packet set](review-packets/). Its manifest is `human-reviewed-rejected`: Rowan chapter 2, Elara chapter 1, and Lucan chapter 1 failed. The curated samples use different passing chapters and do not replace that rejected evidence.
 
 ## Chapter-100 behavior proof
 

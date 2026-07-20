@@ -9,6 +9,7 @@
 | Tagline             | Choose one life. The world keeps moving without you. | Ready                   |
 | Repository          | `https://github.com/shivam-g10/infinite-litrpg`      | Public; build unpushed  |
 | License             | MIT                                                  | Ready                   |
+| Private fallback    | `testing@devpost.com`, `build-week-event@openai.com` | Not needed while public |
 | Demo video          | Public YouTube URL                                   | User recording gate     |
 | Codex Session ID    | Primary build task `/feedback` ID                    | User input gate         |
 | Final live evidence | Human-approved corrected six-POV report              | Paid correction blocked |

@@ -57,8 +57,9 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 - [x] Reproduce the exact prompt `1.4.11` Standard and Flex matrix projections and fail closed on incomplete service-tier evidence.
 - [x] Capture and regress the first Flex matrix short-recovery defect without weakening chapter or audit gates.
 - [x] Implement canon-preserving re-narration with exact source provenance, pre-provider validation, replacement WAL, and hard total-cost preflight.
-- [ ] Pass twelve full live chapter cycles.
-- [ ] Pass zero-leak checks across six POVs.
+- [x] Complete the prompt `1.4.11` twelve-cycle automated matrix with all strict automated gates green.
+- [x] Pass automated zero-leak checks across all six POVs.
+- [ ] Replace the three human-rejected chapters and pass final human review across all twelve cycles.
 
 ### Phase 6: Product UI
 
@@ -87,6 +88,7 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 - User-owned gates begin after repository is submission-ready.
 - [x] README setup and architecture complete.
 - [x] Screenshots and architecture diagram ready.
+- [x] Complete the no-cost real-browser Reader, God Mode, cost-confirmation, and cancel rehearsal in 87.4 seconds.
 - [ ] Final real-click demo rehearsal completes below three minutes. Script and no-cost layout rehearsal path are ready.
 - [ ] User approves six POV review packets.
 - [ ] User authorizes public repository push.

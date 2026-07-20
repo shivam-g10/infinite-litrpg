@@ -1,12 +1,12 @@
 # Non-Live Release Evidence
 
-- Verified: 2026-07-20
-- Scope: human-review Reader and chapter-100 continuation checkpoint
+- Verified: 2026-07-21
+- Scope: release-truth, human-review Reader, and chapter-100 continuation checkpoint
 - Paid generation calls in this scope: zero
 
 ## Full Gate
 
-`npm run check` exited `0` in 42.5 seconds.
+`npm run check` exited `0` in 35.4 seconds.
 
 - Prettier: passed.
 - ESLint: passed with no warning.
@@ -58,11 +58,13 @@ Both independent reviewers reran their focused suites after fixes. Every reporte
 
 Screenshots are viewport captures:
 
-| File                   |      Pixels | SHA-256                                                            |
-| ---------------------- | ----------: | ------------------------------------------------------------------ |
-| `reader-desktop.png`   | 1425 by 990 | `f5500f4be3a6940e38a97ef165404a94045d6ed9ed49e3e99f8fe2e3a860e1d4` |
-| `god-mode-desktop.png` | 1280 by 720 | `e1e73414f421c6726d93dbebeea44fd6c338610349972870f664ac8ed2355125` |
-| `reader-mobile.png`    |  375 by 812 | `a3db8c74031bd2591cf797944db97961a442b84f80a343c102e78d80636b41d5` |
+| File                   |       Pixels | SHA-256                                                            |
+| ---------------------- | -----------: | ------------------------------------------------------------------ |
+| `reader-desktop.png`   |  1425 by 990 | `f5500f4be3a6940e38a97ef165404a94045d6ed9ed49e3e99f8fe2e3a860e1d4` |
+| `god-mode-desktop.png` | 1440 by 1000 | `12eba468a2e25314f0ec7593698b0cfe5afcb4ba367dbff85d76b305c42cadf0` |
+| `reader-mobile.png`    |   375 by 812 | `a3db8c74031bd2591cf797944db97961a442b84f80a343c102e78d80636b41d5` |
+
+On 2026-07-21, the no-cost real-browser demo path completed Reader, God Mode, exact cost confirmation, cancel, trace, and return-to-Reader interactions in 87.4 seconds at 1280 by 720. Page identity, meaningful content, framework-overlay absence, console health, interaction state, focus movement, and horizontal width passed. Provider calls: zero. The recaptured God Mode screenshot uses a collapsed delta so trace, audit, and atomic-commit evidence remain visible together.
 
 ## Demo Evidence
 

@@ -40,7 +40,7 @@ Official rules require a public YouTube video with audio. Repository may be publ
 ## Sources
 
 - [OpenAI Build Week](https://openai.com/build-week/), accessed 2026-07-19.
-- [Official challenge rules](https://openai.devpost.com/rules), accessed 2026-07-19.
+- [Official challenge rules](https://openai.devpost.com/rules), rechecked 2026-07-21.
 - [Official challenge FAQ](https://openai.devpost.com/details/faqs), accessed 2026-07-20.
 
 ## Cut Order
