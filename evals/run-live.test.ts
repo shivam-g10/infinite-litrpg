@@ -61,6 +61,48 @@ const REQUIREMENTS: ResumeRequirements = {
 const STANDARD_REQUIREMENTS: ResumeRequirements = { ...REQUIREMENTS, serviceTier: "standard" };
 
 describe("live report version 9", () => {
+  it("keeps the submitted Rowan trace strict and internally totaled", () => {
+    const raw = JSON.parse(
+      readFileSync(join(process.cwd(), "docs", "evidence", "rowan-chapter-1-trace.json"), "utf8"),
+    ) as unknown;
+    const trace = PersistedTraceEnvelopeSchema.parse(raw);
+    const attemptCostUsd = trace.attempts.reduce((sum, attempt) => sum + attempt.costUsd, 0);
+    const attemptUsage = trace.attempts.reduce(
+      (total, attempt) => ({
+        cacheWriteTokens: total.cacheWriteTokens + attempt.usage.cacheWriteTokens,
+        cachedInputTokens: total.cachedInputTokens + attempt.usage.cachedInputTokens,
+        inputTokens: total.inputTokens + attempt.usage.inputTokens,
+        outputTokens: total.outputTokens + attempt.usage.outputTokens,
+        reasoningTokens: total.reasoningTokens + attempt.usage.reasoningTokens,
+        totalTokens: total.totalTokens + attempt.usage.totalTokens,
+      }),
+      {
+        cacheWriteTokens: 0,
+        cachedInputTokens: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        reasoningTokens: 0,
+        totalTokens: 0,
+      },
+    );
+
+    expect(trace.gateResult).toBe("passed");
+    expect(trace.promptVersion).toBe("1.4.11");
+    expect(trace.schemaVersion).toBe("1.1.0-runtime-candidates-5");
+    expect(trace.totalEstimatedCostUsd).toBeCloseTo(attemptCostUsd, 12);
+    expect(trace.totalUsage).toEqual(attemptUsage);
+    expect(
+      trace.attempts.every(
+        (attempt) => attempt.requestedServiceTier === "flex" && attempt.serviceTier === "flex",
+      ),
+    ).toBe(true);
+    expect(
+      trace.calls.every(
+        (call) => call.requestedServiceTier === "flex" && call.serviceTier === "flex",
+      ),
+    ).toBe(true);
+  });
+
   it("accepts only append-only stale-run evidence", () => {
     const checkpointed = [{ id: 1 }, { id: 2 }];
     expect(isAppendOnlyEvidence(checkpointed, [...checkpointed, { id: 3 }])).toBe(true);
@@ -970,6 +1012,61 @@ describe("live report version 9", () => {
         "evals/run-live.ts": "e".repeat(64),
       }),
     ).toThrow("audited hash");
+
+    const maximumBridgeFiles = Array.from({ length: 30 }, (_, index) => ({
+      path: `release/bridge-${index}.txt`,
+      sha256: bridgeSha256,
+    }));
+    const maximumBridgeHashes = Object.fromEntries(
+      maximumBridgeFiles.map(({ path, sha256 }) => [path, sha256]),
+    );
+    const maximumBridgeRegistry = {
+      ...registry,
+      checkpoints: [{ ...registry.checkpoints[0], bridgeFiles: maximumBridgeFiles }],
+    };
+    expect(
+      assertRegisteredResumeCheckpoint(
+        legacy,
+        reportSha256,
+        maximumBridgeRegistry,
+        maximumBridgeHashes,
+      ),
+    ).toHaveLength(30);
+    expect(() =>
+      assertRegisteredResumeCheckpoint(
+        legacy,
+        reportSha256,
+        {
+          ...maximumBridgeRegistry,
+          checkpoints: [
+            {
+              ...maximumBridgeRegistry.checkpoints[0],
+              bridgeFiles: [
+                ...maximumBridgeFiles,
+                { path: "release/bridge-30.txt", sha256: bridgeSha256 },
+              ],
+            },
+          ],
+        },
+        { ...maximumBridgeHashes, "release/bridge-30.txt": bridgeSha256 },
+      ),
+    ).toThrow();
+
+    const binaryBridgePath = "docs/screenshots/reader-desktop.png";
+    const binaryBridgeSha256 = createHash("sha256")
+      .update(readFileSync(binaryBridgePath))
+      .digest("hex");
+    expect(() =>
+      assertRegisteredResumeCheckpoint(legacy, reportSha256, {
+        ...registry,
+        checkpoints: [
+          {
+            ...registry.checkpoints[0],
+            bridgeFiles: [{ path: binaryBridgePath, sha256: binaryBridgeSha256 }],
+          },
+        ],
+      }),
+    ).not.toThrow();
   });
 
   it("keeps the registered prompt 1.4.10 version 7 checkpoint parseable", () => {
@@ -1012,6 +1109,21 @@ describe("live report version 9", () => {
 
   it("parses declared mixed Git provenance and rejects an unlisted result SHA", () => {
     const currentGitSha = "1234567";
+    const bridgeFiles = Array.from({ length: 27 }, (_, index) => ({
+      path: `release/bridge-${index}.txt`,
+      sha256: "d".repeat(64),
+    }));
+    const changedPaths = [
+      ...bridgeFiles.map(({ path }) => path),
+      "app/src/server/openai/stable.test.ts",
+      "app/src/server/story/story-service.test.ts",
+      "docs/ARCHITECTURE.md",
+      "docs/PLAN.md",
+      "docs/STATUS.md",
+      "evals/resume-checkpoints.json",
+      "evals/run-live-restore.test.ts",
+      "evals/run-live.test.ts",
+    ];
     const results = [
       fakeResult("rowan-ashborn", 1, 0.01),
       fakeResult("rowan-ashborn", 2, 0.01),
@@ -1051,8 +1163,8 @@ describe("live report version 9", () => {
       results,
       runtimeAttemptEvidence: fakeRuntimeAttemptEvidence(results),
       resume: {
-        bridgeFiles: [{ path: "evals/run-live.ts", sha256: "d".repeat(64) }],
-        changedPaths: ["evals/run-live.ts"],
+        bridgeFiles,
+        changedPaths,
         discardedResultCount: 0,
         existingAttemptCostUsd: 0.02,
         retainedPovIds: ["rowan-ashborn"],
@@ -1080,6 +1192,7 @@ describe("live report version 9", () => {
       totalCostUsd: 0.03,
     };
 
+    expect(candidate.resume.changedPaths).toHaveLength(35);
     expect(LiveReportSchema.safeParse(candidate).success).toBe(true);
     expect(LiveReportSchema.safeParse({ ...candidate, narrativeCandidates: [] }).success).toBe(
       false,

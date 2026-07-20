@@ -82,6 +82,14 @@
       "adapterMode": "sequential",
       "bridgeFiles": [
         {
+          "path": "app/e2e/story.spec.ts",
+          "sha256": "c43c6fe6563d3293643929bfdd07087722ecd8155c972e17f892ba4fe941e1bb"
+        },
+        {
+          "path": "app/src/app/globals.css",
+          "sha256": "6b04d246bea0d53688f5272544ae876de941ee8f1da5b7fe9622acd698ff52f7"
+        },
+        {
           "path": "app/src/server/story/prompts.test.ts",
           "sha256": "2edeb168f2af79ae8d8b40bdb0d8435e2f3aecab923ade1a594cc8cc78ab2bf4"
         },
@@ -96,6 +104,90 @@
         {
           "path": "decisions/ADR-015-short-narration-recovery.md",
           "sha256": "72d31f763c364f3956750adf39d1e7f31a6e30d7f5a24b4ad12583cf3d01bddd"
+        },
+        {
+          "path": "docs/BUILD_WEEK.md",
+          "sha256": "2269e6a063541dfef036c146c2b684468eb9d2b54d3f1c2053bf1a152b6bf3f7"
+        },
+        {
+          "path": "docs/DEMO_SCRIPT.md",
+          "sha256": "6c6813dc1d93aa2a164b53fc23bb3845c10c271064eae07b1f3f386796c6c0a5"
+        },
+        {
+          "path": "docs/evidence/non-live-gates.md",
+          "sha256": "933a035bbd3ce0a7220686e62de6a71eca4dca6b816c0a6084f5584d4914edb6"
+        },
+        {
+          "path": "docs/evidence/README.md",
+          "sha256": "9f8fbea76042bd019c58bc626dcc06ec2887398fffb417940bf470e061ed6baf"
+        },
+        {
+          "path": "docs/evidence/rowan-chapter-1-trace.json",
+          "sha256": "12bd67727460c57d4387a1d63bff741341db015024310139f83eaa45f40ee0d3"
+        },
+        {
+          "path": "docs/README.md",
+          "sha256": "ace0b8600018109211a0f2e3992e5d7f3ab019945a579946de756a884a6b05e7"
+        },
+        {
+          "path": "docs/screenshots/god-mode-desktop.png",
+          "sha256": "6d2a2d06dd664041ad53f38c92dbb99a356b4100069c2e22c1500141f3f099df"
+        },
+        {
+          "path": "docs/screenshots/reader-desktop.png",
+          "sha256": "ef6b3cd455db62eb5ac52d246955866782b0949ee412f96dea47a308380d508e"
+        },
+        {
+          "path": "docs/screenshots/reader-mobile.png",
+          "sha256": "3d100d7460b172bddffacbb5c9e2f3818d141dbfcd6b294530f4d7a5676df820"
+        },
+        {
+          "path": "docs/SUBMISSION.md",
+          "sha256": "67258d955d98ef092bf68a1f6b45651b906629c658ed85a896a5c56776c8e38a"
+        },
+        {
+          "path": "evals/review-packets.test.ts",
+          "sha256": "d922b487ce538815897e48ac15921fe23ae6f8cb4c15791e28fad96ae56145b7"
+        },
+        {
+          "path": "evals/review-packets.ts",
+          "sha256": "2f4f8c8e5fabe3edeecc6531745b9a4d7d0d1210ca8191b3b4166633555c1fa1"
+        },
+        {
+          "path": "evals/RUBRIC.md",
+          "sha256": "70d86ea82311e8b1c291789b7a10f453d6eb9874b64309ef3288eab4e4f80906"
+        },
+        {
+          "path": "evals/run-live.ts",
+          "sha256": "c4bd126d082f17c4444bf31c13996136b0ddb315cc7f4c17d69728ac6d5d918e"
+        },
+        {
+          "path": "package.json",
+          "sha256": "68fbce798aafedf19287f95d2da986f6c58893eed6d001a0ad28261ab16f63bd"
+        },
+        {
+          "path": "README.md",
+          "sha256": "b91083796c4424067fd7b3ab2237462f2373fe58b561c1f1b51aedb4cb79bd90"
+        },
+        {
+          "path": "research/2026-07-20-build-week-submission.md",
+          "sha256": "7ed7b9f3baa4fc36d51a12a0fe0cd18ac0b3d2e72da7a0f48558fea5d90a6ce0"
+        },
+        {
+          "path": "scripts/seed-demo-evidence.ts",
+          "sha256": "918342755df3f659cd19345924d78f87bda5d7d408d9e28551223ac9f14006fe"
+        },
+        {
+          "path": "shared/contracts/README.md",
+          "sha256": "de0fa9f8947a69d3dadcb5b072cea20a14d796bd9f9b42f3a3a9c613ddd16797"
+        },
+        {
+          "path": "shared/engine/README.md",
+          "sha256": "ac0da294b43d835cd1ee76668d68de1f8e76617989a5b731c5054370f95f2e69"
+        },
+        {
+          "path": "shared/prompts/README.md",
+          "sha256": "0a92af0bde291cb3b75de2bd93e941cc9ffe2fbd5b22f27bc464c6e96f862226"
         }
       ],
       "chapterCostCapUsd": 0.0424,

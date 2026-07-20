@@ -4,6 +4,9 @@ import {
   CONTRACT_VERSION,
   NARRATIVE_AUDIT_DIMENSIONS,
   PROMPT_VERSION,
+  buildChapterChoiceOptions,
+  buildPovContext,
+  canonicalizeChapterFrameCandidate,
   resolveTurn,
   stageWorldDelta,
   type Choice,
@@ -30,7 +33,10 @@ describe("retained chapter state restore", () => {
       const restored = store.loadWorldState("ashen-crown-v1");
       expect(restored?.chapter).toBe(1);
       expect(hashJson(restored)).toBe(result.trace.stateAfterHash);
-      expect(store.loadChapter("ashen-crown-v1", 1)?.prose).toBe(result.prose);
+      const chapter = store.loadChapter("ashen-crown-v1", 1);
+      expect(chapter?.prose).toBe(result.prose);
+      expect(chapter?.title).toBe("Authenticated test chapter");
+      expect(chapter?.choices).toEqual(result.canonicalNarrativeInput?.chapterRecord.choices);
     } finally {
       store.close();
     }
@@ -81,18 +87,15 @@ function restorableResult(store: StoryStore, choice: Choice | undefined): LiveRe
   if (!choice) throw new Error("Test fixture needs an initial choice");
   const before = store.loadWorldState("ashen-crown-v1");
   if (!before || before.lockedPovId !== "elara-voss") throw new Error("Test world is not locked");
-  const resolved = resolveTurn(
-    before,
-    {
-      action: choice.action,
-      actorId: "elara-voss",
-      description: choice.description,
-      milestoneId: choice.milestoneId,
-      source: "suggested",
-      stateVersion: before.version,
-    },
-    [],
-  );
+  const playerAction = {
+    action: choice.action,
+    actorId: "elara-voss" as const,
+    description: choice.description,
+    milestoneId: choice.milestoneId,
+    source: "suggested" as const,
+    stateVersion: before.version,
+  };
+  const resolved = resolveTurn(before, playerAction, []);
   if (!resolved.ok) throw new Error("Test player choice did not resolve");
   const staged = stageWorldDelta(before, resolved.data.intents, resolved.data.delta);
   if (!staged.ok) throw new Error("Test delta did not stage");
@@ -125,9 +128,51 @@ function restorableResult(store: StoryStore, choice: Choice | undefined): LiveRe
       prose: 2 as const,
     },
   };
+  const options = buildChapterChoiceOptions(staged.data.state);
+  const frame = canonicalizeChapterFrameCandidate(staged.data.state, {
+    optionIds: options.slice(0, 2).map(({ id }) => id),
+    title: "Authenticated test chapter",
+  });
+  if (!frame.ok) throw new Error("Test chapter frame did not canonicalize");
+  const traceId = "00000000-0000-4000-8000-000000000001";
+  const povContext = buildPovContext(staged.data.state, "elara-voss");
+  const allowedFactIds = [...povContext.factIds];
+  const allowedFacts = new Set(allowedFactIds);
+  const chapterRecord = {
+    chapter: 1,
+    choices: frame.data.choices,
+    estimatedCostUsd: 0.01,
+    id: "chapter-001",
+    latencyMs: 1,
+    narrativeAudit: audit,
+    playerAction,
+    povCharacterId: "elara-voss" as const,
+    prose,
+    proseHash,
+    safeContextHash: hashJson(povContext),
+    stateAfterVersion: staged.data.state.version,
+    stateBeforeVersion: before.version,
+    terminal: staged.data.state.terminal,
+    title: frame.data.title,
+    traceId,
+    usage,
+  };
   return {
     adapterMode: "sequential",
     audit,
+    canonicalNarrativeInput: {
+      allowedFactIds,
+      chapterRecord,
+      forbiddenFacts: staged.data.state.facts
+        .filter(({ id }) => !allowedFacts.has(id))
+        .map(({ claim, id }) => ({ claim, id })),
+      frame: frame.data,
+      playerAction,
+      stateAfter: staged.data.state,
+      stateBefore: before,
+      worldVersionAfter: staged.data.state.version,
+      worldVersionBefore: before.version,
+    },
     chapter: 1,
     costUsd: 0.01,
     latencyMs: 1,
@@ -197,7 +242,7 @@ function restorableResult(store: StoryStore, choice: Choice | undefined): LiveRe
       multiAgentOutputItems: [],
       pricingVersion: "test-pricing",
       promptVersion: PROMPT_VERSION,
-      runId: "00000000-0000-4000-8000-000000000001",
+      runId: traceId,
       schemaVersion: CONTRACT_VERSION,
       seed: 0,
       stateAfterHash: hashJson(staged.data.state),

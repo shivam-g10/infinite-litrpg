@@ -72,7 +72,8 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 
 - [x] Full check command green.
 - [x] Browser smoke path green.
-- [x] Native multi-agent and sequential live smoke paths green.
+- [ ] Current prompt native Multi-agent live smoke path green. Sequential Rowan proof is current; native proof predates prompt `1.4.11`.
+- [x] Strict offline review-packet generator rejects partial, false-gate, and mixed-tier reports.
 - [ ] Six POV review packets generated and agent-reviewed.
 - [x] Secret scan and dependency-license check green.
 - [x] Clean-clone setup verified.
@@ -82,7 +83,7 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 - User-owned gates begin after repository is submission-ready.
 - [x] README setup and architecture complete.
 - [x] Screenshots and architecture diagram ready.
-- [x] Demo script and capture path ready.
+- [ ] Final real-click demo rehearsal completes below three minutes. Script and no-cost layout rehearsal path are ready.
 - [ ] User approves six POV review packets.
 - [ ] User authorizes public repository push.
 - [ ] User records or approves public demo under three minutes.
@@ -140,6 +141,9 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 - ADR-014 adds explicit service-tier provenance without changing prompt behavior. Product requests send Standard; the full release script sends Flex. Runtime schema `1.1.0-runtime-candidates-5`, live report version 9, and ledger version 2 preserve requested and returned tier through attempts, calls, traces, sidecars, reservations, interruption receipts, and resumes. Historical rows migrate as Standard without changing exposure. Exact code projections are `$0.208988` Standard and `$0.104494` Flex.
 - The first prompt `1.4.11` Flex matrix completed both Rowan chapters, then failed Elara chapter 1. Its drafts were 789, 850, and 768 words. The 850-word draft received a coherent 91-word continuation, but recovery rejected it against the requested 50-to-75-word target even though the merged 941-word chapter passed deterministic replay. Nineteen known Flex attempts cost `$0.029972`; durable exposure is `$2.841054175` with `$0.158945825` headroom. Report SHA-256 is `447f860a0e918198d246fef37671f16db3664ef76887fba390eaaabc77f9eddd`.
 - ADR-015 separates the model request target from deterministic acceptance. Recovery eligibility is 750 to 899 words, the request still targets 900 to 925, and acceptance may reach 949 before the unchanged absolute validator and full audit. Exact 812 plus 88 and 850 plus 91 regressions pass under the release cap. Prompt, runtime schema, and report versions stay unchanged because model-facing templates and persisted shapes did not change.
+- Release-artifact audit found three placeholder module READMEs, stale model-routing claims, broken full-page screenshots, a weak packet writer, and missing tracked trace evidence. Implemented docs now match Terra and Luna routing; the strict Rowan trace is tracked and schema-regressed; review packets bind report, Git, prompt, schema, tier, canon, prose, and human rubric evidence without network access.
+- Browser QA restored the authenticated Rowan chapter without a model request, verified all six selectable profiles and Elara detail selection, and exercised Reader plus God Mode at desktop and mobile widths. It found and closed desktop hash-label overlap and mobile intent-list overflow with E2E regressions. Screenshots are viewport captures, not stitched full pages.
+- Independent release review found and closed packet marker injection, hidden future milestones inside a POV-safe section, manifest provenance tampering, and synthetic restored chapter metadata. Strict packets now fail closed on marker injection, isolate full arc clocks in reviewer-only canon, cross-check manifest headers, and publish only through the offline CLI. Demo restore commits the exact authenticated chapter record.
 
 ## Decision Log
 
@@ -161,8 +165,8 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 
 ## Outcomes and Retrospective
 
-- Phases 1 through 4 and Phase 6 are implemented. Offline contracts, deterministic transitions, knowledge boundaries, atomic storage, both OpenAI adapters, product UI, README, architecture, screenshots, and demo path are green. Phase 5 has green live smoke and awaits the complete twelve-cycle release report.
+- Phases 1 through 4 and Phase 6 are implemented. Offline contracts, deterministic transitions, knowledge boundaries, atomic storage, both OpenAI adapters, product UI, README, architecture, and current screenshots are green. Phase 5 awaits the complete twelve-cycle report. The real-click video rehearsal and current native live proof remain open.
 
 ## Current Milestone
 
-Phase 5 release eval: the first paid Flex matrix completed Rowan chapters 1 and 2, then exposed a recovery-ceiling defect on Elara chapter 1. Durable exposure is `$2.841054175`; headroom is `$0.158945825`. ADR-015 has a named nonpaid regression and bounded fix: eligibility 750 to 899, unchanged 900-to-925 request target, deterministic acceptance through 949, then unchanged full validation and audit. Full non-live gates, independent review, checkpoint registration, commit `1c5d0c6`, fresh-clone verification, exact resume authentication, and ledger preflight pass. The external blocker is explicit user authority for a paid resume retaining Rowan. Never rerun automatically.
+Phase 5 release eval: the first paid Flex matrix completed Rowan chapters 1 and 2, then exposed a recovery-ceiling defect on Elara chapter 1. Durable exposure is `$2.841054175`; headroom is `$0.158945825`. ADR-015 has a named no-generation regression and bounded fix. The no-cost release-artifact slice now adds strict trace evidence, review-packet tooling, truthful model docs, current browser QA, fixed responsive overflow, and clean viewport screenshots. The full local gate and zero-vulnerability audit pass. Checkpoint review, commit, exact resume authentication, and clean-clone verification remain before the external blocker: explicit user authority for the paid resume. Never rerun automatically.

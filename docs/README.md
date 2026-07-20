@@ -7,3 +7,5 @@
 - `STATUS.md`: current state, evidence, blockers, next action.
 - `SECURITY.md`: secret, model-output, and release controls.
 - `BUILD_WEEK.md`: demo and submission contract.
+- `DEMO_SCRIPT.md`: timed public-video capture script.
+- `SUBMISSION.md`: paste-ready description, judge path, evidence, and release gates.

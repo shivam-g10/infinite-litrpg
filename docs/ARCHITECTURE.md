@@ -48,10 +48,10 @@ From chapter 48 through 50 of each act, choices stay milestone-compatible. An in
 
 | Work                                                              | Model           | Baseline effort |
 | ----------------------------------------------------------------- | --------------- | --------------- |
-| World blueprint and seven-act constraints                         | `gpt-5.6-sol`   | medium          |
-| Hard recovery and finale                                          | `gpt-5.6-sol`   | medium          |
 | Custom-action translation                                         | `gpt-5.6-terra` | none            |
 | Character intents, option ranking, narration, recovery, and audit | `gpt-5.6-luna`  | none or low     |
+
+The seven-act world blueprint is a versioned local fixture. Chapter 350 uses the same validated Luna narration path and deterministic terminal guard as every other chapter.
 
 Use Responses API. Use strict structured outputs for state-changing calls. Measure before changing effort.
 

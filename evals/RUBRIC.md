@@ -1,6 +1,6 @@
 # Narrative Review Rubric
 
-Score 0 to 2. Cite text evidence. Any zero in continuity, knowledge, mechanics, or arc progress blocks release.
+Score 0 to 2. Cite text evidence. Any zero in continuity, POV safety, LitRPG mechanics, or arc progress blocks release.
 
 | Dimension          | 0                        | 1               | 2                               |
 | ------------------ | ------------------------ | --------------- | ------------------------------- |

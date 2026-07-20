@@ -10,12 +10,12 @@ AI generates chapter prose and background-character intents. Deterministic appli
 
 - Node.js 24 or newer
 - npm 11 or newer
-- An OpenAI API key with GPT-5.6 Sol, Terra, and Luna access
+- An OpenAI API key with GPT-5.6 Terra and Luna access
 
 ## Run locally
 
 ```powershell
-git clone git@github.com:shivam-g10/infinite-litrpg.git
+git clone https://github.com/shivam-g10/infinite-litrpg.git
 Set-Location infinite-litrpg
 npm ci
 Copy-Item .env.example .env
@@ -68,11 +68,20 @@ Models emit intent or prose. They never mutate canonical state. Accepted `WorldD
 
 See [architecture](docs/ARCHITECTURE.md), [domain model](docs/DOMAIN_MODEL.md), and [security](docs/SECURITY.md).
 
+## Built with Codex
+
+Codex supported the project from source research through release evidence. It created visual concepts before frontend work, implemented strict TypeScript contracts and deterministic state transitions, built both OpenAI adapters, exercised the real UI in desktop and mobile browsers, reviewed security and cost accounting, and maintained the living plan and evidence log.
+
+AI behavior changed only after a recorded baseline. Every escaped live defect became a named regression. Independent Codex agents handled bounded research, evaluation, and review while the root build task kept implementation ownership and final decisions.
+
+Key product decisions stayed human-readable in `decisions/`: one canonical state writer, accepted `WorldDelta` as the sole source of new canon, permanent POV knowledge boundaries, hard chapter-351 rejection, local bring-your-own-key operation, and no hosted service. GPT-5.6 Terra and Luna have bounded roles; deterministic application code retains authority.
+
+See the [living plan](docs/PLAN.md), [decision records](decisions/), [verified status](docs/STATUS.md), and [submission packet](docs/SUBMISSION.md).
+
 ## Model roles
 
 | Work                                                           | Model           |
 | -------------------------------------------------------------- | --------------- |
-| World genesis, hard recovery, finale                           | `gpt-5.6-sol`   |
 | Custom-action translation                                      | `gpt-5.6-terra` |
 | Background intents, option ranking, narration, recovery, audit | `gpt-5.6-luna`  |
 
@@ -105,7 +114,7 @@ The smoke command defaults to Standard. The full npm script requires explicit co
 
 ## Build Week
 
-Track: Apps for Your Life. Demo materials and submission evidence live in [Build Week notes](docs/BUILD_WEEK.md).
+Track: Apps for Your Life. See [Build Week notes](docs/BUILD_WEEK.md), [timed demo script](docs/DEMO_SCRIPT.md), and [submission packet](docs/SUBMISSION.md).
 
 ## License
 

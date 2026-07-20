@@ -3,8 +3,12 @@
 - Track: Apps for Your Life
 - Deadline: 2026-07-22 05:30 IST
 - Demo thesis: Choose one life. World keeps moving without you.
+- Submission packet: [SUBMISSION.md](SUBMISSION.md)
+- Timed recording script: [DEMO_SCRIPT.md](DEMO_SCRIPT.md)
 
 ## Three-Minute Demo
+
+Use the timed [recording script](DEMO_SCRIPT.md). Required spoken evidence includes both Codex collaboration and GPT-5.6 use.
 
 1. Show six characters and lock Rowan viewpoint.
 2. Choose action.
@@ -22,8 +26,11 @@
 - Architecture diagram.
 - Test and eval output.
 - One complete trace.
+- Sanitized current non-live gate output.
 - Screenshots of reader and inspector.
 - Codex feedback session ID covering core build.
+
+Official rules require a public YouTube video with audio. Repository may be public with a license, or private and shared with both judge accounts listed in the [submission packet](SUBMISSION.md).
 
 ## Ownership
 
@@ -34,6 +41,7 @@
 
 - [OpenAI Build Week](https://openai.com/build-week/), accessed 2026-07-19.
 - [Official challenge rules](https://openai.devpost.com/rules), accessed 2026-07-19.
+- [Official challenge FAQ](https://openai.devpost.com/details/faqs), accessed 2026-07-20.
 
 ## Cut Order
 

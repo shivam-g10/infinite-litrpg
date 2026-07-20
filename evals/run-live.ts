@@ -57,7 +57,6 @@ import {
 
 const ROOT = process.cwd();
 const REPORT_DIRECTORY = resolve(ROOT, "evals", "reports");
-const REVIEW_DIRECTORY = resolve(ROOT, "docs", "review-packets");
 const RESUME_CHECKPOINTS_PATH = resolve(ROOT, "evals", "resume-checkpoints.json");
 const LIVE_SPEND_LEDGER_PATH = resolve(REPORT_DIRECTORY, "live-spend-ledger.db");
 const DEFAULT_PER_CHAPTER_CAP_USD = 0.1;
@@ -68,6 +67,8 @@ const VERSION_7_REPORT_VERSION = 7;
 const VERSION_8_REPORT_VERSION = 8;
 const REPORT_VERSION = 9;
 const MONEY_EPSILON_USD = 0.000_000_1;
+const MAX_RESUME_BRIDGE_FILES = 30;
+const MAX_RESUME_CHANGED_PATHS = 50;
 const RESUME_NON_RUNTIME_PATHS = new Set([
   "app/src/server/openai/stable.test.ts",
   "app/src/server/story/story-service.test.ts",
@@ -100,7 +101,7 @@ const ResumeCheckpointRegistrySchema = z
         z
           .object({
             adapterMode: AdapterModeSchema,
-            bridgeFiles: z.array(BridgeFileSchema).max(20),
+            bridgeFiles: z.array(BridgeFileSchema).max(MAX_RESUME_BRIDGE_FILES),
             chapterCostCapUsd: z.number().positive().max(DEFAULT_PER_CHAPTER_CAP_USD),
             id: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/u),
             priorSpendUsd: z.number().min(0).max(TOTAL_CAP_USD),
@@ -397,7 +398,7 @@ const RetainedResultGitShaSchema = z
 
 const HistoricalResumeSchema = z
   .object({
-    changedPaths: z.array(z.string().min(1).max(1_000)).max(20),
+    changedPaths: z.array(z.string().min(1).max(1_000)).max(MAX_RESUME_CHANGED_PATHS),
     discardedResultCount: z.number().int().min(0).max(12),
     existingAttemptCostUsd: z.number().min(0).max(TOTAL_CAP_USD),
     retainedPovIds: z.array(PovIdSchema).max(6),
@@ -556,7 +557,7 @@ const RetainedResultProvenanceSchema = RetainedResultGitShaSchema.extend({
 
 const Version7ResumeSchema = HistoricalResumeSchema.omit({ retainedResultGitShas: true })
   .extend({
-    bridgeFiles: z.array(BridgeFileSchema).max(20),
+    bridgeFiles: z.array(BridgeFileSchema).max(MAX_RESUME_BRIDGE_FILES),
     retainedResults: z.array(RetainedResultProvenanceSchema).max(12),
   })
   .strict();
@@ -2597,9 +2598,6 @@ async function main(): Promise<void> {
     });
     writeAtomicJson(reportPath, report);
     recoveryReportCommitted = true;
-    if (suite === "full" && failure === null && Object.values(report.gates).every(Boolean)) {
-      writeReviewPackets(results);
-    }
 
     const p95LatencyMs = percentile(
       results.map(({ streamingLatencyMs }) => streamingLatencyMs),
@@ -2845,38 +2843,58 @@ export function restoreRetainedChapter(
   if (hashJson(prospective) !== result.trace.stateAfterHash) {
     throw new Error("Retained chapter state-after hash does not match its accepted delta");
   }
-  const options = buildChapterChoiceOptions(prospective);
-  const frame = canonicalizeChapterFrameCandidate(prospective, {
-    optionIds: options.slice(0, 2).map(({ id }) => id),
-    title: "Restored live checkpoint",
-  });
-  if (!frame.ok) throw new Error("Retained chapter cannot build legal continuation choices");
-  const chapter: ChapterRecord = {
-    chapter: prospective.chapter,
-    choices: frame.data.choices,
-    estimatedCostUsd: result.costUsd,
-    id: `chapter-${String(prospective.chapter).padStart(3, "0")}`,
-    latencyMs: result.latencyMs,
-    narrativeAudit: result.audit,
-    playerAction: {
-      action: initialChoice.action,
-      actorId: result.povId,
-      description: initialChoice.description,
-      milestoneId: initialChoice.milestoneId,
-      source: "suggested",
-      stateVersion: before.version,
-    },
-    povCharacterId: result.povId,
-    prose: result.prose,
-    proseHash: result.audit.proseHash,
-    safeContextHash: hashJson(buildPovContext(prospective, result.povId)),
-    stateAfterVersion: prospective.version,
-    stateBeforeVersion: before.version,
-    terminal: prospective.terminal,
-    title: frame.data.title,
-    traceId: trace.runId,
-    usage: result.usage,
-  };
+  let chapter: ChapterRecord;
+  if (result.canonicalNarrativeInput !== undefined) {
+    const canonical = result.canonicalNarrativeInput;
+    if (
+      !isDeepStrictEqual(canonical.stateBefore, before) ||
+      !isDeepStrictEqual(canonical.stateAfter, prospective)
+    ) {
+      throw new Error("Retained chapter canonical states do not match authenticated state hashes");
+    }
+    chapter = ChapterRecordSchema.parse(canonical.chapterRecord);
+    if (
+      chapter.prose !== result.prose ||
+      chapter.proseHash !== result.audit.proseHash ||
+      chapter.povCharacterId !== result.povId ||
+      chapter.traceId !== trace.runId
+    ) {
+      throw new Error("Retained canonical chapter does not match authenticated result evidence");
+    }
+  } else {
+    const options = buildChapterChoiceOptions(prospective);
+    const frame = canonicalizeChapterFrameCandidate(prospective, {
+      optionIds: options.slice(0, 2).map(({ id }) => id),
+      title: "Restored live checkpoint",
+    });
+    if (!frame.ok) throw new Error("Retained chapter cannot build legal continuation choices");
+    chapter = {
+      chapter: prospective.chapter,
+      choices: frame.data.choices,
+      estimatedCostUsd: result.costUsd,
+      id: `chapter-${String(prospective.chapter).padStart(3, "0")}`,
+      latencyMs: result.latencyMs,
+      narrativeAudit: result.audit,
+      playerAction: {
+        action: initialChoice.action,
+        actorId: result.povId,
+        description: initialChoice.description,
+        milestoneId: initialChoice.milestoneId,
+        source: "suggested",
+        stateVersion: before.version,
+      },
+      povCharacterId: result.povId,
+      prose: result.prose,
+      proseHash: result.audit.proseHash,
+      safeContextHash: hashJson(buildPovContext(prospective, result.povId)),
+      stateAfterVersion: prospective.version,
+      stateBeforeVersion: before.version,
+      terminal: prospective.terminal,
+      title: frame.data.title,
+      traceId: trace.runId,
+      usage: result.usage,
+    };
+  }
   store.commitTurn({
     chapter,
     delta: trace.acceptedDelta,
@@ -3012,39 +3030,6 @@ function assertChapterResult(
   }
   if (!resultTraceCostMatches(result)) {
     throw new Error("Chapter cost does not match its trace attempts");
-  }
-}
-
-function writeReviewPackets(results: readonly LiveResult[]): void {
-  if (!hasExactFullMatrix(results)) {
-    throw new Error("Review packets require exact chapter 1 and 2 pairs for all six POVs");
-  }
-  mkdirSync(REVIEW_DIRECTORY, { recursive: true });
-  for (const povId of CHARACTER_IDS) {
-    const chapters = results
-      .filter((result) => result.povId === povId)
-      .sort((left, right) => left.chapter - right.chapter);
-    const body = [
-      `# POV Review Packet: ${povId}`,
-      "",
-      "Review status: pending human review.",
-      "",
-      "Dimensions: choice fulfillment, causality, POV voice, progression clarity, continuity, off-screen consequence, repetition.",
-      "",
-      ...chapters.flatMap((result) => [
-        `## Chapter ${result.chapter}`,
-        "",
-        `- Adapter: ${result.adapterMode}`,
-        `- Words: ${result.wordCount}`,
-        `- Cost: $${result.costUsd.toFixed(6)}`,
-        `- Latency: ${result.latencyMs} ms`,
-        `- Audit: ${JSON.stringify(result.audit.scores)}`,
-        "",
-        result.prose,
-        "",
-      ]),
-    ].join("\n");
-    writeFileSync(resolve(REVIEW_DIRECTORY, `${povId}.md`), `${body}\n`, "utf8");
   }
 }
 
@@ -3286,8 +3271,7 @@ export function assertRegisteredResumeCheckpoint(
   }
   for (const bridgeFile of registered.bridgeFiles) {
     const actualSha256 =
-      currentFileHashes?.[bridgeFile.path] ??
-      hashText(readFileSync(resolve(ROOT, bridgeFile.path), "utf8"));
+      currentFileHashes?.[bridgeFile.path] ?? hashFile(resolve(ROOT, bridgeFile.path));
     if (actualSha256 !== bridgeFile.sha256) {
       throw new Error(`Resume bridge file ${bridgeFile.path} does not match its audited hash`);
     }
@@ -3398,6 +3382,10 @@ function assertResultPayloadConsistency(result: LiveResult): void {
 
 function hashText(value: string): string {
   return createHash("sha256").update(value).digest("hex");
+}
+
+function hashFile(path: string): string {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
 function hashJson(value: unknown): string {

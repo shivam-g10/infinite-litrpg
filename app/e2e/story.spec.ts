@@ -19,13 +19,17 @@ const baseStory = {
         latencyMs: 4200,
         model: "gpt-5.6-luna",
         phase: "intent",
+        requestedServiceTier: "standard",
         responseId: "resp_intent",
+        serviceTier: "standard",
       },
       {
         latencyMs: 3800,
-        model: "gpt-5.6-terra",
+        model: "gpt-5.6-luna",
         phase: "narration",
+        requestedServiceTier: "standard",
         responseId: "resp_narration",
+        serviceTier: "standard",
       },
     ],
     delta: {
@@ -75,11 +79,11 @@ const baseStory = {
         phase: "Pending",
       },
     ],
-    promptVersion: "v1",
+    promptVersion: "1.4.11",
     rejected: [{ code: "CONFLICT_LOST", id: "intent-varek", reason: "Remote conflict deferred." }],
-    schemaVersion: "v1",
-    stateAfterHash: "9d7e2b4c6a1f8e3d",
-    stateBeforeHash: "2f1a9c7b8d3e4f6a",
+    schemaVersion: "1.1.0-runtime-candidates-5",
+    stateAfterHash: "9d7e2b4c6a1f8e3d".repeat(4),
+    stateBeforeHash: "2f1a9c7b8d3e4f6a".repeat(4),
   },
   latencyMs: 8400,
   pov: {
@@ -309,6 +313,33 @@ test("opens God Mode with intents, rejection, delta, usage, and trace", async ({
   await expect(page.getByRole("heading", { level: 1, name: "Canonical resolution" })).toBeVisible();
   await expect(page.getByRole("heading", { level: 1, name: "Trace" })).toBeVisible();
   await expect(page.locator(".trace-column").getByText("$0.0241")).toBeVisible();
+  await expect(page.locator(".trace-column").getByText("1.4.11", { exact: true })).toBeVisible();
+  await expect(
+    page.locator(".trace-column").getByText("1.1.0-runtime-candidates-5", { exact: true }),
+  ).toBeVisible();
+
+  const hashLayout = await page.locator(".trace-hashes > div").evaluateAll((rows) =>
+    rows.map((row) => {
+      const term = row.querySelector("dt")?.getBoundingClientRect();
+      const value = row.querySelector("dd")?.getBoundingClientRect();
+      const bounds = row.getBoundingClientRect();
+      return {
+        fits: Boolean(
+          term &&
+          value &&
+          term.right <= value.left + 1 &&
+          value.right <= bounds.right + 1 &&
+          row.scrollWidth <= row.clientWidth,
+        ),
+      };
+    }),
+  );
+  expect(hashLayout).toEqual([{ fits: true }, { fits: true }]);
+  const dimensions = await page.evaluate(() => ({
+    clientWidth: document.documentElement.clientWidth,
+    scrollWidth: document.documentElement.scrollWidth,
+  }));
+  expect(dimensions.scrollWidth).toBe(dimensions.clientWidth);
 });
 
 test("exposes Markdown and JSON export endpoints", async ({ page }) => {

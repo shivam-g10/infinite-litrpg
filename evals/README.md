@@ -77,8 +77,15 @@ If the recorded process is dead and the ledger has zero active provider reservat
 
 ### 6. Narrative Review
 
-- Human reviews choice fulfillment, causality, POV voice, progression clarity, continuity, off-screen consequence, and repetition.
+- Human scores choice fulfillment, character autonomy, POV safety, LitRPG mechanics, continuity, arc progress, and prose using `evals/RUBRIC.md`.
 - Reviewer agents may surface evidence. They cannot become sole release judge.
+- After one strict green version 9 full report, generate the authenticated six-packet set without network access:
+
+```powershell
+npm run evals:review-packets -- evals/reports/<final-report>.json
+```
+
+The command rejects partial reports, false gates, missing canonical evidence, and mixed tiers. It refuses to replace an existing packet directory unless `--force` is explicit. Generated-evidence hashes exclude the marked human-review block, so reviewers can fill scores and citations without breaking provenance. Use `--force` only before review or after preserving completed annotations.
 
 ### 7. Regression
 
