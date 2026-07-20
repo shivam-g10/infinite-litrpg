@@ -2,7 +2,7 @@
 
 - Updated: 2026-07-20
 - Layer: Release evaluation
-- Current phase: Phase 5 human-review remediation checkpoint
+- Current phase: Phase 5 selective-rerun authority gate
 - Repository: initialized on `main`
 - Remote: public `https://github.com/shivam-g10/infinite-litrpg`; current local build not pushed
 - Initial commit: `39b19a2` (`chore: scaffold agent workflow`)
@@ -26,11 +26,11 @@
 - ADR-016 has exact deterministic, service, and atomic-store regressions. Selective suffix recovery keeps seven accepted chapters, reruns five, and persists the rejected suffixes in report provenance.
 - Durable exposure is `$2.947446675`; headroom is `$0.052553325`. There is no run lock, active reservation, or uncertain reservation.
 - The five prior accepted results cost `$0.044674`, leaving `$0.007879325`; five full chapter ceilings exceed the global cap. The ledger will stop before overspend if retries consume that margin.
-- A corrected fail-closed paid resume attempt requires a clean registered checkpoint and new explicit user authority. Current-prompt native proof and user-owned release gates remain open.
+- Checkpoint `d4edd5a` is clean, registered, authenticated, and fresh-clone verified. A corrected fail-closed paid resume attempt requires new explicit user authority. Current-prompt native proof and user-owned release gates remain open.
 
 ## Next Action
 
-Finish non-live gates, register and commit the exact report bridge, then request authority for the selective five-chapter resume. Never rerun automatically.
+Get explicit user authority before running the registered selective five-chapter resume. Never rerun automatically.
 
 ## Evidence Log
 
@@ -159,5 +159,6 @@ Finish non-live gates, register and commit the exact report bridge, then request
 - 2026-07-20 six-POV human review: all six authenticated packets were scored against prose and reviewer-only canon. Maelin, Varek, and Nyra passed. Rowan chapter 2 spent mana that canon kept full; Elara chapter 1 entered Aurelis Capital while canon stopped on Capital Road; Lucan chapter 1 reversed the capital route and assigned his private coup plan to Varek. Rowan, Elara, and Lucan were rejected. The manifest validates as `human-reviewed-rejected`.
 - 2026-07-20 ADR-016 remediation: exact regressions fail before the fix and now pass at the deterministic narrative boundary, StoryService before audit, and StoryStore atomic commit. Narrow checks cover explicit health and mana snapshots, strong arrival beyond the accepted destination, departed-location route reversal, and reassignment of POV-owned facts. Legal route prose such as `onto Capital Road toward Aurelis Capital` remains accepted. Authenticated `--rerun-from` recovery retains seven results, discards exactly five rejected suffix chapters, preserves all 91 attempts and `$0.1363645`, and persists rerun provenance. The three rejected suffixes are `rowan-ashborn:2`, `elara-voss:1`, and `lucan-aurelis:1`.
 - 2026-07-20 remediation non-live gate: `npm run check` exited 0 in 33.2 seconds. Format, lint, strict typecheck, 238 tests across 17 files, all six offline gates with 1,000 simulations and chapter 351 blocked, production build, 17 E2E passes with one intentional desktop skip, both security scans, and 526 licenses passed. `npm audit --audit-level=low`, `git diff --check`, exact report parsing, packet validation, and the no-network selective-resume probe exited 0. Five prior accepted result costs total `$0.044674`, only `$0.007879325` below headroom; five full chapter ceilings project `$3.159446675`, so a retrying paid run may stop safely before completion.
+- 2026-07-20 narrated-canon clean checkpoint: commit `d4edd5a` (`fix(story): reject narrated canon drift`) contains ADR-016, runtime and atomic-store guards, selective rerun provenance, exact regressions, the six completed review packets, and the version 9 report checkpoint. Post-commit authentication proved source SHA `ded7b00` ancestry, all 23 changed paths, 17 raw-byte bridge hashes, seven retained results, exactly five discarded suffix results, all 91 retained attempts, and the `human-reviewed-rejected` manifest. `npm run verify:clean-clone` exited 0 in 51.7 seconds after a fresh install with zero vulnerabilities, 238 tests, all offline evals, production build, 17 E2E passes with one intentional skip, both security scans, and 526 licenses green. Read-only ledger inspection found version 2, 72 known Flex reservations, zero lock, zero active or uncertain reservation, exact exposure `$2.947446675`, and headroom `$0.052553325`. No generation ran after the authorized complete matrix.
 
 Add exact command, date, exit code, cost, and report path after every future milestone gate.
