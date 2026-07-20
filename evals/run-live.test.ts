@@ -29,6 +29,7 @@ import {
   LegacyLiveReportSchema,
   LiveReportSchema,
   NarrativeCandidateEvidenceSchema,
+  RENARRATION_AUDIT_REASONING_EFFORT,
   Version6LiveReportSchema,
   Version7LiveReportSchema,
   Version8LiveReportSchema,
@@ -71,6 +72,10 @@ const REQUIREMENTS: ResumeRequirements = {
 const STANDARD_REQUIREMENTS: ResumeRequirements = { ...REQUIREMENTS, serviceTier: "standard" };
 
 describe("live report version 9", () => {
+  it("uses no reasoning for budgeted re-narration audits", () => {
+    expect(RENARRATION_AUDIT_REASONING_EFFORT).toBe("none");
+  });
+
   it("keeps the submitted Rowan trace strict and internally totaled", () => {
     const raw = JSON.parse(
       readFileSync(join(process.cwd(), "docs", "evidence", "rowan-chapter-1-trace.json"), "utf8"),

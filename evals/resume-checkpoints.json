@@ -340,6 +340,23 @@
       "reportVersion": 9,
       "serviceTier": "flex",
       "sourceGitSha": "98564305d3a037f40bd1afdac06627990a4c664d"
+    },
+    {
+      "adapterMode": "sequential",
+      "bridgeFiles": [
+        {
+          "path": "evals/run-live.ts",
+          "sha256": "42d78e4186ca0c7b8f24a792a138168c921f66f9a456b7b0bb65c1ff53168a20"
+        }
+      ],
+      "chapterCostCapUsd": 0.0135,
+      "id": "prompt-1-4-11-flex-renarration-partial-1",
+      "priorSpendUsd": 2.811082175,
+      "promptVersion": "1.4.11",
+      "reportSha256": "9a67f509cd4aaca04e60bdeb02ff5a5473858d5916275ffe5832f2f4859095f5",
+      "reportVersion": 9,
+      "serviceTier": "flex",
+      "sourceGitSha": "ad140b23d4917f96562d919c32f7563c72f3b018"
     }
   ],
   "version": 2

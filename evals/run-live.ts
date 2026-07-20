@@ -70,6 +70,7 @@ const REPORT_VERSION = 9;
 const MONEY_EPSILON_USD = 0.000_000_1;
 const MAX_RESUME_BRIDGE_FILES = 30;
 const MAX_RESUME_CHANGED_PATHS = 50;
+export const RENARRATION_AUDIT_REASONING_EFFORT = "none" as const;
 const RESUME_NON_RUNTIME_PATHS = new Set([
   "app/src/server/openai/stable.test.ts",
   "app/src/server/story/story-service.test.ts",
@@ -2916,7 +2917,7 @@ async function main(): Promise<void> {
             const store = new StoryStore();
             try {
               const service = new StoryService(store, client, {
-                auditReasoningEffort: "low",
+                auditReasoningEffort: RENARRATION_AUDIT_REASONING_EFFORT,
                 costHooks,
                 maxBackgroundAgents: 0,
                 maxCostUsdPerChapter: perChapterCapUsd,
