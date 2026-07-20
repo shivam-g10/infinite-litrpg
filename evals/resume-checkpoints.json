@@ -55,6 +55,17 @@
       "reportSha256": "08c37ef8f4c7c9b3b7c6e7a9cc0382350a3aa0eee2dbdbe73abfd6330ca60f82",
       "reportVersion": 6,
       "sourceGitSha": "e07983ca62b9ba9d67c5f89b8bafdd7d91874ed9"
+    },
+    {
+      "adapterMode": "sequential",
+      "bridgeFiles": [],
+      "chapterCostCapUsd": 0.0424,
+      "id": "prompt-1-4-9-elara-pair-v7",
+      "priorSpendUsd": 2.49105695,
+      "promptVersion": "1.4.9",
+      "reportSha256": "ccd1c9cd70a459e892810fd7dcf5cb353c90986cd227135d69eee751878ce063",
+      "reportVersion": 7,
+      "sourceGitSha": "fc182c4c84639e2524c372d6f47a2c53496daeb7"
     }
   ],
   "version": 2

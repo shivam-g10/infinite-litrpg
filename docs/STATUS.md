@@ -2,7 +2,7 @@
 
 - Updated: 2026-07-20
 - Layer: Release evaluation
-- Current phase: Phase 5 report version 7 durable prefix resume under verification
+- Current phase: Phase 5 prompt `1.4.9` baseline freeze before behavior change
 - Repository: initialized on `main`
 - Remote: `git@github.com:shivam-g10/infinite-litrpg.git`
 - Initial commit: `39b19a2` (`chore: scaffold agent workflow`)
@@ -21,12 +21,12 @@
 
 ## Current Blockers
 
-- The final twelve-cycle sequential report has not passed on prompt `1.4.9`; Rowan chapters 1 and 2 plus Elara chapter 1 are valid. Nine chapters remain.
-- Report version 7 and its durable ledger must pass every non-live gate and be committed before another paid call.
+- The final twelve-cycle sequential report has not passed on prompt `1.4.9`; both Rowan and Elara chapter pairs are valid baseline evidence but will not count toward the changed release route.
+- Conservative generation headroom is `$0.264857025`, or `$0.02207141875` for each of twelve fresh chapters. No paid call is allowed until prompt `1.4.10`, non-live gates, and a clean committed checkpoint pass.
 
 ## Next Action
 
-Finish non-live verification and commit report version 7. Then resume the exact archived version 6 artifact with prior spend `$2.49105695` and chapter cap `$0.0424`. The durable ledger opens at `$2.6656366` exposure and blocks every request that cannot fit below `$3`.
+Register and commit the exact version 7 artifact. Then build prompt `1.4.10` test-first: Luna narration, lossless compact background/frame context, a shorter target, and bounded 800-word recovery. Run every non-live gate and commit before folding exposure into a fresh twelve-chapter live chain.
 
 ## Evidence Log
 
@@ -110,5 +110,9 @@ Finish non-live verification and commit report version 7. Then resume the exact 
 - 2026-07-20 interruption review: explicit stale takeover now requires the exact old run ID, a dead recorded PID, and zero active reservations in one immediate transaction. It never mutates exposure. A live owner, wrong ID, active request, or source report omitting settled exposure fails closed. A fresh live chain can fold only the exact durable total into prior spend.
 - 2026-07-20 real-artifact probe: strict version 6 parsing and the version 2 checkpoint registry accepted report SHA-256 `08c37ef8f4c7c9b3b7c6e7a9cc0382350a3aa0eee2dbdbe73abfd6330ca60f82`. Four runtime bridge hashes matched. Resume retained `rowan-ashborn:1`, `rowan-ashborn:2`, and `elara-voss:1`; pending POVs are Elara, Maelin, Varek, Lucan, and Nyra. Replaying Elara's accepted delta restored chapter 1, world version 2, and the exact authenticated state-after hash. Zero API calls ran.
 - 2026-07-20 report version 7 full non-live gate: `npm run check` and `npm audit` exited 0. Vitest passed 141 tests across 14 files. All six offline gates passed with 14 invariant cases, 12 POV attacks, 1,000 simulations, 35 clock transitions, chapter 350 terminal, and chapter 351 blocked. Production build, 17 E2E tests with one intentional desktop skip, secret scan across 154 working files plus ignored reports and Git history, client-bundle scan, 526 package licenses, and zero-vulnerability audit passed with no lint warnings. Independent read-only review found no remaining accounting, prefix-restore, provenance, or recovery blocker.
+- 2026-07-20 report version 7 checkpoint commit: `git commit -m "fix(evals): persist global live budget"` exited 0 and created `fc182c4`. The exact version 6 report, four bridge hashes, 15 changed-path allowlist, three retained chapters, and nine pending chapters verified from the clean commit. `npm run verify:clean-clone` exited 0 in 49.6 seconds with 141 tests, all offline evals, build, 17 E2E passes and one intentional skip, security, 526 licenses, and zero vulnerabilities green.
+- 2026-07-20 prompt `1.4.9` version 7 resume command `npm run evals:live:full -- --prior-spend-usd 2.49105695 --chapter-cap-usd 0.0424 --resume-report evals/reports/live-full-sequential-prompt-1.4.9-resume-1.json` exited 1 after four of twelve chapters. It retained three chapters and committed Elara chapter 2 at 1,003 words, `$0.03873475`, 30,084 ms, exact replay, approved audit, and empty leak list. Maelin chapter 1 used three background agents and a frame, then Terra returned an 812-word draft for `$0.019341875`; the 900-word gate rejected it. A full Terra retry required about `$0.027162` with `$0.011628` left under the chapter cap. New run exposure was `$0.069506375`; all attempts total `$0.244086025`; cumulative conservative exposure is `$2.735142975`; headroom is `$0.264857025`. Archived report: `evals/reports/live-full-sequential-prompt-1.4.9-resume-2.json`, SHA-256 `ccd1c9cd70a459e892810fd7dcf5cb353c90986cd227135d69eee751878ce063`.
+- 2026-07-20 durable-ledger audit after the version 7 run: baseline nano-USD is `174579650`; eleven new reservations are all settled known at `69506375`; uncertain exposure is zero; run lock is absent. The ledger total exactly equals the archived report. No exposure was reclaimed.
+- 2026-07-20 prompt-input baseline before behavior change: seed background-agent instructions measured 5,162 to 5,572 bytes each. Total agent bytes were 5,425 for Rowan, 16,159 for Elara, 16,474 for Maelin, 16,428 for Varek, 16,064 for Lucan, and 5,431 for Nyra. Frame prompts measured 5,387 to 5,821 bytes. Routing the four valid narration usages through Luna would average `$0.0223287875` per chapter; twelve such chapters cost `$0.26794545`, already `$0.003088425` above remaining headroom. Fresh current-route proof therefore requires lossless prompt compaction before another paid call.
 
 Add exact command, date, exit code, cost, and report path after every future milestone gate.
