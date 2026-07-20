@@ -320,6 +320,10 @@
           "sha256": "27474bb9089ac8108232b3ca7d48414643f22d35382bf4375357b649671d1411"
         },
         {
+          "path": "scripts/seed-demo-evidence.ts",
+          "sha256": "4184c2c369aced6af9b892079f83da2bd1c1ba81f27ada37b3461742a784728a"
+        },
+        {
           "path": "shared/src/engine/narrative.test.ts",
           "sha256": "9bd1d01766b4912fa8659b2dd5ab52254a3404b1979d4dab02ca1db58ca23c02"
         },

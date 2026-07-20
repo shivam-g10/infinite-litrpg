@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { resolve } from "node:path";
 
 import {
   CONTRACT_VERSION,
@@ -16,9 +17,16 @@ import { describe, expect, it } from "vitest";
 
 import { StoryService } from "../app/src/server/story/story-service";
 import { StoryStore } from "../app/src/server/storage/story-store";
+import { defaultDemoReportPath } from "../scripts/seed-demo-evidence";
 import { restoreRetainedChapter, type LiveResult } from "./run-live";
 
 describe("retained chapter state restore", () => {
+  it("defaults the provider-free demo to the current settled receipt", () => {
+    expect(defaultDemoReportPath("C:\\repo")).toBe(
+      resolve("C:\\repo", "evals", "reports", "live-full-sequential-settled-1.json"),
+    );
+  });
+
   it("authenticates and restores a chapter 1 prefix without model work", () => {
     const store = new StoryStore();
     try {

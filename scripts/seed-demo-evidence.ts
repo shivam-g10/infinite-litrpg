@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
 import type OpenAI from "openai";
@@ -17,15 +18,13 @@ const ROOT = process.cwd();
 const DATA_DIRECTORY = resolve(ROOT, "data");
 const FINAL_DATABASE = resolve(DATA_DIRECTORY, "ashen-crown.db");
 const TEMPORARY_DATABASE = resolve(DATA_DIRECTORY, `ashen-crown.seed.${process.pid}.db`);
-const DEFAULT_REPORT = resolve(
-  ROOT,
-  "evals",
-  "reports",
-  "live-full-sequential-prompt-1.4.11-flex-1.json",
-);
+
+export function defaultDemoReportPath(root = ROOT): string {
+  return resolve(root, "evals", "reports", "live-full-sequential-settled-1.json");
+}
 
 function main(): void {
-  const reportPath = process.argv[2] ? resolve(process.argv[2]) : DEFAULT_REPORT;
+  const reportPath = process.argv[2] ? resolve(process.argv[2]) : defaultDemoReportPath();
   const finalFiles = [FINAL_DATABASE, `${FINAL_DATABASE}-shm`, `${FINAL_DATABASE}-wal`];
   if (finalFiles.some((path) => existsSync(path))) {
     throw new Error("Existing app database found. Preserve it; demo seed refuses to overwrite");
@@ -90,9 +89,11 @@ function main(): void {
   }
 }
 
-try {
-  main();
-} catch (error) {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
+if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try {
+    main();
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
 }
