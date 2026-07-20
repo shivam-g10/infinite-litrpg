@@ -8,6 +8,7 @@ import {
   IntentIdSchema,
   ItemIdSchema,
   LocationIdSchema,
+  PersistedPromptVersionSchema,
   PROMPT_VERSION,
   ShortTextSchema,
   SkillIdSchema,
@@ -103,6 +104,10 @@ export const WorldIntentSchema = z
   })
   .strict();
 
+export const PersistedWorldIntentSchema = WorldIntentSchema.extend({
+  promptVersion: PersistedPromptVersionSchema,
+}).strict();
+
 export const IntentBatchSchema = z
   .object({
     intents: z.array(WorldIntentSchema).max(3),
@@ -135,4 +140,5 @@ export const PlayerActionSchema = z
 
 export type IntentAction = z.infer<typeof IntentActionSchema>;
 export type PlayerAction = z.infer<typeof PlayerActionSchema>;
+export type PersistedWorldIntent = z.infer<typeof PersistedWorldIntentSchema>;
 export type WorldIntent = z.infer<typeof WorldIntentSchema>;

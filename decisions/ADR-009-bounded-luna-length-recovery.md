@@ -1,6 +1,6 @@
 # ADR-009 Bounded Luna Length Recovery
 
-- Status: Accepted
+- Status: Superseded by ADR-012
 - Date: 2026-07-19
 
 ## Context

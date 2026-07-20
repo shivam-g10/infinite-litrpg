@@ -149,10 +149,14 @@ describe("StoryService", () => {
     expect(calls).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ model: "gpt-5.6-luna", phase: "intent" }),
-        expect.objectContaining({ model: "gpt-5.6-terra", phase: "narration" }),
+        expect.objectContaining({ model: "gpt-5.6-luna", phase: "narration" }),
         expect.objectContaining({ model: "gpt-5.6-luna", phase: "audit" }),
       ]),
     );
+    expect(stream.mock.calls.map(([body]) => (body as { model?: string }).model)).toEqual([
+      "gpt-5.6-luna",
+      "gpt-5.6-luna",
+    ]);
     expect(calls[1]?.retries).toBe(1);
     const duplicate = await service.takeTurn(command);
     expect(duplicate.world).toMatchObject({ chapter: 1, version: 2 });
@@ -274,10 +278,10 @@ describe("StoryService", () => {
     store.close();
   });
 
-  it("repairs an 848-word draft with three background agents under the release cap", async () => {
+  it("repairs an 812-word draft with three background agents under the release cap", async () => {
     const store = new StoryStore();
-    const rawProse = Array.from({ length: 848 }, () => "ember").join(" ");
-    const continuation = Array.from({ length: 52 }, () => "cinder").join(" ");
+    const rawProse = Array.from({ length: 812 }, () => "ember").join(" ");
+    const continuation = Array.from({ length: 88 }, () => "cinder").join(" ");
     const prose = `${rawProse} ${continuation}`;
     const proseHash = createHash("sha256").update(prose).digest("hex");
     const actorIds = ["lucan-aurelis", "maelin-rook", "nyra-vale"] as const;
@@ -375,11 +379,7 @@ describe("StoryService", () => {
     expect(result.chapter.prose).toBe(prose);
     expect(parse).toHaveBeenCalledTimes(7);
     expect(stream).toHaveBeenCalledTimes(2);
-    expect(count).toHaveBeenCalledTimes(2);
-    expect(count.mock.calls.map(([body]) => (body as { model: string }).model)).toEqual([
-      "gpt-5.6-terra",
-      "gpt-5.6-luna",
-    ]);
+    expect(count).not.toHaveBeenCalled();
     expect(replayed.join("")).toBe(prose);
     const calls = result.godMode.calls as readonly {
       agentId: string | null;
@@ -391,6 +391,7 @@ describe("StoryService", () => {
     );
     expect(calls).toEqual(
       expect.arrayContaining([
+        expect.objectContaining({ model: "gpt-5.6-luna", phase: "narration" }),
         expect.objectContaining({ model: "gpt-5.6-luna", phase: "recovery" }),
         expect.objectContaining({ model: "gpt-5.6-luna", phase: "audit" }),
       ]),
@@ -639,7 +640,9 @@ describe("StoryService", () => {
 
     expect(parse).toHaveBeenCalledTimes(3);
     for (const [request] of parse.mock.calls) {
-      const structuredRequest = request as { text?: { format?: { name?: string } } } | undefined;
+      const structuredRequest = request as
+        { model?: string; text?: { format?: { name?: string } } } | undefined;
+      expect(structuredRequest?.model).toBe("gpt-5.6-terra");
       expect(structuredRequest?.text?.format?.name).toBe("player_action");
     }
     expect(stream).not.toHaveBeenCalled();

@@ -1,6 +1,6 @@
 # ADR-003 GPT-5.6 Routing
 
-- Status: Superseded in part by ADR-008
+- Status: Superseded in part by ADR-008 and ADR-012
 - Date: 2026-07-19
 
 ## Decision

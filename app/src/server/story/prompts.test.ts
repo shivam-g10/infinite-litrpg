@@ -5,7 +5,9 @@ import {
   CHARACTER_IDS,
   CONTRACT_VERSION,
   PROMPT_VERSION,
+  buildPovContext,
   validateWorldState,
+  type PovContext,
   type WorldDelta,
   type WorldState,
 } from "@infinite-litrpg/shared";
@@ -17,6 +19,7 @@ import {
   buildAuditPrompt,
   buildChapterFramePrompt,
   buildCustomActionPrompt,
+  buildLunaAgentInputs,
   buildNarrationPrompt,
   buildNarrationRecoveryPrompt,
   MAX_NARRATION_RECOVERY_PROMPT_BYTES,
@@ -26,6 +29,39 @@ import {
 const ROWAN_IDENTITY_PROSE = `Rowan knew he was Malachar reincarnated. ${"Ash ".repeat(894)}`;
 
 describe("background actor selection", () => {
+  it("versions and losslessly compacts every live agent and frame prompt", () => {
+    expect(PROMPT_VERSION).toBe("1.4.10");
+
+    for (const povId of CHARACTER_IDS) {
+      const state = seed();
+      state.lockedPovId = povId;
+      const world = expectedCompactPublicWorld(state);
+      const actors = selectBackgroundActors(state);
+      const agentInputs = buildLunaAgentInputs(state, actors);
+
+      expect(agentInputs).toHaveLength(actors.length);
+      for (const [index, input] of agentInputs.entries()) {
+        const actor = actors[index];
+        if (!actor) throw new Error("Selected actor disappeared");
+        const payload = JSON.parse(input.instructions.split("\n").at(-1) ?? "null") as Record<
+          string,
+          unknown
+        >;
+        expect(payload.viewpoint).toEqual(
+          expectedCompleteCompactPov(buildPovContext(state, actor.id)),
+        );
+        expect(payload.world).toEqual(world);
+        expect(new TextEncoder().encode(input.instructions).byteLength).toBeLessThanOrEqual(4_600);
+      }
+
+      const frameText = buildChapterFramePrompt(state);
+      const frame = JSON.parse(frameText) as Record<string, unknown>;
+      expect(frame.viewpoint).toEqual(expectedCompleteCompactPov(buildPovContext(state, povId)));
+      expect(frame.world).toEqual(world);
+      expect(new TextEncoder().encode(frameText).byteLength).toBeLessThanOrEqual(4_800);
+    }
+  });
+
   it("selects relevant actors only and never fills empty slots", () => {
     const state = seed();
     state.lockedPovId = "rowan-ashborn";
@@ -88,6 +124,7 @@ describe("background actor selection", () => {
     expect(JSON.stringify(prompt)).toContain("No durable fact beyond the whitelist");
     expect(JSON.stringify(prompt)).toContain("a background intent is never a viewpoint action");
     expect(prompt.instruction).toContain("the exhaustive whitelist");
+    expect(prompt.instruction).toContain("900 to 925 words");
     expect(prompt.instruction).toContain("requires one exact whitelist field");
     expect(JSON.stringify(prompt)).not.toContain("Malachar contained the Void beneath his throne");
     expect(JSON.stringify(prompt)).not.toContain("malachar-contained-the-void");
@@ -525,24 +562,115 @@ describe("background actor selection", () => {
     }
   });
 
-  it("bounds a tail-only 848-word narration recovery request", () => {
-    const prose = Array.from({ length: 848 }, (_, index) => `ember${index}`).join(" ");
+  it("bounds a tail-only 800-word narration recovery request", () => {
+    const prose = Array.from({ length: 800 }, (_, index) => `ember${index}`).join(" ");
     const recovery = buildNarrationRecoveryPrompt(prose);
     const requestBytes = new TextEncoder().encode(
       `${recovery.instructions}\n${recovery.input}\n`,
     ).byteLength;
 
-    expect(recovery.minimumAdditionalWords).toBe(52);
-    expect(recovery.maximumAdditionalWords).toBe(67);
+    expect(recovery.minimumAdditionalWords).toBe(100);
+    expect(recovery.maximumAdditionalWords).toBe(115);
+    expect(recovery.maxOutputTokens).toBe(230);
     expect(requestBytes).toBeLessThanOrEqual(MAX_NARRATION_RECOVERY_PROMPT_BYTES);
-    expect(estimateMaximumRequestCostUsd("gpt-5.6-luna", requestBytes, 140)).toBeLessThanOrEqual(
-      0.00298,
-    );
+    expect(
+      estimateMaximumRequestCostUsd("gpt-5.6-luna", requestBytes, recovery.maxOutputTokens),
+    ).toBeLessThanOrEqual(0.00355);
     expect(recovery.input).not.toContain("ember0");
-    expect(recovery.input).toContain("ember847");
-    expect(() => buildNarrationRecoveryPrompt("ember ".repeat(839))).toThrow("840 and 899");
+    expect(recovery.input).toContain("ember799");
+    expect(() => buildNarrationRecoveryPrompt("ember ".repeat(799))).toThrow("800 and 899");
   });
 });
+
+function expectedCompleteCompactPov(context: PovContext): Record<string, unknown> {
+  const character = context.povCharacter;
+  return {
+    factsByIdAsCertaintyClaimChapterOwnerSourceVisibility: Object.fromEntries(
+      context.facts.map(
+        ({ certainty, claim, discoveredChapter, id, ownerCharacterId, source, visibility }) => [
+          id,
+          [certainty, claim, discoveredChapter, ownerCharacterId, source, visibility],
+        ],
+      ),
+    ),
+    observedEventsByIdAsLocationObserversParticipantsSummaryVisibility: Object.fromEntries(
+      context.observedEvents.map(
+        ({ id, locationId, observerIds, participantIds, summary, visibility }) => [
+          id,
+          [locationId, observerIds, participantIds, summary, visibility],
+        ],
+      ),
+    ),
+    povCharacter: {
+      beliefs: character.beliefs,
+      classAsIdName: [character.characterClassId, character.characterClassName],
+      conditions: character.conditions,
+      equipmentItemIds: character.equipmentItemIds,
+      experience: character.experience,
+      factionId: character.factionId,
+      goals: character.goals,
+      healthAsCurrentMaximum: [character.health.current, character.health.maximum],
+      identityAsIdNameRolePublicRole: [
+        character.id,
+        character.name,
+        character.role,
+        character.publicRole,
+      ],
+      inventoryAsItemIdNameQuantityEquippedUnique: character.inventory.map(
+        ({ equipped, itemId, name, quantity, unique }) => [
+          itemId,
+          name,
+          quantity,
+          equipped,
+          unique,
+        ],
+      ),
+      level: character.level,
+      locationId: character.locationId,
+      manaAsCurrentMaximum: [character.mana.current, character.mana.maximum],
+      plan: character.plan,
+      relationshipsAsCharacterIdLabelScore: character.relationships.map(
+        ({ characterId, label, score }) => [characterId, label, score],
+      ),
+      secretFactIds: character.secretFactIds,
+      skillsAsIdNameRankManaCostMinimumLevelPrerequisitesRequiredClass: character.skills.map(
+        ({ id, manaCost, minimumLevel, name, prerequisiteSkillIds, rank, requiredClassId }) => [
+          id,
+          name,
+          rank,
+          manaCost,
+          minimumLevel,
+          prerequisiteSkillIds,
+          requiredClassId,
+        ],
+      ),
+      stats: character.stats,
+      status: character.status,
+    },
+    publicCharacterNamesById: Object.fromEntries(
+      context.publicCharacters.map(({ id, name }) => [id, name]),
+    ),
+  };
+}
+
+function expectedCompactPublicWorld(state: WorldState): Record<string, unknown> {
+  return {
+    act: state.act,
+    calendarAsDayLabel: [state.calendar.day, state.calendar.label],
+    chapter: state.chapter,
+    factionsByIdAsNameGoal: Object.fromEntries(
+      state.factions.map(({ id, name, publicGoal }) => [id, [name, publicGoal]]),
+    ),
+    locationsByIdAsNameDescriptionAdjacentIds: Object.fromEntries(
+      state.locations.map(({ adjacentLocationIds, id, name, publicDescription }) => [
+        id,
+        [name, publicDescription, adjacentLocationIds],
+      ]),
+    ),
+    threat: state.threat,
+    version: state.version,
+  };
+}
 
 function emptyDelta(state: WorldState): WorldDelta {
   return {

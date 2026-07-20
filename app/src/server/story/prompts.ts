@@ -44,16 +44,16 @@ export function buildLunaAgentInputs(
   return actors.map((actor) => ({
     actorId: actor.id,
     instructions: [
-      "You are one background character in Ashen Crown. Emit intent only. Never mutate canon.",
-      "Use only this character's knowledge. Unknown private facts do not exist for you.",
-      `Return exactly one strict WorldIntent for actor ${actor.id}.`,
+      "Ashen Crown background character. Emit intent only. Never mutate canon.",
+      "Use only supplied knowledge. Unknown private facts do not exist.",
+      `Return one strict WorldIntent for ${actor.id}.`,
       JSON.stringify({
         contractVersion: CONTRACT_VERSION,
         promptVersion: PROMPT_VERSION,
         stateVersion: state.version,
         legalActionTargets: legalActionTargets(state, actor.id),
-        world: publicWorldContext(state),
-        viewpoint: buildPovContext(state, actor.id),
+        world: compactPublicWorldContext(state),
+        viewpoint: compactCompletePovContext(state, actor.id),
       }),
     ].join("\n"),
   }));
@@ -112,12 +112,12 @@ export function buildChapterFramePrompt(state: WorldState): string {
   if (state.lockedPovId === null) throw new Error("POV must be locked");
   return JSON.stringify({
     instruction:
-      "Return a short chapter title and rank up to two supplied option IDs. Use only option IDs listed below. Never reveal hidden facts. Application code owns terminal state, actions, choice IDs, descriptions, and milestone targets.",
+      "Return a short title and rank at most two listed option IDs. Never reveal hidden facts. Application code owns terminal state, actions, IDs, descriptions, and targets.",
     options: buildChapterChoiceOptions(state).map(({ description, id }) => ({ description, id })),
     stateVersion: state.version,
     terminal: state.terminal,
-    viewpoint: buildPovContext(state, state.lockedPovId),
-    world: publicWorldContext(state),
+    viewpoint: compactCompletePovContext(state, state.lockedPovId),
+    world: compactPublicWorldContext(state),
   });
 }
 
@@ -141,7 +141,7 @@ export function buildNarrationPrompt(
       "No time beyond calendar. No durable fact beyond the whitelist. Sensory texture adds no canon. Never combine identity, threat, location, plan, belief, goal, history, names, or themes into an unlisted relationship, cause, mechanism, or memory.",
     ],
     instruction:
-      "Write only complete close-third chapter prose, 975 to 1000 words. Never stop before 975; stop before 1050. Valid range is 900 to 1300. Dramatize exactly playerAction and currentEffects. currentEffects and visibleEvents happen now; afterCanon includes their results; beforeValues are prior and must be compared for a new change. Show only supplied LitRPG changes. afterCanon, visibleEvents, currentEffects, and world are the exhaustive whitelist. Every world field is public canon and may be restated or paraphrased. POV-private afterCanon may appear internally in close third; reader access is not an in-world disclosure, but never reveal it to another character without an allowed currentEffects knowledge mutation or visibleEvent. Avoid character-sheet recap or repeated identity exposition; mention allowed identity, stats, skills, and inventory only when scene-relevant. Any relationship between people, threats, places, events, or history requires one exact whitelist field. Never infer causes, mechanisms, relationships, consequences, or remembered history from identities, plans, beliefs, goals, shared terms, or facts. Build depth only with immediate sensory texture, supplied beliefs, goals, and facts at face value. Append no choices or notes.",
+      "Write only complete close-third chapter prose, 900 to 925 words. Never stop before 900; stop before 950. Valid range is 900 to 1300. Dramatize exactly playerAction and currentEffects. currentEffects and visibleEvents happen now; afterCanon includes their results; beforeValues are prior and must be compared for a new change. Show only supplied LitRPG changes. afterCanon, visibleEvents, currentEffects, and world are the exhaustive whitelist. Every world field is public canon and may be restated or paraphrased. POV-private afterCanon may appear internally in close third; reader access is not an in-world disclosure, but never reveal it to another character without an allowed currentEffects knowledge mutation or visibleEvent. Avoid character-sheet recap or repeated identity exposition; mention allowed identity, stats, skills, and inventory only when scene-relevant. Any relationship between people, threats, places, events, or history requires one exact whitelist field. Never infer causes, mechanisms, relationships, consequences, or remembered history from identities, plans, beliefs, goals, shared terms, or facts. Build depth only with immediate sensory texture, supplied beliefs, goals, and facts at face value. Append no choices or notes.",
     playerAction: compactPlayerAction(playerAction),
     stateTransition: {
       actAfter: prospective.act,
@@ -161,17 +161,19 @@ export const NARRATION_RECOVERY_INSTRUCTIONS = "Return continuation only.";
 export interface NarrationRecoveryPrompt {
   readonly input: string;
   readonly instructions: string;
+  readonly maxOutputTokens: number;
   readonly maximumAdditionalWords: number;
   readonly minimumAdditionalWords: number;
 }
 
 export function buildNarrationRecoveryPrompt(prose: string): NarrationRecoveryPrompt {
   const words = prose.trim().split(/\s+/u).filter(Boolean);
-  if (words.length < 840 || words.length > 899) {
-    throw new Error("Narration recovery requires a draft between 840 and 899 words");
+  if (words.length < 800 || words.length > 899) {
+    throw new Error("Narration recovery requires a draft between 800 and 899 words");
   }
   const minimumAdditionalWords = 900 - words.length;
   const maximumAdditionalWords = 915 - words.length;
+  const maxOutputTokens = Math.min(230, maximumAdditionalWords * 2);
   let excerptWords = words.slice(-120);
   const serialize = () =>
     JSON.stringify({
@@ -195,6 +197,7 @@ export function buildNarrationRecoveryPrompt(prose: string): NarrationRecoveryPr
   return {
     input,
     instructions: NARRATION_RECOVERY_INSTRUCTIONS,
+    maxOutputTokens,
     maximumAdditionalWords,
     minimumAdditionalWords,
   };
@@ -429,6 +432,78 @@ function compactPovContext(state: WorldState, povId: string, excludedEventIds = 
   };
 }
 
+function compactCompletePovContext(state: WorldState, povId: string) {
+  const context = buildPovContext(state, povId);
+  const character = context.povCharacter;
+  return {
+    factsByIdAsCertaintyClaimChapterOwnerSourceVisibility: Object.fromEntries(
+      context.facts.map(
+        ({ certainty, claim, discoveredChapter, id, ownerCharacterId, source, visibility }) => [
+          id,
+          [certainty, claim, discoveredChapter, ownerCharacterId, source, visibility],
+        ],
+      ),
+    ),
+    observedEventsByIdAsLocationObserversParticipantsSummaryVisibility: Object.fromEntries(
+      context.observedEvents.map(
+        ({ id, locationId, observerIds, participantIds, summary, visibility }) => [
+          id,
+          [locationId, observerIds, participantIds, summary, visibility],
+        ],
+      ),
+    ),
+    povCharacter: {
+      beliefs: character.beliefs,
+      classAsIdName: [character.characterClassId, character.characterClassName],
+      conditions: character.conditions,
+      equipmentItemIds: character.equipmentItemIds,
+      experience: character.experience,
+      factionId: character.factionId,
+      goals: character.goals,
+      healthAsCurrentMaximum: [character.health.current, character.health.maximum],
+      identityAsIdNameRolePublicRole: [
+        character.id,
+        character.name,
+        character.role,
+        character.publicRole,
+      ],
+      inventoryAsItemIdNameQuantityEquippedUnique: character.inventory.map(
+        ({ equipped, itemId, name, quantity, unique }) => [
+          itemId,
+          name,
+          quantity,
+          equipped,
+          unique,
+        ],
+      ),
+      level: character.level,
+      locationId: character.locationId,
+      manaAsCurrentMaximum: [character.mana.current, character.mana.maximum],
+      plan: character.plan,
+      relationshipsAsCharacterIdLabelScore: character.relationships.map(
+        ({ characterId, label, score }) => [characterId, label, score],
+      ),
+      secretFactIds: character.secretFactIds,
+      skillsAsIdNameRankManaCostMinimumLevelPrerequisitesRequiredClass: character.skills.map(
+        ({ id, manaCost, minimumLevel, name, prerequisiteSkillIds, rank, requiredClassId }) => [
+          id,
+          name,
+          rank,
+          manaCost,
+          minimumLevel,
+          prerequisiteSkillIds,
+          requiredClassId,
+        ],
+      ),
+      stats: character.stats,
+      status: character.status,
+    },
+    publicCharacterNamesById: Object.fromEntries(
+      context.publicCharacters.map(({ id, name }) => [id, name]),
+    ),
+  };
+}
+
 function currentEventIds(delta: WorldDelta): Set<string> {
   return new Set(delta.events.map(({ id }) => id));
 }
@@ -608,6 +683,25 @@ function publicWorldContext(state: WorldState) {
     chapter: state.chapter,
     factions: state.factions,
     locations: state.locations,
+    threat: state.threat,
+    version: state.version,
+  };
+}
+
+function compactPublicWorldContext(state: WorldState) {
+  return {
+    act: state.act,
+    calendarAsDayLabel: [state.calendar.day, state.calendar.label],
+    chapter: state.chapter,
+    factionsByIdAsNameGoal: Object.fromEntries(
+      state.factions.map(({ id, name, publicGoal }) => [id, [name, publicGoal]]),
+    ),
+    locationsByIdAsNameDescriptionAdjacentIds: Object.fromEntries(
+      state.locations.map(({ adjacentLocationIds, id, name, publicDescription }) => [
+        id,
+        [name, publicDescription, adjacentLocationIds],
+      ]),
+    ),
     threat: state.threat,
     version: state.version,
   };

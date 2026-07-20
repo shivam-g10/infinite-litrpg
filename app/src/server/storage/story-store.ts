@@ -6,6 +6,8 @@ import {
   ChapterRecordSchema,
   FailedTurnTraceSchema,
   KnowledgeMutationSchema,
+  PersistedTraceEnvelopeSchema,
+  PersistedWorldDeltaSchema,
   TraceEnvelopeSchema,
   WorldDeltaSchema,
   WorldStateSchema,
@@ -14,6 +16,8 @@ import {
   validateWorldState,
   type ChapterRecord,
   type FailedTurnTrace,
+  type PersistedTraceEnvelope,
+  type PersistedWorldDelta,
   type TraceEnvelope,
   type WorldDelta,
   type WorldState,
@@ -155,7 +159,7 @@ export class StoryStore {
     return row ? WorldStateSchema.parse(parseJson(row.json)) : null;
   }
 
-  loadDelta(worldId: string, resultingWorldVersion: number): WorldDelta | null {
+  loadDelta(worldId: string, resultingWorldVersion: number): PersistedWorldDelta | null {
     const row = this.db
       .prepare<[string, number], JsonRow>(
         `SELECT delta_json AS json
@@ -164,7 +168,7 @@ export class StoryStore {
       )
       .get(worldId, resultingWorldVersion);
 
-    return row ? WorldDeltaSchema.parse(parseJson(row.json)) : null;
+    return row ? PersistedWorldDeltaSchema.parse(parseJson(row.json)) : null;
   }
 
   loadChapter(worldId: string, chapter: number): ChapterRecord | null {
@@ -198,12 +202,12 @@ export class StoryStore {
     return row ? ChapterRecordSchema.parse(parseJson(row.json)) : null;
   }
 
-  loadTrace(traceId: string): TraceEnvelope | null {
+  loadTrace(traceId: string): PersistedTraceEnvelope | null {
     const row = this.db
       .prepare<[string], JsonRow>("SELECT trace_json AS json FROM traces WHERE trace_id = ?")
       .get(traceId);
 
-    return row ? TraceEnvelopeSchema.parse(parseJson(row.json)) : null;
+    return row ? PersistedTraceEnvelopeSchema.parse(parseJson(row.json)) : null;
   }
 
   loadFailedTurnTraces(worldId: string): FailedTurnTrace[] {

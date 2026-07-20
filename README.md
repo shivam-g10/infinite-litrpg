@@ -52,7 +52,7 @@ flowchart LR
     R --> S["Prospective state"]
     S --> O["Luna title and option ranking"]
     O --> F["App-owned legal choices"]
-    S --> T["Terra POV chapter"]
+    S --> T["Luna POV chapter"]
     K["POV-safe knowledge"] --> T
     T --> X["Bounded Luna length recovery when needed"]
     X --> A
@@ -68,11 +68,11 @@ See [architecture](docs/ARCHITECTURE.md), [domain model](docs/DOMAIN_MODEL.md), 
 
 ## Model roles
 
-| Work                                                       | Model           |
-| ---------------------------------------------------------- | --------------- |
-| World genesis, hard recovery, finale                       | `gpt-5.6-sol`   |
-| Custom-action translation and narration                    | `gpt-5.6-terra` |
-| Background intents, option ranking, length recovery, audit | `gpt-5.6-luna`  |
+| Work                                                           | Model           |
+| -------------------------------------------------------------- | --------------- |
+| World genesis, hard recovery, finale                           | `gpt-5.6-sol`   |
+| Custom-action translation                                      | `gpt-5.6-terra` |
+| Background intents, option ranking, narration, recovery, audit | `gpt-5.6-luna`  |
 
 Only the OpenAI Responses API is used.
 

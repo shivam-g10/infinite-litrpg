@@ -10,6 +10,7 @@ import { config } from "dotenv";
 import {
   CHARACTER_IDS,
   NarrativeAuditSchema,
+  PersistedTraceEnvelopeSchema,
   PROMPT_VERSION,
   RuntimeAttemptTraceSchema,
   TraceEnvelopeSchema,
@@ -160,7 +161,7 @@ export const LiveResultSchema = z
     streamChunkCount: z.number().int().min(1),
     streamingLatencyMs: z.number().int().min(0),
     streamReconstructed: z.boolean(),
-    trace: TraceEnvelopeSchema,
+    trace: PersistedTraceEnvelopeSchema,
     usage: UsageSchema,
     wordCount: z.number().int().min(900).max(1_300),
   })
@@ -1100,7 +1101,8 @@ export function restoreRetainedChapter(
   if (hashJson(before) !== result.trace.stateBeforeHash) {
     throw new Error("Retained chapter state-before hash does not match the seed fixture");
   }
-  const playerIntent = result.trace.intents.find(
+  const trace = TraceEnvelopeSchema.parse(result.trace);
+  const playerIntent = trace.intents.find(
     ({ actorId, id }) => actorId === result.povId && id.startsWith("intent-player-"),
   );
   if (
@@ -1110,7 +1112,7 @@ export function restoreRetainedChapter(
   ) {
     throw new Error("Retained chapter player intent does not match the live protocol choice");
   }
-  const staged = stageWorldDelta(before, result.trace.intents, result.trace.acceptedDelta);
+  const staged = stageWorldDelta(before, trace.intents, trace.acceptedDelta);
   if (!staged.ok) throw new Error("Retained chapter delta cannot restage from the seed fixture");
   const prospective = staged.data.state;
   if (hashJson(prospective) !== result.trace.stateAfterHash) {
@@ -1145,14 +1147,14 @@ export function restoreRetainedChapter(
     stateBeforeVersion: before.version,
     terminal: prospective.terminal,
     title: frame.data.title,
-    traceId: result.trace.runId,
+    traceId: trace.runId,
     usage: result.usage,
   };
   store.commitTurn({
     chapter,
-    delta: result.trace.acceptedDelta,
+    delta: trace.acceptedDelta,
     state: prospective,
-    trace: result.trace,
+    trace,
   });
   const restored = store.loadWorldState("ashen-crown-v1");
   if (!restored || hashJson(restored) !== result.trace.stateAfterHash) {

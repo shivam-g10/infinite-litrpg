@@ -2,7 +2,7 @@
 
 - Updated: 2026-07-20
 - Layer: Release evaluation
-- Current phase: Phase 5 prompt `1.4.9` baseline freeze before behavior change
+- Current phase: Phase 5 prompt `1.4.10` clean checkpoint commit
 - Repository: initialized on `main`
 - Remote: `git@github.com:shivam-g10/infinite-litrpg.git`
 - Initial commit: `39b19a2` (`chore: scaffold agent workflow`)
@@ -21,12 +21,12 @@
 
 ## Current Blockers
 
-- The final twelve-cycle sequential report has not passed on prompt `1.4.9`; both Rowan and Elara chapter pairs are valid baseline evidence but will not count toward the changed release route.
-- Conservative generation headroom is `$0.264857025`, or `$0.02207141875` for each of twelve fresh chapters. No paid call is allowed until prompt `1.4.10`, non-live gates, and a clean committed checkpoint pass.
+- The fresh twelve-cycle sequential prompt `1.4.10` report has not run. Prompt `1.4.9` Rowan and Elara pairs remain baseline evidence only.
+- Conservative generation headroom is `$0.264857025`, or `$0.02207141875` for each of twelve fresh chapters. No paid call is allowed until every prompt `1.4.10` non-live gate and a clean committed checkpoint pass.
 
 ## Next Action
 
-Register and commit the exact version 7 artifact. Then build prompt `1.4.10` test-first: Luna narration, lossless compact background/frame context, a shorter target, and bounded 800-word recovery. Run every non-live gate and commit before folding exposure into a fresh twelve-chapter live chain.
+Commit prompt `1.4.10`. Then fold exact exposure into a fresh twelve-chapter live chain with prior spend `$2.735142975` and chapter cap `$0.0424`.
 
 ## Evidence Log
 
@@ -114,5 +114,9 @@ Register and commit the exact version 7 artifact. Then build prompt `1.4.10` tes
 - 2026-07-20 prompt `1.4.9` version 7 resume command `npm run evals:live:full -- --prior-spend-usd 2.49105695 --chapter-cap-usd 0.0424 --resume-report evals/reports/live-full-sequential-prompt-1.4.9-resume-1.json` exited 1 after four of twelve chapters. It retained three chapters and committed Elara chapter 2 at 1,003 words, `$0.03873475`, 30,084 ms, exact replay, approved audit, and empty leak list. Maelin chapter 1 used three background agents and a frame, then Terra returned an 812-word draft for `$0.019341875`; the 900-word gate rejected it. A full Terra retry required about `$0.027162` with `$0.011628` left under the chapter cap. New run exposure was `$0.069506375`; all attempts total `$0.244086025`; cumulative conservative exposure is `$2.735142975`; headroom is `$0.264857025`. Archived report: `evals/reports/live-full-sequential-prompt-1.4.9-resume-2.json`, SHA-256 `ccd1c9cd70a459e892810fd7dcf5cb353c90986cd227135d69eee751878ce063`.
 - 2026-07-20 durable-ledger audit after the version 7 run: baseline nano-USD is `174579650`; eleven new reservations are all settled known at `69506375`; uncertain exposure is zero; run lock is absent. The ledger total exactly equals the archived report. No exposure was reclaimed.
 - 2026-07-20 prompt-input baseline before behavior change: seed background-agent instructions measured 5,162 to 5,572 bytes each. Total agent bytes were 5,425 for Rowan, 16,159 for Elara, 16,474 for Maelin, 16,428 for Varek, 16,064 for Lucan, and 5,431 for Nyra. Frame prompts measured 5,387 to 5,821 bytes. Routing the four valid narration usages through Luna would average `$0.0223287875` per chapter; twelve such chapters cost `$0.26794545`, already `$0.003088425` above remaining headroom. Fresh current-route proof therefore requires lossless prompt compaction before another paid call.
+- 2026-07-20 baseline freeze: exact version 7 report parsing, 37 attempts, four results, cumulative `$2.735142975`, report SHA-256 `ccd1c9cd70a459e892810fd7dcf5cb353c90986cd227135d69eee751878ce063`, and zero bridge files verified. Focused resume tests and strict typecheck passed. Commit `35f5076` registered the artifact before any AI behavior changed.
+- 2026-07-20 prompt `1.4.10` test-first slice: five new or changed routing, prompt, recovery, and cost assertions failed against `1.4.9` before implementation. Luna now owns primary narration while Terra remains the custom-action translator. Narration targets 900–925 words. A sole 800–899-word failure receives one tail-only Luna recovery capped at 1,200 bytes and at most 230 output tokens. The three-agent 812-word regression commits under `$0.0405`, reruns deterministic validation and full audit, records Luna narration and recovery, hashes only final prose, and exactly replays it. The first full non-live run passed 142 tests, every offline gate, build, E2E, security, licensing, and audit.
+- 2026-07-20 prompt `1.4.10` independent review then found two P1 defects: the compact background context omitted provenance, visibility, skill metadata, and secret IDs; the version literal made registered prompt `1.4.9` traces unreadable. Complete six-POV equality now covers every selected-POV and public-world field. Seed agent instructions are 4,083–4,374 bytes and frames 4,293–4,608 bytes. Current writes remain strict `1.4.10`; persisted reads accept only `1.4.9` or `1.4.10` with identical top-level and nested versions. Focused storage and live-report regressions pass. The exact registered version 7 artifact parses with 37 attempts, four results, cumulative `$2.735142975`, zero bridge files, and SHA-256 `ccd1c9cd70a459e892810fd7dcf5cb353c90986cd227135d69eee751878ce063`; current resume rejects it for prompt mismatch.
+- 2026-07-20 prompt `1.4.10` corrected full non-live gate: `npm run check` and `npm audit` exited 0. Format, lint, strict typecheck, 144 tests across 14 files, all six offline gates with 1,000 simulations and chapter 351 blocked, production build, 17 E2E passes with one intentional desktop skip, secret scan across 159 working files plus ignored reports and Git history, client-bundle scan, 526 package licenses, and zero vulnerabilities passed. Independent evaluation reran 57 focused tests, typecheck, offline evals, the six-POV byte probe, and the exact version 7 artifact probe. Final read-only review found no blocker.
 
 Add exact command, date, exit code, cost, and report path after every future milestone gate.

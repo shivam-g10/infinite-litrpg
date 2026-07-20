@@ -1,6 +1,6 @@
 # ADR-008 Luna Chapter Frames
 
-- Status: Accepted
+- Status: Superseded in part by ADR-012 for chapter narration
 - Date: 2026-07-19
 - Supersedes: ADR-003 for chapter-frame generation only
 

@@ -2,7 +2,9 @@ import { z } from "zod";
 
 export const CONTRACT_VERSION = "1.1.0" as const;
 export const FIXTURE_VERSION = "1.1.0" as const;
-export const PROMPT_VERSION = "1.4.9" as const;
+export const PROMPT_VERSION = "1.4.10" as const;
+export const PERSISTED_PROMPT_VERSIONS = ["1.4.9", PROMPT_VERSION] as const;
+export const PersistedPromptVersionSchema = z.enum(PERSISTED_PROMPT_VERSIONS);
 
 export const IdSchema = z
   .string()
@@ -26,3 +28,4 @@ export const ShortTextSchema = z.string().trim().min(1).max(240);
 export const HashSchema = z.string().regex(/^[a-f0-9]{64}$/u);
 
 export type ActNumber = z.infer<typeof ActNumberSchema>;
+export type PersistedPromptVersion = z.infer<typeof PersistedPromptVersionSchema>;

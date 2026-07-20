@@ -60,6 +60,7 @@ import {
 } from "./prompts";
 
 const WORLD_ID = "ashen-crown-v1";
+export const CHAPTER_NARRATION_MODEL = "gpt-5.6-luna" as const;
 
 export interface StoryServiceOptions {
   readonly costHooks?: RuntimeCostHooks;
@@ -380,7 +381,7 @@ export class StoryService {
                   chunkCharacters: 512,
                   input: recoveryPrompt.input,
                   instructions: recoveryPrompt.instructions,
-                  maxOutputTokens: 140,
+                  maxOutputTokens: recoveryPrompt.maxOutputTokens,
                   model: "gpt-5.6-luna",
                   policy: { ...policy, maxRetries: 0 },
                   reasoningEffort: "none",
@@ -402,7 +403,7 @@ export class StoryService {
           }
           if (!draft.ok) {
             const safeIssueCodes = [...new Set(draft.issues.map(({ code }) => code))].sort();
-            retryDirective = `The prior draft failed deterministic validation with issue codes: ${safeIssueCodes.join(", ")}. Write 975 to 1000 words. Remove every unsupported fact or action. Never repeat prior text that is absent from the supplied POV canon.`;
+            retryDirective = `The prior draft failed deterministic validation with issue codes: ${safeIssueCodes.join(", ")}. Write 900 to 925 words. Remove every unsupported fact or action. Never repeat prior text that is absent from the supplied POV canon.`;
             return { accepted: false, reason: formatIssues(draft.issues) };
           }
           const proseHash = hashText(auditedProse);
@@ -469,11 +470,11 @@ export class StoryService {
         instructions:
           "Write close-third Ashen Crown prose. Obey the supplied canon whitelist exactly.",
         maxOutputTokens: 1_400,
-        model: "gpt-5.6-terra",
+        model: CHAPTER_NARRATION_MODEL,
         policy,
         reasoningEffort: "none",
       });
-      calls.push(toModelCall(narration, "gpt-5.6-terra", "narration", null));
+      calls.push(toModelCall(narration, CHAPTER_NARRATION_MODEL, "narration", null));
       calls.push(
         ...recoveryCalls.map((call) => toModelCall(call, "gpt-5.6-luna", "recovery", null)),
       );
@@ -883,7 +884,7 @@ function countWords(value: string): number {
 function canRecoverShortNarration(prose: string, issues: readonly ValidationIssue[]): boolean {
   const words = countWords(prose);
   return (
-    words >= 840 &&
+    words >= 800 &&
     words <= 899 &&
     issues.length === 1 &&
     issues[0]?.code === "INVALID_SCHEMA" &&

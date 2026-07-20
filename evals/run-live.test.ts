@@ -7,7 +7,9 @@ import {
   CHARACTER_IDS,
   CONTRACT_VERSION,
   NARRATIVE_AUDIT_DIMENSIONS,
+  PersistedTraceEnvelopeSchema,
   PROMPT_VERSION,
+  TraceEnvelopeSchema,
 } from "@infinite-litrpg/shared";
 import { describe, expect, it } from "vitest";
 
@@ -65,6 +67,54 @@ describe("live report version 7", () => {
     expect(Version6LiveReportSchema.safeParse(version6).success).toBe(true);
     expect(LegacyLiveReportSchema.safeParse({ ...version6, version: 5 }).success).toBe(true);
     expect(LiveReportSchema.safeParse({ ...candidate, version: 4 }).success).toBe(false);
+  });
+
+  it("reads authenticated 1.4.9 traces without weakening current writes", () => {
+    const result = historicalResult(fakeResult("rowan-ashborn", 1, 0.01));
+    const candidate = {
+      ...emptyReportData(),
+      attempts: result.trace.attempts,
+      budgetLedger: {
+        activeReservationCount: 0,
+        baselineAttemptCostUsd: 0,
+        headroomUsd: 0.99,
+        knownReservationCostUsd: 0.01,
+        priorSpendUsd: REQUIREMENTS.priorSpendUsd,
+        sourceReportSha256: `fresh:${GIT_SHA}`,
+        totalCapUsd: 3,
+        totalExposureUsd: 2.01,
+        uncertainReservationCostUsd: 0,
+      },
+      completedChapters: 1,
+      cumulativeCostUsd: 2.01,
+      promptVersion: "1.4.9",
+      resultChapterCaps: [
+        { capUsd: REQUIREMENTS.chapterCostCapUsd, chapter: 1, povId: "rowan-ashborn" },
+      ],
+      results: [result],
+      totalCostUsd: 0.01,
+    };
+
+    expect(TraceEnvelopeSchema.safeParse(result.trace).success).toBe(false);
+    expect(PersistedTraceEnvelopeSchema.safeParse(result.trace).success).toBe(true);
+    expect(LiveReportSchema.safeParse(candidate).success).toBe(true);
+    expect(
+      LiveReportSchema.safeParse({
+        ...candidate,
+        results: [
+          {
+            ...result,
+            trace: {
+              ...result.trace,
+              acceptedDelta: {
+                ...result.trace.acceptedDelta,
+                promptVersion: PROMPT_VERSION,
+              },
+            },
+          },
+        ],
+      }).success,
+    ).toBe(false);
   });
 
   it("retains contiguous chapter prefixes while preserving every old attempt and rejection", () => {
@@ -580,4 +630,28 @@ function fakeResult(
     usage,
     wordCount: 900,
   } as unknown as LiveResult;
+}
+
+function historicalResult(result: LiveResult): LiveResult {
+  return {
+    ...result,
+    trace: {
+      ...result.trace,
+      acceptedDelta: { ...result.trace.acceptedDelta, promptVersion: "1.4.9" },
+      intents: [
+        {
+          action: { type: "wait" },
+          actorId: result.povId,
+          contractVersion: CONTRACT_VERSION,
+          expectedEffect: "Hold position without changing canon.",
+          goal: "Observe the immediate area.",
+          id: `intent-player-historical-${result.chapter}`,
+          prerequisites: { requiredFactIds: [], requiredItemIds: [], requiredSkillIds: [] },
+          promptVersion: "1.4.9",
+          stateVersion: 1,
+        },
+      ],
+      promptVersion: "1.4.9",
+    },
+  };
 }

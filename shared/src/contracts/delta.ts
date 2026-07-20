@@ -11,6 +11,7 @@ import {
   IntentIdSchema,
   ItemIdSchema,
   LocationIdSchema,
+  PersistedPromptVersionSchema,
   PROMPT_VERSION,
   ShortTextSchema,
   WorldVersionSchema,
@@ -205,8 +206,13 @@ export const WorldDeltaSchema = z
   })
   .strict();
 
+export const PersistedWorldDeltaSchema = WorldDeltaSchema.extend({
+  promptVersion: PersistedPromptVersionSchema,
+}).strict();
+
 export type ClockDelta = z.infer<typeof ClockDeltaSchema>;
 export type KnowledgeMutation = z.infer<typeof KnowledgeMutationSchema>;
+export type PersistedWorldDelta = z.infer<typeof PersistedWorldDeltaSchema>;
 export type RejectionCode = z.infer<typeof RejectionCodeSchema>;
 export type ResolvedEvent = z.infer<typeof ResolvedEventSchema>;
 export type StateMutation = z.infer<typeof StateMutationSchema>;

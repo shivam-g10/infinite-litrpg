@@ -51,7 +51,7 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 ### Phase 5: Narrative Loop
 
 - [x] Implement two valid choices plus custom action.
-- [x] Implement POV-safe Terra narration and audited NDJSON replay.
+- [x] Implement POV-safe Luna narration and audited NDJSON replay.
 - [x] Implement chapter fact audit that can reject prose but cannot create canon.
 - [ ] Pass twelve full live chapter cycles.
 - [ ] Pass zero-leak checks across six POVs.
@@ -131,6 +131,7 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 - Durable recovery now distinguishes safe and unsafe interruption. A dead process with zero active reservations can transfer its exact run lock, then must reconcile the source report before any call. An active reservation remains an external stop. All live suites share the ledger; a fresh chain can start only by folding the exact durable total into its new prior spend.
 - The version 7 resume retained Rowan and Elara chapter 1, then committed Elara chapter 2 at `$0.03873475`. Maelin chapter 1 produced an 812-word draft after `$0.030771625` of intent, frame, and narration exposure. The strict 900-word gate rejected it; a full Terra retry could not fit the chapter. Four results are valid. Cumulative exposure is `$2.735142975`, leaving `$0.264857025` for eight chapters.
 - The prompt `1.4.9` seed-input baseline measured 5,162 to 5,572 bytes per background-agent instruction and 5,387 to 5,821 bytes per frame prompt. A fresh twelve-cycle Luna-narration counterfactual using the four valid phase costs is `$0.26794545`, which exceeds remaining headroom before accounting for the heavier three-agent POV mix. The next behavior slice must therefore retain every canon and audit gate while compacting lossless background/frame context and shortening the narration target. The archived Terra results remain baseline evidence but will not count toward the new release matrix.
+- ADR-012 introduces prompt `1.4.10`. Luna becomes the primary narrator while Terra remains the custom-action translator. Labeled maps and tuples preserve every background POV, provenance, visibility, skill, secret, and public-world value, reducing seed agent instructions to 4,083–4,374 bytes and frames to 4,293–4,608 bytes. Narration targets 900–925 words. Sole-failure recovery expands to 800–899 words with a dynamic maximum of 230 output tokens; merged prose still reruns the unchanged 900–1,300 gate and full audit. Current writes require `1.4.10`; persisted reads accept matching authenticated `1.4.9` records. A three-agent 812-word regression passes under `$0.0405` without token counting. The old four Terra chapters will not count toward the fresh release matrix.
 
 ## Decision Log
 
@@ -139,8 +140,8 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 - `World Director` is deterministic application code for MVP. Models emit intents and prose only; no model owns conflict resolution or canonical state.
 - `WorldState.chapter` means last committed chapter. Generation from 349 may create terminal chapter 350. Any request when current chapter is 350 is rejected before model access.
 - Validated narration uses buffer-audit-replay streaming. This trades first-token latency for zero exposure of rejected prose.
-- ADR-008 routes title and option ranking to Luna while application code owns the final chapter frame. Terra remains the custom-action translator and narrator. The full live eval still allows all three relevant background agents.
-- ADR-009 permits one bounded Luna continuation only for an otherwise-valid 840-to-899-word Terra draft. It does not weaken the absolute 900-to-1,300-word gate.
+- ADR-008 routes title and option ranking to Luna while application code owns the final chapter frame. ADR-012 moves narration to Luna; Terra remains the custom-action translator. The full live eval still allows all three relevant background agents.
+- ADR-012 permits one bounded Luna continuation only for an otherwise-valid 800-to-899-word draft. It does not weaken the absolute 900-to-1,300-word gate.
 - ADR-010 permits official input-token counting to narrow a byte reservation. Failed counting keeps the byte bound. Actual overrun aborts before commit with exact accounting.
 - Prompt `1.4.9` distinguishes reader access to selected-POV private canon from an in-world knowledge transfer. It does not auto-approve empty leak lists or weaken forbidden fact and remote-effect checks.
 - ADR-011 replaces pair-only live recovery and static suite rejection with authenticated prefix recovery plus durable request-level global reservations. Static projection stays visible but cannot reclaim or spend exposure.
@@ -152,4 +153,4 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 
 ## Current Milestone
 
-Phase 5 release eval: commit the exact prompt `1.4.9` version 7 baseline. Then introduce prompt `1.4.10`: Luna primary narration, lossless compact background/frame context, a 900-to-925-word target, and bounded recovery for otherwise-valid 800-to-899-word drafts. Fold exact `$2.735142975` exposure into a fresh ledger chain and run all twelve current-route chapters. Every request stays under the immutable `$3` global cap.
+Phase 5 release eval: commit the independently reviewed, fully green prompt `1.4.10` checkpoint. Then fold exact `$2.735142975` exposure into a fresh ledger chain and run all twelve Luna-narrated current-route chapters at a `$0.0424` chapter cap. Every request stays under the immutable `$3` global cap.

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 
 import {
   stageWorldDelta,
@@ -11,6 +12,7 @@ import {
   type TraceEnvelope,
   type WorldState,
 } from "@infinite-litrpg/shared";
+import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -54,6 +56,45 @@ describe("StoryStore atomic turn commit", () => {
       totalLatencyMs: turn.trace.totalLatencyMs,
       traceUsage: turn.trace.totalUsage,
     });
+  });
+
+  it("reads authenticated prompt 1.4.9 deltas and traces after a prompt upgrade", () => {
+    const directory = mkdtempSync(join(tmpdir(), "infinite-litrpg-store-"));
+    const filename = join(directory, "story.sqlite");
+    let store: StoryStore | null = null;
+
+    try {
+      store = new StoryStore(filename);
+      const initial = seedState();
+      const turn = makeTurn(initial);
+      store.createWorld(initial);
+      store.commitTurn(turn);
+      store.close();
+      store = null;
+
+      const historicalDelta = { ...turn.delta, promptVersion: "1.4.9" };
+      const historicalTrace = {
+        ...turn.trace,
+        acceptedDelta: historicalDelta,
+        intents: turn.trace.intents.map((intent) => ({ ...intent, promptVersion: "1.4.9" })),
+        promptVersion: "1.4.9",
+      };
+      const database = new Database(filename);
+      database
+        .prepare("UPDATE world_deltas SET delta_json = ? WHERE world_id = ?")
+        .run(JSON.stringify(historicalDelta), initial.id);
+      database
+        .prepare("UPDATE traces SET trace_json = ? WHERE trace_id = ?")
+        .run(JSON.stringify(historicalTrace), turn.trace.runId);
+      database.close();
+
+      store = new StoryStore(filename);
+      expect(store.loadDelta(initial.id, turn.state.version)).toEqual(historicalDelta);
+      expect(store.loadTrace(turn.trace.runId)).toEqual(historicalTrace);
+    } finally {
+      store?.close();
+      rmSync(directory, { force: true, recursive: true });
+    }
   });
 
   it("rejects a stale expected version without writing any turn artifact", () => {

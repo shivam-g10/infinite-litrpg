@@ -5,11 +5,13 @@ import {
   CONTRACT_VERSION,
   HashSchema,
   IdSchema,
+  PersistedPromptVersionSchema,
+  PROMPT_VERSION,
   ShortTextSchema,
   WorldVersionSchema,
 } from "./primitives";
-import { WorldDeltaSchema } from "./delta";
-import { WorldIntentSchema } from "./intent";
+import { PersistedWorldDeltaSchema, WorldDeltaSchema } from "./delta";
+import { PersistedWorldIntentSchema, WorldIntentSchema } from "./intent";
 
 export const RuntimeModelSchema = z.enum(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
 export const ReasoningEffortSchema = z.enum(["none", "low", "medium", "high", "xhigh", "max"]);
@@ -72,7 +74,7 @@ export const TraceEnvelopeSchema = z
     gitSha: z.string().regex(/^[a-f0-9]{7,40}$/u),
     intents: z.array(WorldIntentSchema).max(4),
     multiAgentOutputItems: z.array(z.record(z.string(), z.unknown())).max(100),
-    promptVersion: ShortTextSchema,
+    promptVersion: z.literal(PROMPT_VERSION),
     pricingVersion: ShortTextSchema,
     runId: z.string().uuid(),
     schemaVersion: ShortTextSchema,
@@ -85,6 +87,31 @@ export const TraceEnvelopeSchema = z
     validationFailures: z.array(ShortTextSchema).max(50),
   })
   .strict();
+
+export const PersistedTraceEnvelopeSchema = TraceEnvelopeSchema.extend({
+  acceptedDelta: PersistedWorldDeltaSchema,
+  intents: z.array(PersistedWorldIntentSchema).max(4),
+  promptVersion: PersistedPromptVersionSchema,
+})
+  .strict()
+  .superRefine((trace, context) => {
+    if (trace.acceptedDelta.promptVersion !== trace.promptVersion) {
+      context.addIssue({
+        code: "custom",
+        message: "Persisted delta prompt version does not match trace",
+        path: ["acceptedDelta", "promptVersion"],
+      });
+    }
+    for (const [index, intent] of trace.intents.entries()) {
+      if (intent.promptVersion !== trace.promptVersion) {
+        context.addIssue({
+          code: "custom",
+          message: "Persisted intent prompt version does not match trace",
+          path: ["intents", index, "promptVersion"],
+        });
+      }
+    }
+  });
 
 export const FailedTurnTraceSchema = z
   .object({
@@ -112,4 +139,5 @@ export const FailedTurnTraceSchema = z
 
 export type ModelCallTrace = z.infer<typeof ModelCallTraceSchema>;
 export type FailedTurnTrace = z.infer<typeof FailedTurnTraceSchema>;
+export type PersistedTraceEnvelope = z.infer<typeof PersistedTraceEnvelopeSchema>;
 export type TraceEnvelope = z.infer<typeof TraceEnvelopeSchema>;

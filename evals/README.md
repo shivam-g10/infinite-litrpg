@@ -24,8 +24,10 @@ A full run requires a clean committed worktree. A failed version 5, 6, or 7 run 
 Current HEAD must equal the source checkpoint or differ only in committed non-runtime tests and release documentation. A legacy bridge additionally requires the exact audited hashes of every changed runtime file. Every source report must match a full-file SHA-256 and metadata entry in tracked `evals/resume-checkpoints.json`. Inspect and register each failed report before another resume. Never auto-resume an unregistered artifact.
 
 ```powershell
-npm run evals:live:full -- --prior-spend-usd 2.49105695 --chapter-cap-usd 0.0424 --resume-report evals/reports/live-full-sequential-prompt-1.4.9-resume-1.json
+npm run evals:live:full -- --prior-spend-usd 2.735142975 --chapter-cap-usd 0.0424
 ```
+
+Prompt `1.4.10` intentionally starts a fresh twelve-cycle matrix after folding exact prior exposure into the ledger. Prompt `1.4.9` results remain registered baseline evidence; they do not count toward the changed narration route.
 
 Runner must load root `.env`, redact secrets, write reports under ignored `evals/reports/`, and return nonzero on gate failure.
 
