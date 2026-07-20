@@ -1,9 +1,9 @@
-import { PROMPT_VERSION, type WorldIntent } from "@infinite-litrpg/shared";
+import { PROMPT_VERSION, type BackgroundIntentCandidate } from "@infinite-litrpg/shared";
 import type {
   BetaResponse,
   BetaResponseOutputItem,
 } from "openai/resources/beta/responses/responses";
-import type { ParsedResponse, ResponseUsage } from "openai/resources/responses/responses";
+import type { Response, ResponseUsage } from "openai/resources/responses/responses";
 import { describe, expect, it, vi } from "vitest";
 
 import { OpenAIRuntimeError } from "./errors";
@@ -27,7 +27,7 @@ describe("Luna world-tick adapters", () => {
       type: "multi_agent_call",
     } as const;
     const rootMessage = messageItem(
-      JSON.stringify({ intents: [intent("actor-one", "intent-one")] }),
+      JSON.stringify({ intents: [{ c: "actor-one", ...intentCandidate() }] }),
       "root",
       "final_answer",
     );
@@ -37,26 +37,39 @@ describe("Luna world-tick adapters", () => {
     const result = await runLunaWorldTick(client({ create, parse }), request(true));
 
     expect(result.mode).toBe("native-multi-agent");
-    expect(result.batch.intents.map(({ actorId }) => actorId)).toEqual(["actor-one"]);
+    expect(result.batch.intents).toEqual([canonicalIntent("actor-one", "intent-background-1-1")]);
     expect(result.multiAgentOutputItems).toEqual([childMessage, callItem, rootMessage]);
     expect(parse).not.toHaveBeenCalled();
     expect(create).toHaveBeenCalledTimes(1);
     const body = create.mock.calls[0]?.[0] as {
       betas: string[];
+      max_output_tokens: number;
       model: string;
       multi_agent: { enabled: boolean; max_concurrent_subagents: number };
+      prompt_cache_options: { mode: string };
       text: { format: { name: string; strict: boolean; type: string } };
     };
     expect(body).toMatchObject({
       betas: ["responses_multi_agent=v1"],
+      max_output_tokens: 1_000,
       model: "gpt-5.6-luna",
       multi_agent: { enabled: true, max_concurrent_subagents: 3 },
+      prompt_cache_options: { mode: "explicit" },
     });
     expect(body.text.format).toMatchObject({
-      name: "intent_batch",
+      name: "background_intent_batch",
       strict: true,
       type: "json_schema",
     });
+    expect(JSON.stringify(body.text.format)).not.toContain("contractVersion");
+    expect(JSON.stringify(body.text.format)).not.toContain("promptVersion");
+    expect(JSON.stringify(body.text.format)).not.toContain("stateVersion");
+    expect(JSON.stringify(body.text.format)).not.toContain("prerequisites");
+    expect(JSON.stringify(body.text.format)).not.toContain("expectedEffect");
+    expect(JSON.stringify(body.text.format)).not.toContain('"goal"');
+    expect(JSON.stringify(body.text.format)).not.toContain("destinationId");
+    expect(JSON.stringify(body.text.format)).not.toContain("subjectId");
+    expect(JSON.stringify(body.text.format)).not.toMatch(/"items":\[/u);
   });
 
   it("extracts only root final text", () => {
@@ -71,7 +84,7 @@ describe("Luna world-tick adapters", () => {
   it("does not silently fall back when native capability is enabled", async () => {
     const failure = Object.assign(new Error("beta unavailable"), { status: 403 });
     const create = vi.fn().mockRejectedValue(failure);
-    const parse = vi.fn().mockResolvedValue(parsedIntent(intent("actor-one", "intent-one")));
+    const parse = vi.fn().mockResolvedValue(parsedIntentCandidate(intentCandidate()));
 
     await expectRuntimeError(
       runLunaWorldTick(client({ create, parse }), request(true)),
@@ -84,16 +97,20 @@ describe("Luna world-tick adapters", () => {
   it("runs explicit sequential fallback in order with same resolver input", async () => {
     const parse = vi
       .fn()
-      .mockResolvedValueOnce(parsedIntent(intent("actor-one", "intent-one")))
-      .mockResolvedValueOnce(parsedIntent(intent("actor-two", "intent-two")))
-      .mockResolvedValueOnce(parsedIntent(intent("actor-three", "intent-three")));
+      .mockResolvedValueOnce(parsedIntentCandidate(intentCandidate(), "resp_actor-one"))
+      .mockResolvedValueOnce(parsedIntentCandidate(intentCandidate(), "resp_actor-two"))
+      .mockResolvedValueOnce(parsedIntentCandidate(intentCandidate(), "resp_actor-three"));
     const create = vi.fn();
     const tickRequest = request(false, ["actor-one", "actor-two", "actor-three"]);
 
     const result = await runLunaWorldTick(client({ create, parse }), tickRequest);
 
     expect(result.mode).toBe("sequential");
-    expect(result.batch.intents).toHaveLength(3);
+    expect(result.batch.intents).toEqual([
+      canonicalIntent("actor-one", "intent-background-1-1"),
+      canonicalIntent("actor-two", "intent-background-1-2"),
+      canonicalIntent("actor-three", "intent-background-1-3"),
+    ]);
     expect(result.calls.map(({ agentId }) => agentId)).toEqual([
       "actor-one",
       "actor-two",
@@ -106,11 +123,31 @@ describe("Luna world-tick adapters", () => {
       "immutable resolver snapshot",
       "immutable resolver snapshot",
     ]);
+    expect(
+      parse.mock.calls.map(([body]) => (body as { max_output_tokens: number }).max_output_tokens),
+    ).toEqual([256, 256, 256]);
+    for (const [body] of parse.mock.calls) {
+      const format = (body as { text: { format: unknown } }).text.format;
+      expect(JSON.stringify(format)).not.toContain("actorId");
+      expect(JSON.stringify(format)).not.toContain("contractVersion");
+      expect(JSON.stringify(format)).not.toContain("promptVersion");
+      expect(JSON.stringify(format)).not.toContain("stateVersion");
+      expect(JSON.stringify(format)).not.toContain("prerequisites");
+      expect(JSON.stringify(format)).not.toMatch(/"items":\[/u);
+    }
   });
 
   it("identifies the sequential agent on a failed runtime attempt", async () => {
     const attempts: RuntimeAttempt[] = [];
-    const parse = vi.fn().mockResolvedValue(parsedIntent(intent("actor-two", "intent-wrong")));
+    const parse = vi.fn().mockResolvedValue(
+      parsedIntentCandidate(
+        {
+          ...intentCandidate(),
+          g: "",
+        },
+        "resp_invalid",
+      ),
+    );
     const tickRequest = request(false, ["actor-one"]);
     tickRequest.policy = {
       budget: new ChapterCostBudget(1),
@@ -126,7 +163,7 @@ describe("Luna world-tick adapters", () => {
       expect.objectContaining({
         agentId: "actor-one",
         errorCode: "INVALID_OUTPUT",
-        responseId: "resp_actor-two",
+        responseId: "resp_invalid",
       }),
     ]);
   });
@@ -174,18 +211,33 @@ function request(
     policy: { budget: new ChapterCostBudget(1), maxRetries: 0 },
     reasoningEffort: "none",
     resolverInput: "immutable resolver snapshot",
+    stateVersion: 1,
   };
 }
 
-function intent(actorId: string, id: string): WorldIntent {
+function intentCandidate(): BackgroundIntentCandidate {
   return {
-    action: { type: "wait" },
+    a: { t: "wait", v: [] },
+    e: "Observe quietly.",
+    g: "Survive.",
+    r: { f: [], i: [], s: [] },
+  };
+}
+
+function canonicalIntent(actorId: string, id: string) {
+  const candidate = intentCandidate();
+  return {
+    action: { type: candidate.a.t },
     actorId,
     contractVersion: "1.1.0",
-    expectedEffect: "Observe the current situation.",
-    goal: "Survive the chapter.",
+    expectedEffect: candidate.e,
+    goal: candidate.g,
     id,
-    prerequisites: { requiredFactIds: [], requiredItemIds: [], requiredSkillIds: [] },
+    prerequisites: {
+      requiredFactIds: [],
+      requiredItemIds: [],
+      requiredSkillIds: [],
+    },
     promptVersion: PROMPT_VERSION,
     stateVersion: 1,
   };
@@ -214,17 +266,19 @@ function betaResponse(output: readonly unknown[]): BetaResponse {
   } as unknown as BetaResponse;
 }
 
-function parsedIntent(value: WorldIntent): ParsedResponse<WorldIntent> {
+function parsedIntentCandidate(
+  value: ReturnType<typeof intentCandidate>,
+  responseId = "resp_candidate",
+): Response {
   return {
     error: null,
-    id: `resp_${value.actorId}`,
+    id: responseId,
     incomplete_details: null,
     output: [],
-    output_parsed: value,
     output_text: JSON.stringify(value),
     status: "completed",
     usage: openAIUsage(),
-  } as unknown as ParsedResponse<WorldIntent>;
+  } as unknown as Response;
 }
 
 function openAIUsage(): ResponseUsage {
@@ -240,7 +294,7 @@ function openAIUsage(): ResponseUsage {
 function client(methods: { create: unknown; parse: unknown }): LunaOpenAIClient {
   return {
     beta: { responses: { create: methods.create } },
-    responses: { parse: methods.parse },
+    responses: { create: methods.parse },
   } as unknown as LunaOpenAIClient;
 }
 

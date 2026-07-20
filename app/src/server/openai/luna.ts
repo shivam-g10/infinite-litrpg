@@ -1,8 +1,12 @@
 import {
+  BackgroundIntentBatchCandidateSchema,
+  BackgroundIntentCandidateSchema,
   IntentBatchSchema,
   IdSchema,
   ReasoningEffortSchema,
-  WorldIntentSchema,
+  WorldVersionSchema,
+  canonicalizeBackgroundIntentCandidate,
+  type AssignedBackgroundIntentCandidate,
   type WorldIntent,
 } from "@infinite-litrpg/shared";
 import type OpenAI from "openai";
@@ -17,12 +21,13 @@ import type { z } from "zod";
 import { OpenAIRuntimeError } from "./errors";
 import type { RuntimeReasoningEffort } from "./models";
 import { runRetriedRequest, type RuntimeCallResult, type RuntimePolicy } from "./policy";
-import { runStructuredResponse, type StableOpenAIClient } from "./stable";
+import { NO_PROMPT_CACHE_OPTIONS, runStructuredResponse, type StableOpenAIClient } from "./stable";
 import { estimateMaximumRequestCostUsd } from "./usage";
 
 const LUNA_MODEL = "gpt-5.6-luna" as const;
 const MULTI_AGENT_BETA = "responses_multi_agent=v1" as const;
 const MAX_BACKGROUND_AGENTS = 3;
+export const SEQUENTIAL_AGENT_MAX_OUTPUT_TOKENS = 256;
 
 export type IntentBatch = z.infer<typeof IntentBatchSchema>;
 export type NativeMultiAgentOutputItem = BetaResponseOutputItem;
@@ -47,6 +52,7 @@ export interface LunaWorldTickRequest {
   readonly reasoningEffort: Extract<RuntimeReasoningEffort, "none" | "low">;
   readonly resolverInput: string;
   readonly rootAgentName?: string;
+  readonly stateVersion: number;
 }
 
 export interface LunaCallSummary {
@@ -82,7 +88,10 @@ export async function runNativeLunaWorldTick(
 ): Promise<LunaWorldTickResult> {
   validateLunaRequest(request);
   const reasoningEffort = ReasoningEffortSchema.parse(request.reasoningEffort);
-  const schemaFormat = zodTextFormat(IntentBatchSchema, "intent_batch");
+  const schemaFormat = zodTextFormat(
+    BackgroundIntentBatchCandidateSchema,
+    "background_intent_batch",
+  );
   const multiAgentOutputItems: NativeMultiAgentOutputItem[] = [];
   const allowedActors = new Set(request.agents.map(({ actorId }) => actorId));
 
@@ -106,15 +115,41 @@ export async function runNativeLunaWorldTick(
           retryable: true,
         });
       }
-      const parsed = IntentBatchSchema.safeParse(raw);
+      const parsed = BackgroundIntentBatchCandidateSchema.safeParse(raw);
       if (!parsed.success) {
-        throw new OpenAIRuntimeError("INVALID_OUTPUT", "Luna root returned invalid intent batch", {
-          cause: parsed.error,
-          retryable: true,
-        });
+        throw new OpenAIRuntimeError(
+          "INVALID_OUTPUT",
+          "Luna root returned invalid background intent batch",
+          {
+            cause: parsed.error,
+            retryable: true,
+          },
+        );
       }
       assertAssignedActors(parsed.data.intents, allowedActors);
-      return { data: parsed.data, responseId: response.id };
+      const intents = request.agents.map(({ actorId }, index) => {
+        const assignedCandidate = parsed.data.intents.find((intent) => intent.c === actorId);
+        if (!assignedCandidate) {
+          throw new OpenAIRuntimeError(
+            "INVALID_OUTPUT",
+            `Luna root omitted assigned actor ${actorId}`,
+            { retryable: true },
+          );
+        }
+        const candidate = {
+          a: assignedCandidate.a,
+          e: assignedCandidate.e,
+          g: assignedCandidate.g,
+          r: assignedCandidate.r,
+        };
+        return canonicalizeBackgroundIntentCandidate(
+          candidate,
+          actorId,
+          request.stateVersion,
+          index + 1,
+        );
+      });
+      return { data: IntentBatchSchema.parse({ intents }), responseId: response.id };
     },
     getResponseId: (response) => response.id,
     getUsage: (response) => response.usage,
@@ -130,6 +165,7 @@ export async function runNativeLunaWorldTick(
             enabled: true,
             max_concurrent_subagents: MAX_BACKGROUND_AGENTS,
           },
+          prompt_cache_options: NO_PROMPT_CACHE_OPTIONS,
           reasoning: { effort: reasoningEffort },
           store: false,
           text: { format: schemaFormat },
@@ -143,6 +179,7 @@ export async function runNativeLunaWorldTick(
         `${request.coordinatorInstructions}\n${buildNativeCoordinatorInput(request.resolverInput, request.agents)}\n${JSON.stringify(schemaFormat)}`,
       ).byteLength,
       request.maxOutputTokens,
+      { inputBilling: "uncached" },
     ),
     policy: request.policy,
   });
@@ -161,39 +198,36 @@ export async function runSequentialLunaWorldTick(
 ): Promise<LunaWorldTickResult> {
   validateLunaRequest(request);
   const intents: WorldIntent[] = [];
-  const usedIntentIds = new Set<string>();
   const calls: LunaCallSummary[] = [];
 
-  for (const agent of request.agents) {
+  for (const [index, agent] of request.agents.entries()) {
     const call = await runStructuredResponse(client, {
       agentId: agent.actorId,
       input: request.resolverInput,
       instructions: agent.instructions,
-      maxOutputTokens: request.maxOutputTokens,
+      maxOutputTokens: Math.min(request.maxOutputTokens, SEQUENTIAL_AGENT_MAX_OUTPUT_TOKENS),
       model: LUNA_MODEL,
       policy: request.policy,
       reasoningEffort: request.reasoningEffort,
-      schema: WorldIntentSchema,
-      schemaName: "world_intent",
-      validate: (intent) => {
-        if (intent.actorId !== agent.actorId) {
-          throw new OpenAIRuntimeError(
-            "INVALID_OUTPUT",
-            `Luna agent ${agent.actorId} emitted intent for ${intent.actorId}`,
-            { retryable: true },
-          );
-        }
-        if (usedIntentIds.has(intent.id)) {
-          throw new OpenAIRuntimeError(
-            "INVALID_OUTPUT",
-            `Luna agent emitted duplicate intent id ${intent.id}`,
-            { retryable: true },
-          );
-        }
+      schema: BackgroundIntentCandidateSchema,
+      schemaName: "background_intent",
+      validate: (candidate) => {
+        canonicalizeBackgroundIntentCandidate(
+          candidate,
+          agent.actorId,
+          request.stateVersion,
+          index + 1,
+        );
       },
     });
-    intents.push(call.data);
-    usedIntentIds.add(call.data.id);
+    intents.push(
+      canonicalizeBackgroundIntentCandidate(
+        call.data,
+        agent.actorId,
+        request.stateVersion,
+        index + 1,
+      ),
+    );
     calls.push(toCallSummary(agent.actorId, call));
   }
 
@@ -276,26 +310,27 @@ function isRootAgent(message: BetaResponseOutputMessage, rootAgentName: string):
 }
 
 function assertAssignedActors(
-  intents: readonly WorldIntent[],
+  intents: readonly AssignedBackgroundIntentCandidate[],
   allowedActors: ReadonlySet<string>,
 ): void {
   const seenActors = new Set<string>();
   for (const intent of intents) {
-    if (!allowedActors.has(intent.actorId)) {
+    const actorId = intent.c;
+    if (!allowedActors.has(actorId)) {
       throw new OpenAIRuntimeError(
         "INVALID_OUTPUT",
-        `Luna root emitted intent for unassigned actor ${intent.actorId}`,
+        `Luna root emitted intent for unassigned actor ${actorId}`,
         { retryable: true },
       );
     }
-    if (seenActors.has(intent.actorId)) {
+    if (seenActors.has(actorId)) {
       throw new OpenAIRuntimeError(
         "INVALID_OUTPUT",
-        `Luna root emitted multiple intents for actor ${intent.actorId}`,
+        `Luna root emitted multiple intents for actor ${actorId}`,
         { retryable: true },
       );
     }
-    seenActors.add(intent.actorId);
+    seenActors.add(actorId);
   }
   if (seenActors.size !== allowedActors.size) {
     const missingActors = [...allowedActors].filter((actorId) => !seenActors.has(actorId));
@@ -339,6 +374,9 @@ function validateLunaRequest(request: LunaWorldTickRequest): void {
   }
   if (!Number.isInteger(request.maxOutputTokens) || request.maxOutputTokens < 1) {
     throw new OpenAIRuntimeError("INVALID_POLICY", "maxOutputTokens must be a positive integer");
+  }
+  if (!WorldVersionSchema.safeParse(request.stateVersion).success) {
+    throw new OpenAIRuntimeError("INVALID_POLICY", "Luna state version must be valid");
   }
   const actorIds = new Set<string>();
   for (const agent of request.agents) {

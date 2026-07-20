@@ -1,4 +1,4 @@
-import type { ParsedResponse, Response, ResponseUsage } from "openai/resources/responses/responses";
+import type { Response, ResponseUsage } from "openai/resources/responses/responses";
 import { z } from "zod";
 import { describe, expect, it, vi } from "vitest";
 
@@ -14,7 +14,7 @@ import {
 const ResultSchema = z.object({ answer: z.string() }).strict();
 
 describe("stable Responses adapter", () => {
-  it("calls responses.parse with zodTextFormat and returns accounted data", async () => {
+  it("calls raw responses.create with zodTextFormat and returns locally parsed data", async () => {
     const parse = vi.fn().mockResolvedValue(parsedResponse({ answer: "ash" }));
     const client = stableClient({ parse });
 
@@ -32,10 +32,12 @@ describe("stable Responses adapter", () => {
     expect(parse).toHaveBeenCalledTimes(1);
     const body = parse.mock.calls[0]?.[0] as {
       model: string;
+      prompt_cache_options: { mode: string };
       store: boolean;
       text: { format: { name: string; strict: boolean; type: string } };
     };
     expect(body.model).toBe("gpt-5.6-terra");
+    expect(body.prompt_cache_options).toEqual({ mode: "explicit" });
     expect(body.store).toBe(false);
     expect(body.text.format).toMatchObject({
       name: "test_result",
@@ -109,6 +111,124 @@ describe("stable Responses adapter", () => {
     expect(result.retries).toBe(2);
     expect(result.usage.inputTokens).toBe(300);
     expect(result.estimatedCostUsd).toBeCloseTo(0.001588125, 10);
+  });
+
+  it("reports each parsed candidate with its exact attempt and response id", async () => {
+    const parse = vi
+      .fn()
+      .mockResolvedValueOnce(parsedResponse({ answer: "bad" }, { id: "resp_bad" }))
+      .mockResolvedValueOnce(parsedResponse({ answer: "good" }, { id: "resp_good" }));
+    const request = structuredRequest();
+    const onCandidate = vi.fn();
+    request.onCandidate = onCandidate;
+    request.validate = ({ answer }) => {
+      if (answer === "bad") throw new Error("bad candidate");
+    };
+
+    const result = await runStructuredResponse(stableClient({ parse }), request);
+
+    expect(result.data).toEqual({ answer: "good" });
+    expect(onCandidate.mock.calls).toEqual([
+      [{ answer: "bad" }, { attempt: 0, responseId: "resp_bad" }],
+      [{ answer: "good" }, { attempt: 1, responseId: "resp_good" }],
+    ]);
+  });
+
+  it("records raw structured output before parsing and across a malformed retry", async () => {
+    const parse = vi
+      .fn()
+      .mockResolvedValueOnce(
+        parsedResponse(null, { id: "resp_malformed", output_text: '{"answer":' }),
+      )
+      .mockResolvedValueOnce(
+        parsedResponse({ answer: "good" }, { id: "resp_good", output_text: '{"answer":"good"}' }),
+      );
+    const request = structuredRequest();
+    const onCandidate = vi.fn();
+    const onRawCandidate = vi.fn();
+    request.onCandidate = onCandidate;
+    request.onRawCandidate = onRawCandidate;
+
+    const result = await runStructuredResponse(stableClient({ parse }), request);
+
+    expect(result.data).toEqual({ answer: "good" });
+    expect(onRawCandidate.mock.calls).toEqual([
+      [
+        {
+          attempt: 0,
+          rawOutputText: '{"answer":',
+          responseId: "resp_malformed",
+          status: "completed",
+        },
+      ],
+      [
+        {
+          attempt: 1,
+          rawOutputText: '{"answer":"good"}',
+          responseId: "resp_good",
+          status: "completed",
+        },
+      ],
+    ]);
+    expect(onCandidate).toHaveBeenCalledTimes(1);
+  });
+
+  it("records raw output before an incomplete response is rejected", async () => {
+    const parse = vi.fn().mockResolvedValue(
+      parsedResponse(null, {
+        id: "resp_incomplete_raw",
+        incomplete_details: { reason: "max_output_tokens" },
+        output_text: '{"answer":"partial"}',
+        status: "incomplete",
+      }),
+    );
+    const request = structuredRequest({ maxRetries: 0 });
+    const onRawCandidate = vi.fn();
+    request.onRawCandidate = onRawCandidate;
+
+    await expectRuntimeError(
+      runStructuredResponse(stableClient({ parse }), request),
+      "INCOMPLETE_RESPONSE",
+    );
+    expect(onRawCandidate).toHaveBeenCalledWith({
+      attempt: 0,
+      rawOutputText: '{"answer":"partial"}',
+      responseId: "resp_incomplete_raw",
+      status: "incomplete",
+    });
+  });
+
+  it("keeps raw JSON when Zod refinement rejects before a retry", async () => {
+    const parse = vi
+      .fn()
+      .mockResolvedValueOnce(parsedResponse({ answer: "bad" }, { id: "resp_refined_bad" }))
+      .mockResolvedValueOnce(parsedResponse({ answer: "good" }, { id: "resp_refined_good" }));
+    const request = structuredRequest();
+    request.schema = ResultSchema.refine(({ answer }) => answer === "good");
+    const onRawCandidate = vi.fn();
+    request.onRawCandidate = onRawCandidate;
+
+    const result = await runStructuredResponse(stableClient({ parse }), request);
+
+    expect(result.data).toEqual({ answer: "good" });
+    expect(onRawCandidate.mock.calls.map(([context]) => context.responseId)).toEqual([
+      "resp_refined_bad",
+      "resp_refined_good",
+    ]);
+  });
+
+  it("does not retry when a structured evidence hook fails", async () => {
+    const parse = vi.fn().mockResolvedValue(parsedResponse({ answer: "ash" }));
+    const request = structuredRequest();
+    request.onRawCandidate = () => {
+      throw new Error("disk unavailable");
+    };
+
+    await expectRuntimeError(
+      runStructuredResponse(stableClient({ parse }), request),
+      "INVALID_POLICY",
+    );
+    expect(parse).toHaveBeenCalledTimes(1);
   });
 
   it("stops after three timed-out attempts", async () => {
@@ -234,13 +354,17 @@ describe("stable Responses adapter", () => {
       ),
     );
     const request = structuredRequest({ maxRetries: 0 });
+    const onRawCandidate = vi.fn();
+    const validate = vi.fn();
     request.input = "x".repeat(5_000);
+    request.onRawCandidate = onRawCandidate;
     request.policy = {
       budget: new ChapterCostBudget(0.005),
       costHooks: { markUncertain: vi.fn(), reserve: vi.fn(), settle },
       maxRetries: 0,
       onAttempt,
     };
+    request.validate = validate;
 
     await expectRuntimeError(
       runStructuredResponse(stableClient({ count, parse }), request),
@@ -256,6 +380,8 @@ describe("stable Responses adapter", () => {
         usage: expect.objectContaining({ inputTokens: 2_000, outputTokens: 20 }),
       }),
     );
+    expect(onRawCandidate).toHaveBeenCalledOnce();
+    expect(validate).not.toHaveBeenCalled();
   });
 
   it("buffers stable stream, audits full prose, then replays", async () => {
@@ -285,6 +411,59 @@ describe("stable Responses adapter", () => {
     }
     expect(chunks.join("")).toBe("Ash crown");
     expect(sequence).toEqual(["audit:Ash crown", "replay:Ash ", "replay:crow", "replay:n"]);
+    expect(stream.mock.calls[0]?.[0]).toMatchObject({
+      prompt_cache_options: { mode: "explicit" },
+    });
+  });
+
+  it("gives the audit the exact narrator attempt and response id", async () => {
+    const rejected = narrationResponse("rejected prose", { id: "resp_rejected" });
+    const accepted = narrationResponse("accepted prose", { id: "resp_accepted" });
+    const stream = vi
+      .fn()
+      .mockReturnValueOnce(fakeStream(["rejected prose"], rejected))
+      .mockReturnValueOnce(fakeStream(["accepted prose"], accepted));
+    const audit = vi
+      .fn()
+      .mockReturnValueOnce({ accepted: false, reason: "retry" })
+      .mockReturnValueOnce({ accepted: true });
+    const onRawCandidate = vi.fn();
+
+    await createAuditedNarrationReplay(stableClient({ stream }), {
+      audit,
+      input: "safe POV context",
+      instructions: "Narrate.",
+      maxOutputTokens: 100,
+      model: "gpt-5.6-terra",
+      onRawCandidate,
+      policy: { budget: new ChapterCostBudget(1), maxRetries: 1 },
+      reasoningEffort: "none",
+    });
+
+    expect(audit.mock.calls).toEqual([
+      ["rejected prose", { attempt: 0, responseId: "resp_rejected" }],
+      ["accepted prose", { attempt: 1, responseId: "resp_accepted" }],
+    ]);
+    expect(onRawCandidate.mock.calls).toEqual([
+      [
+        {
+          attempt: 0,
+          bufferedOutputText: "rejected prose",
+          rawOutputText: "rejected prose",
+          responseId: "resp_rejected",
+          status: "completed",
+        },
+      ],
+      [
+        {
+          attempt: 1,
+          bufferedOutputText: "accepted prose",
+          rawOutputText: "accepted prose",
+          responseId: "resp_accepted",
+          status: "completed",
+        },
+      ],
+    ]);
   });
 
   it("counts the exact narration input before a byte-bound rejection", async () => {
@@ -450,8 +629,8 @@ function stableClient(methods: {
 }): StableOpenAIClient {
   return {
     responses: {
+      create: methods.parse,
       inputTokens: { count: methods.count },
-      parse: methods.parse,
       stream: methods.stream,
     },
   } as unknown as StableOpenAIClient;
@@ -463,24 +642,23 @@ function countResponse(inputTokens: number) {
 
 function parsedResponse<T>(
   data: T,
-  overrides: Omit<Partial<ParsedResponse<T>>, "usage"> & {
+  overrides: Omit<Partial<Response>, "usage"> & {
     usage?: ResponseUsage | undefined;
   } = {},
-): ParsedResponse<T> {
+): Response {
   return {
     error: null,
     id: "resp_test",
     incomplete_details: null,
     output: [],
-    output_parsed: data,
-    output_text: "",
+    output_text: JSON.stringify(data),
     status: "completed",
     usage: openAIUsage(),
     ...overrides,
-  } as unknown as ParsedResponse<T>;
+  } as unknown as Response;
 }
 
-function narrationResponse(outputText: string): Response {
+function narrationResponse(outputText: string, overrides: Partial<Response> = {}): Response {
   return {
     error: null,
     id: "resp_narration",
@@ -489,6 +667,7 @@ function narrationResponse(outputText: string): Response {
     output_text: outputText,
     status: "completed",
     usage: openAIUsage(),
+    ...overrides,
   } as unknown as Response;
 }
 

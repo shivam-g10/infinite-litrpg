@@ -9,14 +9,24 @@ import { config } from "dotenv";
 
 import {
   CHARACTER_IDS,
+  ChapterRecordSchema,
+  ChapterFrameSchema,
+  IdSchema,
+  NarrativeAuditCandidateSchema,
   NarrativeAuditSchema,
+  PlayerActionSchema,
   PersistedTraceEnvelopeSchema,
   PROMPT_VERSION,
+  RUNTIME_SCHEMA_VERSION,
   RuntimeAttemptTraceSchema,
   TraceEnvelopeSchema,
   UsageSchema,
   VALIDATION_CODES,
   validateWorldState,
+  validateSuggestedChoices,
+  WorldDeltaSchema,
+  WorldIntentSchema,
+  WorldStateSchema,
   buildChapterChoiceOptions,
   buildPovContext,
   canonicalizeChapterFrameCandidate,
@@ -24,12 +34,16 @@ import {
   type ChapterRecord,
   type CharacterId,
   type Choice,
+  type WorldState,
 } from "@infinite-litrpg/shared";
 import OpenAI from "openai";
 import { z } from "zod";
 
 import { OpenAIRuntimeError } from "../app/src/server/openai/errors";
-import { StoryService } from "../app/src/server/story/story-service";
+import {
+  StoryService,
+  canonicalizeNarrativeAuditOutput,
+} from "../app/src/server/story/story-service";
 import { StoryStore } from "../app/src/server/storage/story-store";
 import { LiveSpendLedger, type LiveSpendSnapshot } from "./live-spend-ledger";
 
@@ -40,9 +54,10 @@ const RESUME_CHECKPOINTS_PATH = resolve(ROOT, "evals", "resume-checkpoints.json"
 const LIVE_SPEND_LEDGER_PATH = resolve(REPORT_DIRECTORY, "live-spend-ledger.db");
 const DEFAULT_PER_CHAPTER_CAP_USD = 0.1;
 const TOTAL_CAP_USD = 3;
-const REPORT_VERSION = 7;
-const PREVIOUS_REPORT_VERSION = 6;
 const LEGACY_REPORT_VERSION = 5;
+const VERSION_6_REPORT_VERSION = 6;
+const VERSION_7_REPORT_VERSION = 7;
+const REPORT_VERSION = 8;
 const MONEY_EPSILON_USD = 0.000_000_1;
 const RESUME_NON_RUNTIME_PATHS = new Set([
   "app/src/server/openai/stable.test.ts",
@@ -84,7 +99,8 @@ const ResumeCheckpointRegistrySchema = z
             reportSha256: Sha256Schema,
             reportVersion: z.union([
               z.literal(LEGACY_REPORT_VERSION),
-              z.literal(PREVIOUS_REPORT_VERSION),
+              z.literal(VERSION_6_REPORT_VERSION),
+              z.literal(VERSION_7_REPORT_VERSION),
               z.literal(REPORT_VERSION),
             ]),
             sourceGitSha: GitShaSchema,
@@ -132,13 +148,6 @@ const ResumeCheckpointRegistrySchema = z
           });
         }
       }
-      if (checkpoint.reportVersion < REPORT_VERSION !== checkpoint.bridgeFiles.length > 0) {
-        context.addIssue({
-          code: "custom",
-          message: "Only older report checkpoints require bridge file hashes",
-          path: ["checkpoints", index, "bridgeFiles"],
-        });
-      }
     }
   });
 const ValidationIssueSchema = z
@@ -149,16 +158,56 @@ const ValidationIssueSchema = z
   })
   .strict();
 
+const ForbiddenFactEvidenceSchema = z
+  .object({ claim: z.string().min(1).max(4_000), id: IdSchema })
+  .strict();
+const CanonicalNarrativeInputEvidenceSchema = z
+  .object({
+    allowedFactIds: z.array(IdSchema).max(200),
+    chapterRecord: ChapterRecordSchema,
+    forbiddenFacts: z.array(ForbiddenFactEvidenceSchema).max(200),
+    frame: ChapterFrameSchema,
+    playerAction: PlayerActionSchema,
+    stateAfter: WorldStateSchema,
+    stateBefore: WorldStateSchema,
+    worldVersionAfter: z.number().int().min(1),
+    worldVersionBefore: z.number().int().min(1),
+  })
+  .strict()
+  .superRefine((evidence, context) => {
+    if (evidence.worldVersionAfter !== evidence.worldVersionBefore + 1) {
+      context.addIssue({ code: "custom", message: "Canonical world versions are not contiguous" });
+    }
+    if (evidence.playerAction.stateVersion !== evidence.worldVersionBefore) {
+      context.addIssue({
+        code: "custom",
+        message: "Canonical player action version does not match the world",
+      });
+    }
+    if (new Set(evidence.allowedFactIds).size !== evidence.allowedFactIds.length) {
+      context.addIssue({ code: "custom", message: "Canonical allowed fact IDs repeat" });
+    }
+    const forbiddenIds = evidence.forbiddenFacts.map(({ id }) => id);
+    if (new Set(forbiddenIds).size !== forbiddenIds.length) {
+      context.addIssue({ code: "custom", message: "Canonical forbidden fact IDs repeat" });
+    }
+    if (forbiddenIds.some((id) => evidence.allowedFactIds.includes(id))) {
+      context.addIssue({ code: "custom", message: "Canonical fact partitions overlap" });
+    }
+  });
+
 export const LiveResultSchema = z
   .object({
     adapterMode: AdapterModeSchema,
     audit: NarrativeAuditSchema,
+    canonicalNarrativeInput: CanonicalNarrativeInputEvidenceSchema.optional(),
     chapter: z.number().int().min(1).max(2),
     costUsd: z.number().min(0).max(TOTAL_CAP_USD),
     latencyMs: z.number().int().min(0),
     povId: PovIdSchema,
     prose: z.string().min(1).max(20_000),
     streamChunkCount: z.number().int().min(1),
+    streamChunks: z.array(z.string().min(1).max(4_096)).min(1).max(100).optional(),
     streamingLatencyMs: z.number().int().min(0),
     streamReconstructed: z.boolean(),
     trace: PersistedTraceEnvelopeSchema,
@@ -185,6 +234,53 @@ export const LiveResultSchema = z
     if (result.trace.gateResult !== "passed") {
       context.addIssue({ code: "custom", message: "Result trace gate did not pass" });
     }
+    if (result.streamChunks !== undefined) {
+      if (
+        result.streamChunks.length !== result.streamChunkCount ||
+        result.streamChunks.join("") !== result.prose ||
+        !result.streamReconstructed
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: "Recorded stream chunks do not reconstruct the committed prose",
+        });
+      }
+    }
+    const canonical = result.canonicalNarrativeInput;
+    if (canonical !== undefined) {
+      if (
+        canonical.worldVersionBefore !== result.chapter ||
+        canonical.worldVersionAfter !== result.chapter + 1
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: "Canonical world versions do not match the live chapter",
+        });
+      }
+      if (
+        canonical.playerAction.actorId !== result.povId ||
+        canonical.frame.terminal ||
+        result.trace.acceptedDelta.expectedWorldVersion !== canonical.worldVersionBefore
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: "Canonical narrative inputs disagree with the committed result",
+        });
+      }
+      const playerIntents = result.trace.intents.filter(
+        ({ actorId, id }) => actorId === result.povId && id.startsWith("intent-player-"),
+      );
+      if (
+        playerIntents.length !== 1 ||
+        playerIntents[0]?.goal !== canonical.playerAction.description ||
+        !isDeepStrictEqual(playerIntents[0]?.action, canonical.playerAction.action)
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: "Canonical player action does not match the committed player intent",
+        });
+      }
+    }
   });
 
 const GateSchema = z
@@ -200,6 +296,10 @@ const GateSchema = z
     totalCostWithinCap: z.boolean(),
   })
   .strict();
+
+const Version8GateSchema = GateSchema.extend({
+  narrativeEvidenceComplete: z.boolean(),
+}).strict();
 
 const BaseLiveReportSchema = z
   .object({
@@ -252,7 +352,7 @@ const RetainedResultGitShaSchema = z
   })
   .strict();
 
-const ResumeSchema = z
+const HistoricalResumeSchema = z
   .object({
     changedPaths: z.array(z.string().min(1).max(1_000)).max(20),
     discardedResultCount: z.number().int().min(0).max(12),
@@ -265,8 +365,8 @@ const ResumeSchema = z
     sourceReportSha256: Sha256Schema,
     sourceReportVersion: z.union([
       z.literal(LEGACY_REPORT_VERSION),
-      z.literal(PREVIOUS_REPORT_VERSION),
-      z.literal(REPORT_VERSION),
+      z.literal(VERSION_6_REPORT_VERSION),
+      z.literal(VERSION_7_REPORT_VERSION),
     ]),
   })
   .strict();
@@ -277,6 +377,7 @@ export const LegacyLiveReportSchema = BaseLiveReportSchema.extend({
   version: z.literal(LEGACY_REPORT_VERSION),
 }).superRefine((report, context) => {
   refineReportCommon(report, context);
+  refineLegacyCostGates(report, context);
   for (const [index, result] of report.results.entries()) {
     if (result.trace.gitSha !== report.sourceGitSha) {
       context.addIssue({
@@ -289,11 +390,12 @@ export const LegacyLiveReportSchema = BaseLiveReportSchema.extend({
 });
 
 export const Version6LiveReportSchema = BaseLiveReportSchema.extend({
-  resume: ResumeSchema.nullable(),
+  resume: HistoricalResumeSchema.nullable(),
   sourceGitSha: GitShaSchema,
-  version: z.literal(PREVIOUS_REPORT_VERSION),
+  version: z.literal(VERSION_6_REPORT_VERSION),
 }).superRefine((report, context) => {
   refineReportCommon(report, context);
+  refineLegacyCostGates(report, context);
   if (report.resume !== null) {
     if (report.chapterCostCapUsd > report.resume.sourceChapterCostCapUsd) {
       context.addIssue({ code: "custom", message: "Resumed chapter cap increased" });
@@ -409,21 +511,362 @@ const RetainedResultProvenanceSchema = RetainedResultGitShaSchema.extend({
   sourceChapterCapUsd: z.number().positive().max(DEFAULT_PER_CHAPTER_CAP_USD),
 }).strict();
 
-const Version7ResumeSchema = ResumeSchema.omit({ retainedResultGitShas: true })
+const Version7ResumeSchema = HistoricalResumeSchema.omit({ retainedResultGitShas: true })
   .extend({
     bridgeFiles: z.array(BridgeFileSchema).max(20),
     retainedResults: z.array(RetainedResultProvenanceSchema).max(12),
   })
   .strict();
 
-export const LiveReportSchema = BaseLiveReportSchema.extend({
+const Version8ResumeSchema = Version7ResumeSchema.omit({ sourceReportVersion: true })
+  .extend({
+    sourceReportVersion: z.union([
+      z.literal(LEGACY_REPORT_VERSION),
+      z.literal(VERSION_6_REPORT_VERSION),
+      z.literal(VERSION_7_REPORT_VERSION),
+      z.literal(REPORT_VERSION),
+    ]),
+  })
+  .strict();
+
+const ResponseIdSchema = z.string().regex(/^resp?_[A-Za-z0-9_-]+$/u);
+const CandidateProseSchema = z.string().min(1).max(50_000);
+const TurnIdentitySchema = z
+  .object({
+    chapter: z.number().int().min(1).max(2),
+    povId: PovIdSchema,
+    requestId: z.string().uuid(),
+    turnId: z.string().uuid(),
+    worldVersionAfter: z.number().int().min(2),
+    worldVersionBefore: z.number().int().min(1),
+  })
+  .strict()
+  .superRefine((turn, context) => {
+    if (turn.worldVersionAfter !== turn.worldVersionBefore + 1) {
+      context.addIssue({ code: "custom", message: "Turn world versions are not contiguous" });
+    }
+  });
+const RuntimeAttemptEvidenceSchema = z
+  .object({
+    attempt: RuntimeAttemptTraceSchema,
+    turn: TurnIdentitySchema,
+  })
+  .strict();
+const NarrativeRecoveryEvidenceSchema = z
+  .object({
+    accepted: z.boolean(),
+    attempt: z.number().int().min(0).max(2),
+    maximumAdditionalWords: z.number().int().min(1).max(500),
+    minimumAdditionalWords: z.number().int().min(1).max(500),
+    prose: CandidateProseSchema,
+    rejectionReason: z.string().min(1).max(1_000).nullable(),
+    responseId: ResponseIdSchema,
+    wordCount: z.number().int().min(1).max(2_000),
+  })
+  .strict();
+export const NarrativeResponseEvidenceSchema = z
+  .object({
+    attempt: z.number().int().min(0).max(2),
+    bufferedOutputText: z.string().max(50_000),
+    chapter: z.number().int().min(1).max(2),
+    phase: z.enum(["audit", "narration", "recovery"]),
+    povId: PovIdSchema,
+    rawOutputText: z.string().max(50_000),
+    responseId: ResponseIdSchema,
+    sourceGitSha: GitShaSchema,
+    status: z.enum(["completed", "incomplete", "failed", "in_progress"]),
+    turn: TurnIdentitySchema,
+    worldVersionAfter: z.number().int().min(1),
+    worldVersionBefore: z.number().int().min(1),
+  })
+  .strict()
+  .superRefine((response, context) => {
+    if (response.worldVersionAfter !== response.worldVersionBefore + 1) {
+      context.addIssue({
+        code: "custom",
+        message: "Narrative response versions are not contiguous",
+      });
+    }
+    if (
+      response.chapter !== response.turn.chapter ||
+      response.povId !== response.turn.povId ||
+      response.worldVersionBefore !== response.turn.worldVersionBefore ||
+      response.worldVersionAfter !== response.turn.worldVersionAfter
+    ) {
+      context.addIssue({ code: "custom", message: "Narrative response turn identity disagrees" });
+    }
+    if (response.phase === "audit" && response.bufferedOutputText !== response.rawOutputText) {
+      context.addIssue({ code: "custom", message: "Audit raw response text is inconsistent" });
+    }
+  });
+const NarrativeAuditAttemptEvidenceSchema = z
+  .object({
+    attempt: z.number().int().min(0).max(2),
+    candidate: NarrativeAuditCandidateSchema.nullable(),
+    rawOutputText: z.string().max(50_000),
+    responseId: ResponseIdSchema,
+    status: z.enum(["completed", "incomplete", "failed", "in_progress"]),
+  })
+  .strict()
+  .superRefine((attempt, context) => {
+    if (attempt.status !== "completed") {
+      if (attempt.candidate !== null) {
+        context.addIssue({
+          code: "custom",
+          message: "Incomplete audit response has a parsed candidate",
+        });
+      }
+      return;
+    }
+    let raw: unknown;
+    try {
+      raw = JSON.parse(attempt.rawOutputText) as unknown;
+    } catch {
+      if (attempt.candidate !== null) {
+        context.addIssue({ code: "custom", message: "Malformed raw audit has a parsed candidate" });
+      }
+      return;
+    }
+    const parsed = NarrativeAuditCandidateSchema.safeParse(raw);
+    if (!parsed.success) {
+      if (attempt.candidate !== null) {
+        context.addIssue({ code: "custom", message: "Invalid raw audit has a parsed candidate" });
+      }
+      return;
+    }
+    if (attempt.candidate === null || !isDeepStrictEqual(attempt.candidate, parsed.data)) {
+      context.addIssue({ code: "custom", message: "Raw and parsed audit candidates disagree" });
+    }
+  });
+export const NarrativeCandidateEvidenceSchema = z
+  .object({
+    accepted: z.boolean(),
+    adapterMode: AdapterModeSchema,
+    allowedFactIds: z.array(IdSchema).max(200),
+    audit: NarrativeAuditSchema.nullable(),
+    auditAttempts: z.array(NarrativeAuditAttemptEvidenceSchema).max(3),
+    auditResponseId: ResponseIdSchema.nullable(),
+    backgroundIntents: z.array(WorldIntentSchema).max(4),
+    chapter: z.number().int().min(1).max(2),
+    delta: WorldDeltaSchema,
+    deterministicIssues: z.array(ValidationIssueSchema).max(100),
+    forbiddenFacts: z.array(ForbiddenFactEvidenceSchema).max(200),
+    frame: ChapterFrameSchema,
+    mergedProse: CandidateProseSchema,
+    mergedWordCount: z.number().int().min(1).max(20_000),
+    multiAgentOutputItems: z.array(z.record(z.string(), z.unknown())).max(100),
+    narratorAttempt: z.number().int().min(0).max(2),
+    narratorResponseId: ResponseIdSchema,
+    playerAction: PlayerActionSchema,
+    povId: PovIdSchema,
+    promptVersion: z.literal(PROMPT_VERSION),
+    rawProse: CandidateProseSchema,
+    rawWordCount: z.number().int().min(1).max(20_000),
+    recovery: NarrativeRecoveryEvidenceSchema.nullable(),
+    rejectionStage: z.enum(["accepted", "audit", "audit-invalid", "deterministic", "recovery"]),
+    schemaVersion: z.literal(RUNTIME_SCHEMA_VERSION),
+    sourceGitSha: GitShaSchema,
+    stateAfter: WorldStateSchema,
+    stateBefore: WorldStateSchema,
+    turn: TurnIdentitySchema,
+    worldVersionAfter: z.number().int().min(1),
+    worldVersionBefore: z.number().int().min(1),
+  })
+  .strict()
+  .superRefine((candidate, context) => {
+    if (wordCount(candidate.rawProse) !== candidate.rawWordCount) {
+      context.addIssue({ code: "custom", message: "Raw candidate word count is inconsistent" });
+    }
+    if (wordCount(candidate.mergedProse) !== candidate.mergedWordCount) {
+      context.addIssue({ code: "custom", message: "Merged candidate word count is inconsistent" });
+    }
+    if (candidate.accepted !== (candidate.rejectionStage === "accepted")) {
+      context.addIssue({ code: "custom", message: "Candidate acceptance and stage disagree" });
+    }
+    if (candidate.worldVersionAfter !== candidate.worldVersionBefore + 1) {
+      context.addIssue({ code: "custom", message: "Candidate world versions are not contiguous" });
+    }
+    if (
+      candidate.chapter !== candidate.turn.chapter ||
+      candidate.povId !== candidate.turn.povId ||
+      candidate.worldVersionBefore !== candidate.turn.worldVersionBefore ||
+      candidate.worldVersionAfter !== candidate.turn.worldVersionAfter
+    ) {
+      context.addIssue({ code: "custom", message: "Narrative candidate turn identity disagrees" });
+    }
+    const staged = stageWorldDelta(
+      candidate.stateBefore,
+      candidate.backgroundIntents,
+      candidate.delta,
+    );
+    const expectedContext = buildPovContext(candidate.stateAfter, candidate.povId);
+    const expectedAllowedFactIds = [...expectedContext.factIds].sort();
+    const expectedAllowedFactIdSet = new Set(expectedAllowedFactIds);
+    const expectedForbiddenFacts = candidate.stateAfter.facts
+      .filter(({ id }) => !expectedAllowedFactIdSet.has(id))
+      .map(({ claim, id }) => ({ claim, id }));
+    const playerIntents = candidate.backgroundIntents.filter(
+      ({ actorId, id }) => actorId === candidate.povId && id.startsWith("intent-player-"),
+    );
+    if (
+      candidate.stateBefore.lockedPovId !== candidate.povId ||
+      candidate.stateBefore.version !== candidate.worldVersionBefore ||
+      candidate.stateAfter.version !== candidate.worldVersionAfter ||
+      candidate.stateAfter.chapter !== candidate.chapter ||
+      candidate.delta.expectedWorldVersion !== candidate.worldVersionBefore ||
+      candidate.playerAction.actorId !== candidate.povId ||
+      candidate.playerAction.stateVersion !== candidate.worldVersionBefore ||
+      !staged.ok ||
+      (staged.ok && !isDeepStrictEqual(staged.data.state, candidate.stateAfter)) ||
+      !isDeepStrictEqual(candidate.allowedFactIds, expectedAllowedFactIds) ||
+      !isDeepStrictEqual(candidate.forbiddenFacts, expectedForbiddenFacts) ||
+      candidate.frame.terminal !== candidate.stateAfter.terminal ||
+      !validateSuggestedChoices(candidate.stateAfter, candidate.frame.choices).ok ||
+      playerIntents.length !== 1 ||
+      playerIntents[0]?.goal !== candidate.playerAction.description ||
+      !isDeepStrictEqual(playerIntents[0]?.action, candidate.playerAction.action)
+    ) {
+      context.addIssue({ code: "custom", message: "Narrative candidate canon is inconsistent" });
+    }
+    const lastAuditResponseId = candidate.auditAttempts.at(-1)?.responseId;
+    if (lastAuditResponseId !== undefined && candidate.auditResponseId !== lastAuditResponseId) {
+      context.addIssue({ code: "custom", message: "Candidate audit response ID is inconsistent" });
+    }
+    if (
+      (candidate.rejectionStage === "accepted" || candidate.rejectionStage === "audit") &&
+      (candidate.auditResponseId === null ||
+        candidate.auditAttempts.length === 0 ||
+        candidate.auditAttempts.at(-1)?.candidate === null)
+    ) {
+      context.addIssue({ code: "custom", message: "Completed audit lacks raw candidate evidence" });
+    }
+    if (candidate.rejectionStage === "accepted" || candidate.rejectionStage === "audit") {
+      const parsedAudit = candidate.auditAttempts.at(-1)?.candidate;
+      if (parsedAudit !== undefined && parsedAudit !== null) {
+        try {
+          const expectedAudit = canonicalizeNarrativeAuditOutput(
+            parsedAudit,
+            candidate.mergedProse,
+            new Map(candidate.forbiddenFacts.map(({ claim, id }) => [id, claim] as const)),
+          );
+          if (!isDeepStrictEqual(candidate.audit, expectedAudit)) {
+            context.addIssue({
+              code: "custom",
+              message: "Final audit does not match the raw parsed candidate",
+            });
+          }
+        } catch {
+          context.addIssue({
+            code: "custom",
+            message: "Raw parsed audit cannot produce the recorded final audit",
+          });
+        }
+      }
+    }
+    if (candidate.audit !== null && hashText(candidate.mergedProse) !== candidate.audit.proseHash) {
+      context.addIssue({ code: "custom", message: "Candidate audit prose hash is inconsistent" });
+    }
+    if (
+      (candidate.rejectionStage === "accepted" && candidate.audit?.approved !== true) ||
+      (candidate.rejectionStage === "audit" && candidate.audit?.approved !== false) ||
+      ((["audit-invalid", "deterministic", "recovery"] as const).includes(
+        candidate.rejectionStage as "audit-invalid" | "deterministic" | "recovery",
+      ) &&
+        candidate.audit !== null)
+    ) {
+      context.addIssue({ code: "custom", message: "Candidate audit and stage disagree" });
+    }
+    const recovery = candidate.recovery;
+    if (recovery === null) {
+      if (candidate.mergedProse !== candidate.rawProse) {
+        context.addIssue({ code: "custom", message: "Candidate changed prose without recovery" });
+      }
+    } else {
+      if (wordCount(recovery.prose) !== recovery.wordCount) {
+        context.addIssue({ code: "custom", message: "Recovery word count is inconsistent" });
+      }
+      const recoveryAccepted =
+        recovery.wordCount >= recovery.minimumAdditionalWords &&
+        recovery.wordCount <= recovery.maximumAdditionalWords;
+      if (
+        recovery.accepted !== recoveryAccepted ||
+        recovery.accepted === (recovery.rejectionReason !== null)
+      ) {
+        context.addIssue({ code: "custom", message: "Recovery verdict is inconsistent" });
+      }
+      const expectedMerged = recovery.accepted
+        ? `${candidate.rawProse.trim()} ${recovery.prose.trim()}`
+        : candidate.rawProse;
+      if (candidate.mergedProse !== expectedMerged) {
+        context.addIssue({ code: "custom", message: "Recovery merge evidence is inconsistent" });
+      }
+      if (!recovery.accepted && candidate.rejectionStage !== "recovery") {
+        context.addIssue({ code: "custom", message: "Rejected recovery has the wrong stage" });
+      }
+    }
+    if (new Set(candidate.allowedFactIds).size !== candidate.allowedFactIds.length) {
+      context.addIssue({ code: "custom", message: "Allowed fact IDs repeat" });
+    }
+    if (
+      new Set(candidate.forbiddenFacts.map(({ id }) => id)).size !== candidate.forbiddenFacts.length
+    ) {
+      context.addIssue({ code: "custom", message: "Forbidden fact IDs repeat" });
+    }
+  });
+
+const NarrativeEvidenceSidecarSchema = z
+  .object({
+    attempts: z.array(RuntimeAttemptTraceSchema).max(1_000),
+    candidates: z.array(NarrativeCandidateEvidenceSchema).max(100),
+    liveRunId: z.string().uuid(),
+    narrativeResponses: z.array(NarrativeResponseEvidenceSchema).max(500),
+    promptVersion: z.literal(PROMPT_VERSION),
+    reportVersion: z.literal(REPORT_VERSION),
+    runtimeEvidenceStartAttemptIndex: z.number().int().min(0).max(1_000),
+    runtimeSchemaVersion: z.literal(RUNTIME_SCHEMA_VERSION),
+    runtimeAttemptEvidence: z.array(RuntimeAttemptEvidenceSchema).max(1_000),
+    sourceGitSha: GitShaSchema,
+    updatedAt: z.string().datetime(),
+  })
+  .strict();
+
+export const Version7LiveReportSchema = BaseLiveReportSchema.extend({
   budgetLedger: LiveSpendSnapshotSchema,
   budgetMode: z.literal("durable-request-reservations"),
   resultChapterCaps: z.array(ResultChapterCapSchema).max(12),
   resume: Version7ResumeSchema.nullable(),
   sourceGitSha: GitShaSchema,
+  version: z.literal(VERSION_7_REPORT_VERSION),
+}).superRefine(refineDurableReport);
+
+export const LiveReportSchema = BaseLiveReportSchema.extend({
+  budgetLedger: LiveSpendSnapshotSchema,
+  budgetMode: z.literal("durable-request-reservations"),
+  gates: Version8GateSchema,
+  narrativeCandidates: z.array(NarrativeCandidateEvidenceSchema).max(100),
+  narrativeResponses: z.array(NarrativeResponseEvidenceSchema).max(500),
+  runtimeEvidenceStartAttemptIndex: z.number().int().min(0).max(1_000),
+  runtimeAttemptEvidence: z.array(RuntimeAttemptEvidenceSchema).max(1_000),
+  resultChapterCaps: z.array(ResultChapterCapSchema).max(12),
+  resume: Version8ResumeSchema.nullable(),
+  sourceGitSha: GitShaSchema,
   version: z.literal(REPORT_VERSION),
-}).superRefine((report, context) => {
+}).superRefine(refineDurableReport);
+
+type DurableReportForRefinement = z.infer<typeof BaseLiveReportSchema> & {
+  readonly budgetLedger: z.infer<typeof LiveSpendSnapshotSchema>;
+  readonly gates: z.infer<typeof GateSchema> | z.infer<typeof Version8GateSchema>;
+  readonly narrativeCandidates?: z.infer<typeof NarrativeCandidateEvidenceSchema>[];
+  readonly narrativeResponses?: z.infer<typeof NarrativeResponseEvidenceSchema>[];
+  readonly runtimeEvidenceStartAttemptIndex?: number;
+  readonly runtimeAttemptEvidence?: z.infer<typeof RuntimeAttemptEvidenceSchema>[];
+  readonly resultChapterCaps: z.infer<typeof ResultChapterCapSchema>[];
+  readonly resume: z.infer<typeof Version8ResumeSchema> | null;
+  readonly sourceGitSha: string;
+  readonly version: typeof VERSION_7_REPORT_VERSION | typeof REPORT_VERSION;
+};
+
+function refineDurableReport(report: DurableReportForRefinement, context: z.RefinementCtx): void {
   refineReportCommon(report, context);
   if (report.resume !== null) {
     if (report.resume.existingAttemptCostUsd > report.totalCostUsd + MONEY_EPSILON_USD) {
@@ -572,13 +1015,799 @@ export const LiveReportSchema = BaseLiveReportSchema.extend({
   ) {
     context.addIssue({ code: "custom", message: "Durable spend ledger does not match report" });
   }
-});
+  const expectedResultCount = report.suite === "smoke" ? 1 : CHARACTER_IDS.length * 2;
+  refineGateValue(
+    report,
+    "allCostsWithinChapterCap",
+    report.results.length === expectedResultCount &&
+      report.results.every((result) => {
+        const cap = report.resultChapterCaps.find(
+          (entry) => entry.povId === result.povId && entry.chapter === result.chapter,
+        )?.capUsd;
+        return cap !== undefined && result.costUsd <= cap + MONEY_EPSILON_USD;
+      }),
+    context,
+  );
+  refineGateValue(
+    report,
+    "totalCostWithinCap",
+    ledger.totalExposureUsd <= TOTAL_CAP_USD + MONEY_EPSILON_USD,
+    context,
+  );
+
+  if (report.version === REPORT_VERSION) {
+    const candidates = report.narrativeCandidates ?? [];
+    const responses = report.narrativeResponses ?? [];
+    const runtimeEvidenceStartAttemptIndex = report.runtimeEvidenceStartAttemptIndex ?? 0;
+    const runtimeAttemptEvidence = report.runtimeAttemptEvidence ?? [];
+    refineNarrativeEvidence(
+      report,
+      candidates,
+      responses,
+      runtimeEvidenceStartAttemptIndex,
+      runtimeAttemptEvidence,
+      context,
+    );
+    const expectedComplete = narrativeEvidenceIsComplete(
+      report.results,
+      report.attempts,
+      candidates,
+      responses,
+      runtimeEvidenceStartAttemptIndex,
+      runtimeAttemptEvidence,
+      report.suite,
+    );
+    if (
+      !("narrativeEvidenceComplete" in report.gates) ||
+      report.gates.narrativeEvidenceComplete !== expectedComplete
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Narrative evidence gate is inconsistent",
+        path: ["gates", "narrativeEvidenceComplete"],
+      });
+    }
+  }
+}
+
+function refineNarrativeEvidence(
+  report: DurableReportForRefinement,
+  candidates: readonly z.infer<typeof NarrativeCandidateEvidenceSchema>[],
+  responses: readonly z.infer<typeof NarrativeResponseEvidenceSchema>[],
+  runtimeEvidenceStartAttemptIndex: number,
+  runtimeAttemptEvidence: readonly z.infer<typeof RuntimeAttemptEvidenceSchema>[],
+  context: z.RefinementCtx,
+): void {
+  const legacyEvidenceGap = runtimeEvidenceStartAttemptIndex > 0;
+  if (legacyEvidenceGap && report.resume === null) {
+    context.addIssue({
+      code: "custom",
+      message: "Runtime evidence gap has no authenticated resume provenance",
+      path: ["runtimeEvidenceStartAttemptIndex"],
+    });
+  }
+  const allowedSourceGitShas = new Set([
+    report.sourceGitSha,
+    ...(report.resume === null ? [] : [report.resume.sourceGitSha]),
+    ...(report.resume?.retainedResults.map(({ sourceGitSha }) => sourceGitSha) ?? []),
+  ]);
+  const expectedStateBeforeByResult = refineCommittedResultEvidence(report.results, context);
+  const matchingAttempts = (
+    phase: string,
+    responseId: string,
+    attempt: number,
+    turn: z.infer<typeof TurnIdentitySchema>,
+  ) =>
+    runtimeAttemptEvidence.filter(
+      (entry) =>
+        entry.attempt.phase === phase &&
+        entry.attempt.responseId === responseId &&
+        entry.attempt.attempt === attempt &&
+        entry.attempt.model === "gpt-5.6-luna" &&
+        isDeepStrictEqual(entry.turn, turn),
+    );
+  const runtimeAttempts = runtimeAttemptEvidence.map(({ attempt }) => attempt);
+  const runtimeAttemptsMatchReport =
+    runtimeEvidenceStartAttemptIndex <= report.attempts.length &&
+    isDeepStrictEqual(report.attempts.slice(runtimeEvidenceStartAttemptIndex), runtimeAttempts);
+  if (!runtimeAttemptsMatchReport) {
+    context.addIssue({
+      code: "custom",
+      message: "Turn-bound runtime attempts do not match the report attempts",
+      path: ["runtimeAttemptEvidence"],
+    });
+  }
+  const providerResponseIds = new Set<string>();
+  for (const [index, attempt] of report.attempts.entries()) {
+    if (attempt.responseId === null) continue;
+    if (providerResponseIds.has(attempt.responseId)) {
+      context.addIssue({
+        code: "custom",
+        message: "Provider response ID is reused across attempts",
+        path: ["attempts", index, "responseId"],
+      });
+    }
+    providerResponseIds.add(attempt.responseId);
+  }
+  const responseKeys = new Set<string>();
+
+  for (const [index, response] of responses.entries()) {
+    if (!allowedSourceGitShas.has(response.sourceGitSha)) {
+      context.addIssue({
+        code: "custom",
+        message: "Narrative response Git SHA has no report provenance",
+        path: ["narrativeResponses", index, "sourceGitSha"],
+      });
+    }
+    const key = response.responseId;
+    if (responseKeys.has(key)) {
+      context.addIssue({
+        code: "custom",
+        message: "Narrative response evidence is duplicated",
+        path: ["narrativeResponses", index],
+      });
+    }
+    responseKeys.add(key);
+    if (
+      matchingAttempts(response.phase, response.responseId, response.attempt, response.turn)
+        .length !== 1
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Narrative response has no unique matching attempt",
+        path: ["narrativeResponses", index, "responseId"],
+      });
+    }
+  }
+
+  const narratorKeys = new Set<string>();
+  const recoveryKeys = new Set<string>();
+  const turnIdentityById = new Map<string, z.infer<typeof TurnIdentitySchema>>();
+  const turnIdByRequestId = new Map<string, string>();
+  for (const [index, candidate] of candidates.entries()) {
+    if (!allowedSourceGitShas.has(candidate.sourceGitSha)) {
+      context.addIssue({
+        code: "custom",
+        message: "Narrative candidate Git SHA has no report provenance",
+        path: ["narrativeCandidates", index, "sourceGitSha"],
+      });
+    }
+    const key = resultKey(candidate.povId, candidate.chapter);
+    const expectedStateBefore = expectedStateBeforeByResult.get(key);
+    const existingTurn = turnIdentityById.get(candidate.turn.turnId);
+    const existingTurnId = turnIdByRequestId.get(candidate.turn.requestId);
+    if (
+      expectedStateBefore === undefined ||
+      !isDeepStrictEqual(candidate.stateBefore, expectedStateBefore) ||
+      (existingTurn !== undefined && !isDeepStrictEqual(existingTurn, candidate.turn)) ||
+      (existingTurnId !== undefined && existingTurnId !== candidate.turn.turnId)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Narrative candidate is not rooted in the canonical turn chain",
+        path: ["narrativeCandidates", index, "stateBefore"],
+      });
+    }
+    turnIdentityById.set(candidate.turn.turnId, candidate.turn);
+    turnIdByRequestId.set(candidate.turn.requestId, candidate.turn.turnId);
+    const committedResult = report.results.find(
+      (result) => result.povId === candidate.povId && result.chapter === candidate.chapter,
+    );
+    if (
+      candidate.accepted &&
+      committedResult?.canonicalNarrativeInput !== undefined &&
+      !candidateMatchesCanonicalInput(candidate, committedResult.canonicalNarrativeInput)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Narrative candidate canon inputs do not match the committed result",
+        path: ["narrativeCandidates", index],
+      });
+    }
+    const narratorKey = candidate.narratorResponseId;
+    if (narratorKeys.has(narratorKey)) {
+      context.addIssue({
+        code: "custom",
+        message: "Narration attempt is linked to multiple candidates",
+        path: ["narrativeCandidates", index, "narratorResponseId"],
+      });
+    }
+    narratorKeys.add(narratorKey);
+    const narratorAttempts = matchingAttempts(
+      "narration",
+      candidate.narratorResponseId,
+      candidate.narratorAttempt,
+      candidate.turn,
+    );
+    if (narratorAttempts.length !== 1) {
+      context.addIssue({
+        code: "custom",
+        message: "Narrative candidate has no unique matching narration attempt",
+        path: ["narrativeCandidates", index, "narratorResponseId"],
+      });
+    } else if ((narratorAttempts[0]?.attempt.errorCode === null) !== candidate.accepted) {
+      context.addIssue({
+        code: "custom",
+        message: "Narrative candidate acceptance disagrees with its attempt",
+        path: ["narrativeCandidates", index, "accepted"],
+      });
+    }
+    const narratorResponse = responses.filter(
+      (response) =>
+        response.phase === "narration" &&
+        response.responseId === candidate.narratorResponseId &&
+        response.attempt === candidate.narratorAttempt &&
+        isDeepStrictEqual(response.turn, candidate.turn),
+    );
+    if (
+      narratorResponse.length !== 1 ||
+      narratorResponse[0]?.status !== "completed" ||
+      narratorResponse[0]?.rawOutputText !== candidate.rawProse ||
+      narratorResponse[0]?.povId !== candidate.povId ||
+      narratorResponse[0]?.chapter !== candidate.chapter ||
+      narratorResponse[0]?.sourceGitSha !== candidate.sourceGitSha ||
+      narratorResponse[0]?.worldVersionBefore !== candidate.worldVersionBefore ||
+      narratorResponse[0]?.worldVersionAfter !== candidate.worldVersionAfter ||
+      (narratorResponse[0].bufferedOutputText.length > 0 &&
+        narratorResponse[0].bufferedOutputText !== candidate.rawProse)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Narrative candidate does not match one raw narration response",
+        path: ["narrativeCandidates", index, "rawProse"],
+      });
+    }
+    if (candidate.recovery !== null) {
+      const recoveryAttempts = matchingAttempts(
+        "recovery",
+        candidate.recovery.responseId,
+        candidate.recovery.attempt,
+        candidate.turn,
+      );
+      if (recoveryAttempts.length !== 1) {
+        context.addIssue({
+          code: "custom",
+          message: "Narrative candidate has no matching recovery attempt",
+          path: ["narrativeCandidates", index, "recovery", "responseId"],
+        });
+      } else if (
+        (recoveryAttempts[0]?.attempt.errorCode === null) !==
+        candidate.recovery.accepted
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: "Recovery verdict disagrees with its attempt",
+          path: ["narrativeCandidates", index, "recovery", "accepted"],
+        });
+      }
+      const recoveryKey = candidate.recovery.responseId;
+      if (recoveryKeys.has(recoveryKey)) {
+        context.addIssue({
+          code: "custom",
+          message: "Recovery attempt is linked to multiple candidates",
+          path: ["narrativeCandidates", index, "recovery", "responseId"],
+        });
+      }
+      recoveryKeys.add(recoveryKey);
+      const recoveryResponse = responses.filter(
+        (response) =>
+          response.phase === "recovery" &&
+          response.responseId === candidate.recovery?.responseId &&
+          response.attempt === candidate.recovery.attempt &&
+          isDeepStrictEqual(response.turn, candidate.turn),
+      );
+      if (
+        recoveryResponse.length !== 1 ||
+        recoveryResponse[0]?.status !== "completed" ||
+        recoveryResponse[0]?.rawOutputText !== candidate.recovery.prose ||
+        recoveryResponse[0]?.povId !== candidate.povId ||
+        recoveryResponse[0]?.chapter !== candidate.chapter ||
+        recoveryResponse[0]?.sourceGitSha !== candidate.sourceGitSha ||
+        recoveryResponse[0]?.worldVersionBefore !== candidate.worldVersionBefore ||
+        recoveryResponse[0]?.worldVersionAfter !== candidate.worldVersionAfter ||
+        (recoveryResponse[0].bufferedOutputText.length > 0 &&
+          recoveryResponse[0].bufferedOutputText !== candidate.recovery.prose)
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: "Recovery candidate does not match one raw recovery response",
+          path: ["narrativeCandidates", index, "recovery"],
+        });
+      }
+    }
+    for (const [auditIndex, auditAttempt] of candidate.auditAttempts.entries()) {
+      const rawAuditResponses = responses.filter(
+        (response) =>
+          response.phase === "audit" &&
+          response.responseId === auditAttempt.responseId &&
+          response.attempt === auditAttempt.attempt &&
+          isDeepStrictEqual(response.turn, candidate.turn),
+      );
+      if (
+        matchingAttempts("audit", auditAttempt.responseId, auditAttempt.attempt, candidate.turn)
+          .length !== 1
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: "Narrative candidate has no matching audit attempt",
+          path: ["narrativeCandidates", index, "auditAttempts", auditIndex, "responseId"],
+        });
+      }
+      if (
+        rawAuditResponses.length !== 1 ||
+        rawAuditResponses[0]?.rawOutputText !== auditAttempt.rawOutputText ||
+        rawAuditResponses[0]?.status !== auditAttempt.status
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: "Narrative candidate audit does not match one raw audit response",
+          path: ["narrativeCandidates", index, "auditAttempts", auditIndex],
+        });
+      }
+    }
+  }
+
+  if (!legacyEvidenceGap) {
+    for (const [index, evidence] of runtimeAttemptEvidence.entries()) {
+      const { attempt, turn } = evidence;
+      if (
+        (attempt.phase === "narration" || attempt.phase === "recovery") &&
+        attempt.responseId !== null &&
+        responses.filter(
+          (response) =>
+            response.phase === attempt.phase &&
+            response.responseId === attempt.responseId &&
+            response.attempt === attempt.attempt &&
+            isDeepStrictEqual(response.turn, turn),
+        ).length !== 1
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: "Narrative attempt lacks unique raw response evidence",
+          path: ["runtimeAttemptEvidence", index],
+        });
+      }
+      if (
+        attempt.phase === "audit" &&
+        attempt.responseId !== null &&
+        responses.filter(
+          (response) =>
+            response.phase === "audit" &&
+            response.responseId === attempt.responseId &&
+            response.attempt === attempt.attempt &&
+            isDeepStrictEqual(response.turn, turn),
+        ).length !== 1
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: "Audit attempt lacks unique raw response evidence",
+          path: ["runtimeAttemptEvidence", index],
+        });
+      }
+    }
+  }
+
+  for (const [index, result] of report.results.entries()) {
+    const isLegacyRetainedResult =
+      legacyEvidenceGap &&
+      report.resume?.retainedResults.some(
+        (retained) => retained.povId === result.povId && retained.chapter === result.chapter,
+      );
+    if (result.canonicalNarrativeInput === undefined && !isLegacyRetainedResult) {
+      context.addIssue({
+        code: "custom",
+        message: `Result ${resultKey(result.povId, result.chapter)} lacks canonical narrative inputs`,
+        path: ["results", index, "canonicalNarrativeInput"],
+      });
+    }
+    if (result.streamChunks === undefined && !isLegacyRetainedResult) {
+      context.addIssue({
+        code: "custom",
+        message: `Result ${resultKey(result.povId, result.chapter)} lacks stream transcript evidence`,
+        path: ["results", index, "streamChunks"],
+      });
+    }
+    const matches = candidates.filter(
+      (candidate) =>
+        candidate.accepted &&
+        candidate.povId === result.povId &&
+        candidate.chapter === result.chapter &&
+        candidate.adapterMode === result.adapterMode &&
+        candidate.sourceGitSha === result.trace.gitSha &&
+        candidate.promptVersion === result.trace.promptVersion &&
+        candidate.schemaVersion === result.trace.schemaVersion &&
+        candidate.mergedProse === result.prose &&
+        isDeepStrictEqual(candidate.audit, result.audit) &&
+        isDeepStrictEqual(candidate.delta, result.trace.acceptedDelta) &&
+        isDeepStrictEqual(candidate.backgroundIntents, result.trace.intents) &&
+        isDeepStrictEqual(candidate.multiAgentOutputItems, result.trace.multiAgentOutputItems) &&
+        result.canonicalNarrativeInput !== undefined &&
+        candidateMatchesCanonicalInput(candidate, result.canonicalNarrativeInput),
+    );
+    const acceptedCandidate = matches[0];
+    if (matches.length !== 1 && !isLegacyRetainedResult) {
+      context.addIssue({
+        code: "custom",
+        message: `Result ${resultKey(result.povId, result.chapter)} needs one exact accepted narrative candidate`,
+        path: ["results", index],
+      });
+    } else if (acceptedCandidate !== undefined) {
+      const committedRequestId = result.canonicalNarrativeInput?.chapterRecord.requestId;
+      const attemptReferences = [
+        { phase: "narration" as const, responseId: acceptedCandidate.narratorResponseId },
+        ...(acceptedCandidate.recovery === null
+          ? []
+          : [{ phase: "recovery" as const, responseId: acceptedCandidate.recovery.responseId }]),
+        ...acceptedCandidate.auditAttempts.map(({ responseId }) => ({
+          phase: "audit" as const,
+          responseId,
+        })),
+      ];
+      if (
+        attemptReferences.some(
+          ({ phase, responseId }) =>
+            runtimeAttemptEvidence.filter(
+              ({ attempt, turn }) =>
+                attempt.phase === phase &&
+                attempt.responseId === responseId &&
+                isDeepStrictEqual(turn, acceptedCandidate.turn) &&
+                result.trace.attempts.some((traceAttempt) =>
+                  isDeepStrictEqual(traceAttempt, attempt),
+                ),
+            ).length !== 1,
+        ) ||
+        acceptedCandidate.turn.turnId !== result.trace.runId ||
+        committedRequestId === undefined ||
+        acceptedCandidate.turn.requestId !== committedRequestId ||
+        result.trace.calls.filter(
+          (call) =>
+            call.phase === "narration" && call.responseId === acceptedCandidate.narratorResponseId,
+        ).length !== 1 ||
+        result.trace.calls.filter(
+          (call) => call.phase === "audit" && call.responseId === acceptedCandidate.auditResponseId,
+        ).length !== 1 ||
+        (acceptedCandidate.recovery !== null &&
+          result.trace.calls.filter(
+            (call) =>
+              call.phase === "recovery" &&
+              call.responseId === acceptedCandidate.recovery?.responseId,
+          ).length !== 1) ||
+        !traceCallsMatchTurn(result, acceptedCandidate.turn, runtimeAttemptEvidence)
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: `Result ${resultKey(result.povId, result.chapter)} candidate lacks exact trace linkage`,
+          path: ["results", index, "trace"],
+        });
+      }
+    }
+  }
+}
+
+function refineCommittedResultEvidence(
+  results: readonly LiveResult[],
+  context: z.RefinementCtx,
+): Map<string, WorldState> {
+  const expectedStateBeforeByResult = new Map<string, WorldState>();
+  for (const povId of CHARACTER_IDS) {
+    const seed = loadLockedSeedWorld(povId);
+    expectedStateBeforeByResult.set(resultKey(povId, 1), seed);
+    const chapterOne = results.find((result) => result.povId === povId && result.chapter === 1);
+    if (chapterOne?.canonicalNarrativeInput !== undefined) {
+      expectedStateBeforeByResult.set(
+        resultKey(povId, 2),
+        chapterOne.canonicalNarrativeInput.stateAfter,
+      );
+    } else if (chapterOne !== undefined) {
+      const staged = stageWorldDelta(
+        seed,
+        chapterOne.trace.intents as z.infer<typeof WorldIntentSchema>[],
+        chapterOne.trace.acceptedDelta,
+      );
+      if (
+        staged.ok &&
+        hashJson(seed) === chapterOne.trace.stateBeforeHash &&
+        hashJson(staged.data.state) === chapterOne.trace.stateAfterHash
+      ) {
+        expectedStateBeforeByResult.set(resultKey(povId, 2), staged.data.state);
+      }
+    }
+  }
+
+  for (const [index, result] of results.entries()) {
+    const canonical = result.canonicalNarrativeInput;
+    if (canonical === undefined) continue;
+    const expectedStateBefore = expectedStateBeforeByResult.get(
+      resultKey(result.povId, result.chapter),
+    );
+    const staged = stageWorldDelta(
+      canonical.stateBefore,
+      result.trace.intents as z.infer<typeof WorldIntentSchema>[],
+      result.trace.acceptedDelta,
+    );
+    const povContext = buildPovContext(canonical.stateAfter, result.povId);
+    const expectedAllowedFactIds = [...povContext.factIds].sort();
+    const allowedFactIdSet = new Set(expectedAllowedFactIds);
+    const expectedForbiddenFacts = canonical.stateAfter.facts
+      .filter(({ id }) => !allowedFactIdSet.has(id))
+      .map(({ claim, id }) => ({ claim, id }));
+    const chapter = canonical.chapterRecord;
+    const expectedFrame = {
+      choices: chapter.choices,
+      terminal: chapter.terminal,
+      title: chapter.title,
+    };
+    if (
+      expectedStateBefore === undefined ||
+      !isDeepStrictEqual(canonical.stateBefore, expectedStateBefore) ||
+      !staged.ok ||
+      (staged.ok && !isDeepStrictEqual(staged.data.state, canonical.stateAfter)) ||
+      hashJson(canonical.stateBefore) !== result.trace.stateBeforeHash ||
+      hashJson(canonical.stateAfter) !== result.trace.stateAfterHash ||
+      canonical.stateBefore.lockedPovId !== result.povId ||
+      canonical.stateAfter.lockedPovId !== result.povId ||
+      canonical.stateAfter.chapter !== result.chapter ||
+      !isDeepStrictEqual(canonical.allowedFactIds, expectedAllowedFactIds) ||
+      !isDeepStrictEqual(canonical.forbiddenFacts, expectedForbiddenFacts) ||
+      !isDeepStrictEqual(canonical.frame, expectedFrame) ||
+      !isDeepStrictEqual(canonical.playerAction, chapter.playerAction) ||
+      chapter.chapter !== result.chapter ||
+      chapter.povCharacterId !== result.povId ||
+      chapter.prose !== result.prose ||
+      chapter.proseHash !== result.audit.proseHash ||
+      !isDeepStrictEqual(chapter.narrativeAudit, result.audit) ||
+      !costsMatch(chapter.estimatedCostUsd, result.costUsd) ||
+      chapter.latencyMs !== result.latencyMs ||
+      !isDeepStrictEqual(chapter.usage, result.usage) ||
+      chapter.traceId !== result.trace.runId ||
+      chapter.requestId === undefined ||
+      chapter.safeContextHash !== hashJson(povContext) ||
+      chapter.stateBeforeVersion !== canonical.stateBefore.version ||
+      chapter.stateAfterVersion !== canonical.stateAfter.version ||
+      chapter.terminal !== canonical.stateAfter.terminal ||
+      result.trace.fixtureId !== canonical.stateBefore.id ||
+      result.trace.fixtureVersion !== canonical.stateBefore.fixtureVersion ||
+      !validateSuggestedChoices(canonical.stateAfter, chapter.choices).ok
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Committed chapter evidence does not reproduce canonical state",
+        path: ["results", index, "canonicalNarrativeInput"],
+      });
+    }
+  }
+  return expectedStateBeforeByResult;
+}
+
+function loadLockedSeedWorld(povId: CharacterId): WorldState {
+  const raw = JSON.parse(
+    readFileSync(resolve(ROOT, "evals", "fixtures", "demon-king-world.json"), "utf8"),
+  ) as unknown;
+  const validated = validateWorldState(raw);
+  if (!validated.ok) throw new Error("Live eval seed fixture is invalid");
+  const seed = structuredClone(validated.data);
+  seed.lockedPovId = povId;
+  const locked = validateWorldState(seed);
+  if (!locked.ok) throw new Error(`Cannot lock live eval seed to ${povId}`);
+  return locked.data;
+}
+
+function candidateMatchesCanonicalInput(
+  candidate: z.infer<typeof NarrativeCandidateEvidenceSchema>,
+  canonical: z.infer<typeof CanonicalNarrativeInputEvidenceSchema>,
+): boolean {
+  return (
+    candidate.worldVersionBefore === canonical.worldVersionBefore &&
+    candidate.worldVersionAfter === canonical.worldVersionAfter &&
+    isDeepStrictEqual(candidate.allowedFactIds, canonical.allowedFactIds) &&
+    isDeepStrictEqual(candidate.forbiddenFacts, canonical.forbiddenFacts) &&
+    isDeepStrictEqual(candidate.frame, canonical.frame) &&
+    isDeepStrictEqual(candidate.playerAction, canonical.playerAction) &&
+    isDeepStrictEqual(candidate.stateBefore, canonical.stateBefore) &&
+    isDeepStrictEqual(candidate.stateAfter, canonical.stateAfter)
+  );
+}
+
+function traceCallsMatchTurn(
+  result: LiveResult,
+  turn: z.infer<typeof TurnIdentitySchema>,
+  runtimeAttemptEvidence: readonly z.infer<typeof RuntimeAttemptEvidenceSchema>[],
+): boolean {
+  const usedAttemptIndexes = new Set<number>();
+  for (const call of result.trace.calls) {
+    const finalIndexes = result.trace.attempts.flatMap((attempt, index) =>
+      attempt.responseId === call.responseId &&
+      attempt.phase === call.phase &&
+      attempt.model === call.model &&
+      attempt.agentId === call.agentId
+        ? [index]
+        : [],
+    );
+    if (finalIndexes.length !== 1) return false;
+    const finalIndex = finalIndexes[0];
+    if (finalIndex === undefined) return false;
+    const callAttemptIndexes = [finalIndex];
+    let cursor = finalIndex - 1;
+    for (let expectedAttempt = call.retries - 1; expectedAttempt >= 0; expectedAttempt -= 1) {
+      let matchedIndex = -1;
+      for (let index = cursor; index >= 0; index -= 1) {
+        const attempt = result.trace.attempts[index];
+        if (
+          attempt?.attempt === expectedAttempt &&
+          attempt.phase === call.phase &&
+          attempt.model === call.model &&
+          attempt.agentId === call.agentId
+        ) {
+          matchedIndex = index;
+          break;
+        }
+      }
+      if (matchedIndex < 0) return false;
+      callAttemptIndexes.unshift(matchedIndex);
+      cursor = matchedIndex - 1;
+    }
+    if (callAttemptIndexes.some((index) => usedAttemptIndexes.has(index))) return false;
+    callAttemptIndexes.forEach((index) => usedAttemptIndexes.add(index));
+    const callAttempts = callAttemptIndexes.flatMap((index) => {
+      const attempt = result.trace.attempts[index];
+      return attempt === undefined ? [] : [attempt];
+    });
+    if (
+      callAttempts.length !== call.retries + 1 ||
+      callAttempts.some(
+        (attempt, index) =>
+          attempt.attempt !== index ||
+          attempt.phase !== call.phase ||
+          attempt.model !== call.model ||
+          attempt.agentId !== call.agentId,
+      ) ||
+      callAttempts.at(-1)?.responseId !== call.responseId ||
+      callAttempts.at(-1)?.errorCode !== null ||
+      !costsMatch(sum(callAttempts.map(({ costUsd }) => costUsd)), call.estimatedCostUsd) ||
+      !isDeepStrictEqual(sumAttemptUsage(callAttempts), call.usage)
+    ) {
+      return false;
+    }
+    if (
+      callAttempts.some(
+        (attempt) =>
+          runtimeAttemptEvidence.filter(
+            (evidence) =>
+              isDeepStrictEqual(evidence.turn, turn) &&
+              isDeepStrictEqual(evidence.attempt, attempt),
+          ).length !== 1,
+      )
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function sumAttemptUsage(
+  attempts: readonly z.infer<typeof RuntimeAttemptTraceSchema>[],
+): z.infer<typeof UsageSchema> {
+  return attempts.reduce<z.infer<typeof UsageSchema>>(
+    (total, { usage }) => ({
+      cacheWriteTokens: total.cacheWriteTokens + usage.cacheWriteTokens,
+      cachedInputTokens: total.cachedInputTokens + usage.cachedInputTokens,
+      inputTokens: total.inputTokens + usage.inputTokens,
+      outputTokens: total.outputTokens + usage.outputTokens,
+      reasoningTokens: total.reasoningTokens + usage.reasoningTokens,
+      totalTokens: total.totalTokens + usage.totalTokens,
+    }),
+    {
+      cacheWriteTokens: 0,
+      cachedInputTokens: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      reasoningTokens: 0,
+      totalTokens: 0,
+    },
+  );
+}
+
+function narrativeEvidenceIsComplete(
+  results: readonly LiveResult[],
+  attempts: readonly z.infer<typeof RuntimeAttemptTraceSchema>[],
+  candidates: readonly z.infer<typeof NarrativeCandidateEvidenceSchema>[],
+  responses: readonly z.infer<typeof NarrativeResponseEvidenceSchema>[],
+  runtimeEvidenceStartAttemptIndex: number,
+  runtimeAttemptEvidence: readonly z.infer<typeof RuntimeAttemptEvidenceSchema>[],
+  suite: "full" | "smoke",
+): boolean {
+  const expected = suite === "smoke" ? 1 : CHARACTER_IDS.length * 2;
+  if (
+    results.length !== expected ||
+    runtimeEvidenceStartAttemptIndex > attempts.length ||
+    !isDeepStrictEqual(
+      runtimeAttemptEvidence.map(({ attempt }) => attempt),
+      attempts.slice(runtimeEvidenceStartAttemptIndex),
+    )
+  ) {
+    return false;
+  }
+  const narrativeAttemptsCovered = runtimeAttemptEvidence.every(({ attempt, turn }) => {
+    if (
+      (attempt.phase !== "narration" && attempt.phase !== "recovery") ||
+      attempt.responseId === null
+    ) {
+      return true;
+    }
+    return (
+      responses.filter(
+        (response) =>
+          response.phase === attempt.phase &&
+          response.responseId === attempt.responseId &&
+          response.attempt === attempt.attempt &&
+          isDeepStrictEqual(response.turn, turn),
+      ).length === 1
+    );
+  });
+  const auditAttemptsCovered = runtimeAttemptEvidence.every(({ attempt, turn }) => {
+    if (attempt.phase !== "audit" || attempt.responseId === null) return true;
+    return (
+      candidates
+        .flatMap(({ auditAttempts }) => auditAttempts)
+        .filter(
+          (evidence) =>
+            evidence.responseId === attempt.responseId &&
+            evidence.attempt === attempt.attempt &&
+            candidates.some(
+              (candidate) =>
+                candidate.auditAttempts.includes(evidence) &&
+                isDeepStrictEqual(candidate.turn, turn),
+            ),
+        ).length === 1
+    );
+  });
+  return (
+    narrativeAttemptsCovered &&
+    auditAttemptsCovered &&
+    results.every((result) => {
+      const canonical = result.canonicalNarrativeInput;
+      return (
+        canonical !== undefined &&
+        candidates.filter(
+          (candidate) =>
+            candidate.accepted &&
+            candidate.povId === result.povId &&
+            candidate.chapter === result.chapter &&
+            candidate.adapterMode === result.adapterMode &&
+            candidate.sourceGitSha === result.trace.gitSha &&
+            candidate.promptVersion === result.trace.promptVersion &&
+            candidate.schemaVersion === result.trace.schemaVersion &&
+            candidate.turn.turnId === result.trace.runId &&
+            candidate.turn.requestId === canonical.chapterRecord.requestId &&
+            candidate.mergedProse === result.prose &&
+            isDeepStrictEqual(candidate.audit, result.audit) &&
+            isDeepStrictEqual(candidate.delta, result.trace.acceptedDelta) &&
+            isDeepStrictEqual(candidate.backgroundIntents, result.trace.intents) &&
+            isDeepStrictEqual(
+              candidate.multiAgentOutputItems,
+              result.trace.multiAgentOutputItems,
+            ) &&
+            candidateMatchesCanonicalInput(candidate, canonical),
+        ).length === 1 &&
+        candidates.some(
+          (candidate) =>
+            candidate.accepted &&
+            candidate.povId === result.povId &&
+            candidate.chapter === result.chapter &&
+            traceCallsMatchTurn(result, candidate.turn, runtimeAttemptEvidence),
+        )
+      );
+    })
+  );
+}
 
 export type LiveResult = z.infer<typeof LiveResultSchema>;
 export type LegacyLiveReport = z.infer<typeof LegacyLiveReportSchema>;
 export type Version6LiveReport = z.infer<typeof Version6LiveReportSchema>;
+export type Version7LiveReport = z.infer<typeof Version7LiveReportSchema>;
 export type LiveReport = z.infer<typeof LiveReportSchema>;
-export type ResumableLiveReport = LegacyLiveReport | Version6LiveReport | LiveReport;
+export type ResumableLiveReport =
+  LegacyLiveReport | Version6LiveReport | Version7LiveReport | LiveReport;
 export type ResultChapterCap = z.infer<typeof ResultChapterCapSchema>;
 
 function refineReportCommon(
@@ -631,6 +1860,101 @@ function refineReportCommon(
       });
     }
   }
+  const expectedResultCount = report.suite === "smoke" ? 1 : CHARACTER_IDS.length * 2;
+  const requiresCurrentEvidence = "runtimeAttemptEvidence" in report;
+  const committedEvidencePresent =
+    !requiresCurrentEvidence ||
+    report.results.every(
+      ({ canonicalNarrativeInput, streamChunks }) =>
+        canonicalNarrativeInput !== undefined && streamChunks !== undefined,
+    );
+  const expectedCommonGates: readonly [keyof z.infer<typeof GateSchema>, boolean][] = [
+    [
+      "allAuditsApproved",
+      report.results.length === expectedResultCount &&
+        report.results.every(({ audit }) => audit.approved),
+    ],
+    [
+      "allCommitsCompleted",
+      report.error === null &&
+        committedEvidencePresent &&
+        (report.suite === "smoke"
+          ? report.results.length === 1
+          : hasExactFullMatrix(report.results)),
+    ],
+    [
+      "allPovLeakListsEmpty",
+      report.results.length === expectedResultCount &&
+        report.results.every(({ audit }) => audit.leakedFactIds.length === 0),
+    ],
+    [
+      "allProseWithinWordLimit",
+      report.results.length === expectedResultCount &&
+        report.results.every(({ wordCount: count }) => count >= 900 && count <= 1_300),
+    ],
+    [
+      "allStreamsReconstructed",
+      report.results.length === expectedResultCount &&
+        report.results.every(({ prose, streamChunkCount, streamChunks, streamReconstructed }) =>
+          streamChunks === undefined
+            ? streamChunkCount > 0 && streamReconstructed
+            : streamChunks.length > 0 && streamChunks.join("") === prose,
+        ),
+    ],
+    [
+      "p95WithinSixtySeconds",
+      report.results.length > 0 &&
+        percentile(
+          report.results.map(({ streamingLatencyMs }) => streamingLatencyMs),
+          0.95,
+        ) <= 60_000,
+    ],
+    [
+      "traceCostMatchesAttempts",
+      report.results.length === expectedResultCount &&
+        report.results.every((result) => resultTraceCostMatches(result)),
+    ],
+  ];
+  for (const [gate, expected] of expectedCommonGates) {
+    refineGateValue(report, gate, expected, context);
+  }
+}
+
+function refineLegacyCostGates(
+  report: z.infer<typeof BaseLiveReportSchema>,
+  context: z.RefinementCtx,
+): void {
+  const expectedResultCount = report.suite === "smoke" ? 1 : CHARACTER_IDS.length * 2;
+  refineGateValue(
+    report,
+    "allCostsWithinChapterCap",
+    report.results.length === expectedResultCount &&
+      report.results.every(
+        ({ costUsd }) => costUsd <= report.chapterCostCapUsd + MONEY_EPSILON_USD,
+      ),
+    context,
+  );
+  refineGateValue(
+    report,
+    "totalCostWithinCap",
+    report.cumulativeCostUsd <= TOTAL_CAP_USD + MONEY_EPSILON_USD,
+    context,
+  );
+}
+
+function refineGateValue(
+  report: z.infer<typeof BaseLiveReportSchema>,
+  gate: keyof z.infer<typeof GateSchema>,
+  expected: boolean,
+  context: z.RefinementCtx,
+): void {
+  if (report.gates[gate] !== expected) {
+    context.addIssue({
+      code: "custom",
+      message: `Gate ${gate} is inconsistent`,
+      path: ["gates", gate],
+    });
+  }
 }
 
 function resultKey(povId: CharacterId, chapter: number): string {
@@ -651,6 +1975,10 @@ export interface ResumePreparation {
   readonly discardedResultCount: number;
   readonly draftRejections: LiveReport["draftRejections"];
   readonly existingAttemptCostUsd: number;
+  readonly narrativeCandidates: LiveReport["narrativeCandidates"];
+  readonly narrativeResponses: LiveReport["narrativeResponses"];
+  readonly runtimeEvidenceStartAttemptIndex: number;
+  readonly runtimeAttemptEvidence: LiveReport["runtimeAttemptEvidence"];
   readonly pendingPovIds: CharacterId[];
   readonly retainedPovIds: CharacterId[];
   readonly retainedResultCaps: ResultChapterCap[];
@@ -726,6 +2054,7 @@ async function main(): Promise<void> {
     REPORT_DIRECTORY,
     `live-${suite}-${nativeRequested ? "native" : "sequential"}${povFilter ? `-${povFilter}` : ""}.json`,
   );
+  const narrativeEvidencePath = reportPath.replace(/\.json$/u, ".narrative-candidates.json");
   const startedAt = new Date().toISOString();
   const results: LiveResult[] = [...(resumePreparation?.retainedResults ?? [])];
   const resultChapterCaps: ResultChapterCap[] = [...(resumePreparation?.retainedResultCaps ?? [])];
@@ -736,156 +2065,297 @@ async function main(): Promise<void> {
   const draftRejections: LiveReport["draftRejections"] = [
     ...(resumePreparation?.draftRejections ?? []),
   ];
+  const narrativeCandidates: LiveReport["narrativeCandidates"] = [
+    ...(resumePreparation?.narrativeCandidates ?? []),
+  ];
+  const narrativeResponses: LiveReport["narrativeResponses"] = [
+    ...(resumePreparation?.narrativeResponses ?? []),
+  ];
+  const runtimeEvidenceStartAttemptIndex = resumePreparation?.runtimeEvidenceStartAttemptIndex ?? 0;
+  const runtimeAttemptEvidence: LiveReport["runtimeAttemptEvidence"] = [
+    ...(resumePreparation?.runtimeAttemptEvidence ?? []),
+  ];
   const ledger = new LiveSpendLedger(LIVE_SPEND_LEDGER_PATH, TOTAL_CAP_USD);
-  const liveRunId = randomUUID();
+  const liveRunId = recoverStaleRunId ?? randomUUID();
+  const ledgerBaseline = {
+    attemptCostUsd: existingAttemptCostUsd,
+    priorSpendUsd,
+    sourceReportSha256: resumeSource?.sha256 ?? `fresh:${sourceGitSha}`,
+  };
   let ledgerLocked = false;
+  let recoveryReportCommitted = recoverStaleRunId === null;
   let failure: unknown = null;
+  let recoveredEvidenceExtended = false;
   try {
-    if (recoverStaleRunId === null) ledger.acquireRun(liveRunId);
-    else ledger.recoverStaleRun(recoverStaleRunId, liveRunId);
-    ledgerLocked = true;
-    ledger.synchronizeBaseline(liveRunId, {
-      attemptCostUsd: existingAttemptCostUsd,
-      priorSpendUsd,
-      sourceReportSha256: resumeSource?.sha256 ?? `fresh:${sourceGitSha}`,
-    });
+    if (recoverStaleRunId === null) {
+      ledger.acquireRun(liveRunId);
+      ledgerLocked = true;
+      writeNarrativeEvidenceSidecar(
+        narrativeEvidencePath,
+        attempts,
+        narrativeCandidates,
+        narrativeResponses,
+        runtimeEvidenceStartAttemptIndex,
+        runtimeAttemptEvidence,
+        sourceGitSha,
+        liveRunId,
+      );
+    } else {
+      const recoveredEvidence = readNarrativeEvidenceSidecar(
+        narrativeEvidencePath,
+        recoverStaleRunId,
+        sourceGitSha,
+      );
+      if (
+        !isAppendOnlyEvidence(attempts, recoveredEvidence.attempts) ||
+        !isAppendOnlyEvidence(narrativeCandidates, recoveredEvidence.candidates) ||
+        !isAppendOnlyEvidence(narrativeResponses, recoveredEvidence.narrativeResponses) ||
+        recoveredEvidence.runtimeEvidenceStartAttemptIndex !== runtimeEvidenceStartAttemptIndex ||
+        !isAppendOnlyEvidence(runtimeAttemptEvidence, recoveredEvidence.runtimeAttemptEvidence)
+      ) {
+        throw new Error("Stale-run evidence is not an append-only checkpoint extension");
+      }
+      recoveredEvidenceExtended =
+        recoveredEvidence.attempts.length > attempts.length ||
+        recoveredEvidence.candidates.length > narrativeCandidates.length ||
+        recoveredEvidence.narrativeResponses.length > narrativeResponses.length ||
+        recoveredEvidence.runtimeAttemptEvidence.length > runtimeAttemptEvidence.length;
+      attempts.splice(0, attempts.length, ...recoveredEvidence.attempts);
+      narrativeCandidates.splice(0, narrativeCandidates.length, ...recoveredEvidence.candidates);
+      narrativeResponses.splice(
+        0,
+        narrativeResponses.length,
+        ...recoveredEvidence.narrativeResponses,
+      );
+      runtimeAttemptEvidence.splice(
+        0,
+        runtimeAttemptEvidence.length,
+        ...recoveredEvidence.runtimeAttemptEvidence,
+      );
+      ledger.recoverStaleRun(
+        recoverStaleRunId,
+        ledgerBaseline,
+        sum(attempts.map(({ costUsd }) => costUsd)),
+      );
+      ledgerLocked = true;
+      writeNarrativeEvidenceSidecar(
+        narrativeEvidencePath,
+        attempts,
+        narrativeCandidates,
+        narrativeResponses,
+        runtimeEvidenceStartAttemptIndex,
+        runtimeAttemptEvidence,
+        sourceGitSha,
+        liveRunId,
+      );
+    }
+    if (recoverStaleRunId === null) {
+      ledger.synchronizeBaseline(liveRunId, ledgerBaseline);
+    }
     const costHooks = ledger.createCostHooks(liveRunId);
 
-    try {
-      for (const povId of plannedPovIds) {
-        const store = new StoryStore();
-        try {
-          const service = new StoryService(store, client, {
-            costHooks,
-            maxBackgroundAgents: 3,
-            maxCostUsdPerChapter: perChapterCapUsd,
-            nativeMultiAgent: nativeRequested,
-            onNarrativeAudit: (audit) => {
-              if (!audit.approved) {
-                auditRejections.push({ audit, povId });
-                console.log(
-                  `audit rejected: ${JSON.stringify(audit.scores)}; leaks=${audit.leakedFactIds.join(",") || "none"}; ${audit.evidence.map(({ detail }) => detail).join(" ")}`,
-                );
-              }
-            },
-            onNarrativeDraftRejected: (issues) => {
-              draftRejections.push({ issues: [...issues], povId });
-              console.log(
-                `draft rejected: ${issues.map(({ code, message }) => `${code}: ${message}`).join("; ")}`,
-              );
-            },
-            onRuntimeAttempt: (attempt) => {
-              attempts.push(attempt);
-              if (attempt.errorCode !== null) {
-                console.log(
-                  `${attempt.model} attempt ${attempt.attempt + 1}: ${attempt.errorCode}, $${attempt.costUsd.toFixed(5)}`,
-                );
-              }
-            },
-          });
-          let view = service.selectPov(povId);
-          const retainedPrefix = results
-            .filter((result) => result.povId === povId)
-            .sort((left, right) => left.chapter - right.chapter);
-          if (retainedPrefix.length === 1) {
-            const retainedChapter = retainedPrefix[0];
-            if (!retainedChapter) throw new Error("Retained chapter prefix disappeared");
-            restoreRetainedChapter(store, retainedChapter, view.chapter.choices[0]);
-          }
-          for (let turn = retainedPrefix.length; turn < turnsPerPov; turn += 1) {
-            const beforeTurn = store.loadWorldState("ashen-crown-v1");
-            if (!beforeTurn) throw new Error("World disappeared before live turn");
-            const streamedChunks: string[] = [];
-            const streamingStartedAt = performance.now();
-            view = await service.takeTurn(
-              turn === 0
-                ? {
-                    choiceId: view.chapter.choices[0]?.id ?? "missing-choice",
-                    expectedWorldVersion: beforeTurn.version,
-                    requestId: randomUUID(),
-                    type: "take_action",
-                  }
-                : {
-                    description: "Investigate the immediate area for fresh tracks.",
-                    expectedWorldVersion: beforeTurn.version,
-                    requestId: randomUUID(),
-                    type: "custom_action",
-                  },
-              (chunk) => {
-                streamedChunks.push(chunk);
+    if (recoveredEvidenceExtended) {
+      failure = new Error(
+        "Recovered stale-run evidence was checkpointed without replay; register this report and resume normally",
+      );
+    } else
+      try {
+        for (const povId of plannedPovIds) {
+          const store = new StoryStore();
+          try {
+            const service = new StoryService(store, client, {
+              costHooks,
+              maxBackgroundAgents: 3,
+              maxCostUsdPerChapter: perChapterCapUsd,
+              nativeMultiAgent: nativeRequested,
+              onNarrativeAudit: (audit) => {
+                if (!audit.approved) {
+                  auditRejections.push({ audit, povId });
+                  console.log(
+                    `audit rejected: ${JSON.stringify(audit.scores)}; leaks=${audit.leakedFactIds.join(",") || "none"}; ${audit.evidence.map(({ detail }) => detail).join(" ")}`,
+                  );
+                }
               },
-            );
-            const streamingLatencyMs = Math.max(
-              0,
-              Math.round(performance.now() - streamingStartedAt),
-            );
-            const state = store.loadWorldState("ashen-crown-v1");
-            if (!state || !validateWorldState(state).ok) {
-              throw new Error("World is invalid after live chapter");
-            }
-            const chapter = store.loadChapter("ashen-crown-v1", state.chapter);
-            if (!chapter) throw new Error(`Committed chapter ${state.chapter} is missing`);
-            const trace = store.loadTrace(chapter.traceId);
-            if (!trace) throw new Error(`Trace ${chapter.traceId} is missing`);
-            const result: LiveResult = {
-              adapterMode: trace.adapterMode,
-              audit: chapter.narrativeAudit,
-              chapter: chapter.chapter,
-              costUsd: chapter.estimatedCostUsd,
-              latencyMs: chapter.latencyMs,
-              povId,
-              prose: chapter.prose,
-              streamChunkCount: streamedChunks.length,
-              streamingLatencyMs,
-              streamReconstructed: streamedChunks.join("") === chapter.prose,
-              trace,
-              usage: chapter.usage,
-              wordCount: wordCount(chapter.prose),
-            };
-            assertChapterResult(result, nativeRequested, perChapterCapUsd);
-            results.push(result);
-            resultChapterCaps.push({
-              capUsd: perChapterCapUsd,
-              chapter: result.chapter,
-              povId,
+              onNarrativeCandidate: (candidate) => {
+                narrativeCandidates.push(NarrativeCandidateEvidenceSchema.parse(candidate));
+                writeNarrativeEvidenceSidecar(
+                  narrativeEvidencePath,
+                  attempts,
+                  narrativeCandidates,
+                  narrativeResponses,
+                  runtimeEvidenceStartAttemptIndex,
+                  runtimeAttemptEvidence,
+                  sourceGitSha,
+                  liveRunId,
+                );
+              },
+              onNarrativeDraftRejected: (issues) => {
+                draftRejections.push({ issues: [...issues], povId });
+                console.log(
+                  `draft rejected: ${issues.map(({ code, message }) => `${code}: ${message}`).join("; ")}`,
+                );
+              },
+              onNarrativeResponse: (response) => {
+                narrativeResponses.push(NarrativeResponseEvidenceSchema.parse(response));
+                writeNarrativeEvidenceSidecar(
+                  narrativeEvidencePath,
+                  attempts,
+                  narrativeCandidates,
+                  narrativeResponses,
+                  runtimeEvidenceStartAttemptIndex,
+                  runtimeAttemptEvidence,
+                  sourceGitSha,
+                  liveRunId,
+                );
+              },
+              onRuntimeAttempt: (attempt, turn) => {
+                attempts.push(attempt);
+                runtimeAttemptEvidence.push({ attempt, turn: TurnIdentitySchema.parse(turn) });
+                writeNarrativeEvidenceSidecar(
+                  narrativeEvidencePath,
+                  attempts,
+                  narrativeCandidates,
+                  narrativeResponses,
+                  runtimeEvidenceStartAttemptIndex,
+                  runtimeAttemptEvidence,
+                  sourceGitSha,
+                  liveRunId,
+                );
+                if (attempt.errorCode !== null) {
+                  console.log(
+                    `${attempt.model} attempt ${attempt.attempt + 1}: ${attempt.errorCode}, $${attempt.costUsd.toFixed(5)}`,
+                  );
+                }
+              },
             });
-            writeAtomicJson(
-              reportPath,
-              buildLiveReport(null, ledger.snapshot(), {
-                adapterMode,
-                apiKey,
-                attempts,
-                auditRejections,
-                chapterCostCapUsd: perChapterCapUsd,
-                draftRejections,
-                existingAttemptCostUsd,
-                nativeRequested,
-                povFilter,
-                priorSpendUsd,
-                projectedMaximumCumulativeCostUsd,
-                resultChapterCaps,
-                results,
-                resumePreparation,
-                resumeReport,
-                resumeReportPath,
-                resumeSource,
-                resumeVerification,
-                sourceGitSha,
-                startedAt,
-                suite,
-              }),
-            );
-            console.log(
-              `${povId} chapter ${chapter.chapter}: ${result.wordCount} words, $${result.costUsd.toFixed(5)}, ${result.latencyMs}ms, ${result.adapterMode}`,
-            );
+            let view = service.selectPov(povId);
+            const retainedPrefix = results
+              .filter((result) => result.povId === povId)
+              .sort((left, right) => left.chapter - right.chapter);
+            if (retainedPrefix.length === 1) {
+              const retainedChapter = retainedPrefix[0];
+              if (!retainedChapter) throw new Error("Retained chapter prefix disappeared");
+              restoreRetainedChapter(store, retainedChapter, view.chapter.choices[0]);
+            }
+            for (let turn = retainedPrefix.length; turn < turnsPerPov; turn += 1) {
+              const beforeTurn = store.loadWorldState("ashen-crown-v1");
+              if (!beforeTurn) throw new Error("World disappeared before live turn");
+              const streamedChunks: string[] = [];
+              const streamingStartedAt = performance.now();
+              view = await service.takeTurn(
+                turn === 0
+                  ? {
+                      choiceId: view.chapter.choices[0]?.id ?? "missing-choice",
+                      expectedWorldVersion: beforeTurn.version,
+                      requestId: randomUUID(),
+                      type: "take_action",
+                    }
+                  : {
+                      description: "Investigate the immediate area for fresh tracks.",
+                      expectedWorldVersion: beforeTurn.version,
+                      requestId: randomUUID(),
+                      type: "custom_action",
+                    },
+                (chunk) => {
+                  streamedChunks.push(chunk);
+                },
+              );
+              const streamingLatencyMs = Math.max(
+                0,
+                Math.round(performance.now() - streamingStartedAt),
+              );
+              const state = store.loadWorldState("ashen-crown-v1");
+              if (!state || !validateWorldState(state).ok) {
+                throw new Error("World is invalid after live chapter");
+              }
+              const chapter = store.loadChapter("ashen-crown-v1", state.chapter);
+              if (!chapter) throw new Error(`Committed chapter ${state.chapter} is missing`);
+              const trace = store.loadTrace(chapter.traceId);
+              if (!trace) throw new Error(`Trace ${chapter.traceId} is missing`);
+              const povContext = buildPovContext(state, povId);
+              const allowedFactIds = [...povContext.factIds].sort();
+              const allowedFactIdSet = new Set(allowedFactIds);
+              const result: LiveResult = {
+                adapterMode: trace.adapterMode,
+                audit: chapter.narrativeAudit,
+                canonicalNarrativeInput: {
+                  allowedFactIds,
+                  chapterRecord: chapter,
+                  forbiddenFacts: state.facts
+                    .filter(({ id }) => !allowedFactIdSet.has(id))
+                    .map(({ claim, id }) => ({ claim, id })),
+                  frame: {
+                    choices: chapter.choices,
+                    terminal: chapter.terminal,
+                    title: chapter.title,
+                  },
+                  playerAction: chapter.playerAction,
+                  stateAfter: state,
+                  stateBefore: beforeTurn,
+                  worldVersionAfter: chapter.stateAfterVersion,
+                  worldVersionBefore: chapter.stateBeforeVersion,
+                },
+                chapter: chapter.chapter,
+                costUsd: chapter.estimatedCostUsd,
+                latencyMs: chapter.latencyMs,
+                povId,
+                prose: chapter.prose,
+                streamChunkCount: streamedChunks.length,
+                streamChunks: streamedChunks,
+                streamingLatencyMs,
+                streamReconstructed: streamedChunks.join("") === chapter.prose,
+                trace,
+                usage: chapter.usage,
+                wordCount: wordCount(chapter.prose),
+              };
+              assertChapterResult(result, nativeRequested, perChapterCapUsd);
+              results.push(result);
+              resultChapterCaps.push({
+                capUsd: perChapterCapUsd,
+                chapter: result.chapter,
+                povId,
+              });
+              writeAtomicJson(
+                reportPath,
+                buildLiveReport(null, ledger.snapshot(), {
+                  adapterMode,
+                  apiKey,
+                  attempts,
+                  auditRejections,
+                  chapterCostCapUsd: perChapterCapUsd,
+                  draftRejections,
+                  existingAttemptCostUsd,
+                  narrativeCandidates,
+                  narrativeResponses,
+                  runtimeEvidenceStartAttemptIndex,
+                  runtimeAttemptEvidence,
+                  nativeRequested,
+                  povFilter,
+                  priorSpendUsd,
+                  projectedMaximumCumulativeCostUsd,
+                  resultChapterCaps,
+                  results,
+                  resumePreparation,
+                  resumeReport,
+                  resumeReportPath,
+                  resumeSource,
+                  resumeVerification,
+                  sourceGitSha,
+                  startedAt,
+                  suite,
+                }),
+              );
+              console.log(
+                `${povId} chapter ${chapter.chapter}: ${result.wordCount} words, $${result.costUsd.toFixed(5)}, ${result.latencyMs}ms, ${result.adapterMode}`,
+              );
+            }
+          } finally {
+            store.close();
           }
-        } finally {
-          store.close();
         }
+      } catch (error) {
+        failure = error;
       }
-    } catch (error) {
-      failure = error;
-    }
 
     const ledgerSnapshot = ledger.snapshot();
     const report = buildLiveReport(failure, ledgerSnapshot, {
@@ -896,6 +2366,10 @@ async function main(): Promise<void> {
       chapterCostCapUsd: perChapterCapUsd,
       draftRejections,
       existingAttemptCostUsd,
+      narrativeCandidates,
+      narrativeResponses,
+      runtimeEvidenceStartAttemptIndex,
+      runtimeAttemptEvidence,
       nativeRequested,
       povFilter,
       priorSpendUsd,
@@ -912,6 +2386,7 @@ async function main(): Promise<void> {
       suite,
     });
     writeAtomicJson(reportPath, report);
+    recoveryReportCommitted = true;
     if (suite === "full" && failure === null && Object.values(report.gates).every(Boolean)) {
       writeReviewPackets(results);
     }
@@ -937,7 +2412,11 @@ async function main(): Promise<void> {
       }
     }
   } finally {
-    if (ledgerLocked) ledger.releaseRun(liveRunId);
+    if (ledgerLocked && recoveryReportCommitted) {
+      ledger.releaseRun(liveRunId);
+    } else if (ledgerLocked) {
+      console.error(`stale recovery lock retained by run ${liveRunId}`);
+    }
     ledger.close();
   }
 }
@@ -955,6 +2434,10 @@ interface BuildLiveReportInput {
   readonly chapterCostCapUsd: number;
   readonly draftRejections: LiveReport["draftRejections"];
   readonly existingAttemptCostUsd: number;
+  readonly narrativeCandidates: LiveReport["narrativeCandidates"];
+  readonly narrativeResponses: LiveReport["narrativeResponses"];
+  readonly runtimeEvidenceStartAttemptIndex: number;
+  readonly runtimeAttemptEvidence: LiveReport["runtimeAttemptEvidence"];
   readonly nativeRequested: boolean;
   readonly povFilter: CharacterId | null;
   readonly priorSpendUsd: number;
@@ -992,7 +2475,13 @@ function buildLiveReport(
   const gates = {
     allAuditsApproved:
       input.results.length === expected && input.results.every(({ audit }) => audit.approved),
-    allCommitsCompleted: completeMatrix,
+    allCommitsCompleted:
+      failure === null &&
+      completeMatrix &&
+      input.results.every(
+        ({ canonicalNarrativeInput, streamChunks }) =>
+          canonicalNarrativeInput !== undefined && streamChunks !== undefined,
+      ),
     allCostsWithinChapterCap:
       input.results.length === expected &&
       input.results.every(
@@ -1008,9 +2497,19 @@ function buildLiveReport(
       input.results.every(({ wordCount: count }) => count >= 900 && count <= 1_300),
     allStreamsReconstructed:
       input.results.length === expected &&
-      input.results.every(({ streamChunkCount, streamReconstructed }) =>
-        Boolean(streamChunkCount > 0 && streamReconstructed),
+      input.results.every(
+        ({ prose, streamChunks }) =>
+          streamChunks !== undefined && streamChunks.length > 0 && streamChunks.join("") === prose,
       ),
+    narrativeEvidenceComplete: narrativeEvidenceIsComplete(
+      input.results,
+      input.attempts,
+      input.narrativeCandidates,
+      input.narrativeResponses,
+      input.runtimeEvidenceStartAttemptIndex,
+      input.runtimeAttemptEvidence,
+      input.suite,
+    ),
     p95WithinSixtySeconds:
       input.results.length > 0 &&
       percentile(
@@ -1037,6 +2536,9 @@ function buildLiveReport(
     finishedAt: new Date().toISOString(),
     gates,
     nativeRequested: input.nativeRequested,
+    narrativeCandidates: input.narrativeCandidates,
+    narrativeResponses: input.narrativeResponses,
+    runtimeEvidenceStartAttemptIndex: input.runtimeEvidenceStartAttemptIndex,
     povFilter: input.povFilter,
     priorSpendUsd: input.priorSpendUsd,
     projectedMaximumCumulativeCostUsd: input.projectedMaximumCumulativeCostUsd,
@@ -1082,6 +2584,7 @@ function buildLiveReport(
     suite: input.suite,
     totalCostCapUsd: TOTAL_CAP_USD,
     totalCostUsd,
+    runtimeAttemptEvidence: input.runtimeAttemptEvidence,
     version: REPORT_VERSION,
   });
 }
@@ -1168,6 +2671,67 @@ export function writeAtomicJson(path: string, value: unknown): void {
   renameSync(temporaryPath, path);
 }
 
+export function isAppendOnlyEvidence<T>(
+  checkpointed: readonly T[],
+  recovered: readonly T[],
+): boolean {
+  return (
+    recovered.length >= checkpointed.length &&
+    isDeepStrictEqual(recovered.slice(0, checkpointed.length), checkpointed)
+  );
+}
+
+export function writeNarrativeEvidenceSidecar(
+  path: string,
+  attempts: readonly z.infer<typeof RuntimeAttemptTraceSchema>[],
+  candidates: readonly z.infer<typeof NarrativeCandidateEvidenceSchema>[],
+  narrativeResponses: readonly z.infer<typeof NarrativeResponseEvidenceSchema>[],
+  runtimeEvidenceStartAttemptIndex: number,
+  runtimeAttemptEvidence: readonly z.infer<typeof RuntimeAttemptEvidenceSchema>[],
+  sourceGitSha: string,
+  liveRunId: string,
+): void {
+  writeAtomicJson(
+    path,
+    NarrativeEvidenceSidecarSchema.parse({
+      attempts,
+      candidates,
+      liveRunId,
+      narrativeResponses,
+      promptVersion: PROMPT_VERSION,
+      reportVersion: REPORT_VERSION,
+      runtimeEvidenceStartAttemptIndex,
+      runtimeSchemaVersion: RUNTIME_SCHEMA_VERSION,
+      runtimeAttemptEvidence,
+      sourceGitSha,
+      updatedAt: new Date().toISOString(),
+    }),
+  );
+}
+
+export function readNarrativeEvidenceSidecar(
+  path: string,
+  expectedLiveRunId: string,
+  expectedSourceGitSha: string,
+): z.infer<typeof NarrativeEvidenceSidecarSchema> {
+  let candidate: unknown;
+  try {
+    candidate = JSON.parse(readFileSync(path, "utf8")) as unknown;
+  } catch (error) {
+    throw new Error(
+      `Cannot read stale-run narrative evidence: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  const evidence = NarrativeEvidenceSidecarSchema.parse(candidate);
+  if (evidence.liveRunId !== expectedLiveRunId) {
+    throw new Error("Narrative evidence belongs to a different stale run");
+  }
+  if (evidence.sourceGitSha !== expectedSourceGitSha) {
+    throw new Error("Narrative evidence belongs to a different Git checkpoint");
+  }
+  return evidence;
+}
+
 function assertChapterResult(
   result: LiveResult,
   nativeRequested: boolean,
@@ -1238,7 +2802,7 @@ export function prepareResume(
   requirements: ResumeRequirements,
 ): ResumePreparation {
   if (report.suite !== "full") {
-    throw new Error("Resume report must be a version 5, 6, or 7 full-suite report");
+    throw new Error("Resume report must be a version 5, 6, 7, or 8 full-suite report");
   }
   if (report.priorSpendUsd !== requirements.priorSpendUsd) {
     throw new Error("Resume report prior spend does not match this run");
@@ -1290,6 +2854,14 @@ export function prepareResume(
     discardedResultCount,
     draftRejections: [...report.draftRejections],
     existingAttemptCostUsd: sum(attempts.map(({ costUsd }) => costUsd)),
+    narrativeCandidates: report.version === REPORT_VERSION ? [...report.narrativeCandidates] : [],
+    narrativeResponses: report.version === REPORT_VERSION ? [...report.narrativeResponses] : [],
+    runtimeEvidenceStartAttemptIndex:
+      report.version === REPORT_VERSION
+        ? report.runtimeEvidenceStartAttemptIndex
+        : report.attempts.length,
+    runtimeAttemptEvidence:
+      report.version === REPORT_VERSION ? [...report.runtimeAttemptEvidence] : [],
     pendingPovIds,
     retainedPovIds,
     retainedResultCaps,
@@ -1302,7 +2874,9 @@ function sourceResultChapterCap(
   povId: CharacterId,
   chapter: number,
 ): number {
-  if (report.version !== REPORT_VERSION) return report.chapterCostCapUsd;
+  if (report.version === LEGACY_REPORT_VERSION || report.version === VERSION_6_REPORT_VERSION) {
+    return report.chapterCostCapUsd;
+  }
   const cap = report.resultChapterCaps.find(
     (entry) => entry.povId === povId && entry.chapter === chapter,
   )?.capUsd;
@@ -1350,17 +2924,28 @@ function readLiveReport(path: string): ResumeSource {
       `Cannot read resume report: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
-  const current = LiveReportSchema.safeParse(candidate);
-  if (current.success) return { report: current.data, sha256: hashText(raw) };
-  const previous = Version6LiveReportSchema.safeParse(candidate);
-  if (previous.success) return { report: previous.data, sha256: hashText(raw) };
-  const legacy = LegacyLiveReportSchema.safeParse(candidate);
-  if (legacy.success) return { report: legacy.data, sha256: hashText(raw) };
-  const details = [...current.error.issues, ...previous.error.issues, ...legacy.error.issues]
+  return { report: parseLiveReport(candidate), sha256: hashText(raw) };
+}
+
+export function parseLiveReport(candidate: unknown): ResumableLiveReport {
+  const version8 = LiveReportSchema.safeParse(candidate);
+  if (version8.success) return version8.data;
+  const version7 = Version7LiveReportSchema.safeParse(candidate);
+  if (version7.success) return version7.data;
+  const version6 = Version6LiveReportSchema.safeParse(candidate);
+  if (version6.success) return version6.data;
+  const version5 = LegacyLiveReportSchema.safeParse(candidate);
+  if (version5.success) return version5.data;
+  const details = [
+    ...version8.error.issues,
+    ...version7.error.issues,
+    ...version6.error.issues,
+    ...version5.error.issues,
+  ]
     .slice(0, 5)
     .map((issue) => `${issue.path.join(".") || "report"}: ${issue.message}`)
     .join("; ");
-  throw new Error(`Resume report is not valid version 5, 6, or 7 data: ${details}`);
+  throw new Error(`Resume report is not valid version 5, 6, 7, or 8 data: ${details}`);
 }
 
 function verifyResumeCheckpoint(

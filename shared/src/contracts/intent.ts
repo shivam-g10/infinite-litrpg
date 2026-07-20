@@ -104,6 +104,62 @@ export const WorldIntentSchema = z
   })
   .strict();
 
+const BackgroundIntentRequirementsSchema = z
+  .object({
+    f: z.array(FactIdSchema).max(12),
+    i: z.array(ItemIdSchema).max(12),
+    s: z.array(SkillIdSchema).max(12),
+  })
+  .strict();
+
+const BackgroundIntentActionCandidateSchema = z
+  .object({
+    t: z.enum([
+      "move",
+      "use_item",
+      "use_skill",
+      "investigate",
+      "interact",
+      "defend",
+      "rally",
+      "wait",
+    ]),
+    v: z.array(z.union([ShortTextSchema, z.number().int().positive().max(99), z.null()])).max(3),
+  })
+  .strict();
+
+export const BackgroundIntentCandidateSchema = z
+  .object({
+    a: BackgroundIntentActionCandidateSchema,
+    e: ShortTextSchema,
+    g: ShortTextSchema,
+    r: BackgroundIntentRequirementsSchema,
+  })
+  .strict();
+
+export const AssignedBackgroundIntentCandidateSchema = BackgroundIntentCandidateSchema.extend({
+  c: CharacterIdSchema,
+}).strict();
+
+export const BackgroundIntentBatchCandidateSchema = z
+  .object({
+    intents: z.array(AssignedBackgroundIntentCandidateSchema).max(3),
+  })
+  .strict()
+  .superRefine(({ intents }, context) => {
+    const actorIds = new Set<string>();
+    for (const [index, intent] of intents.entries()) {
+      if (actorIds.has(intent.c)) {
+        context.addIssue({
+          code: "custom",
+          message: `Duplicate background actor ${intent.c}`,
+          path: ["intents", index, "c"],
+        });
+      }
+      actorIds.add(intent.c);
+    }
+  });
+
 export const PersistedWorldIntentSchema = WorldIntentSchema.extend({
   promptVersion: PersistedPromptVersionSchema,
 }).strict();
@@ -139,6 +195,10 @@ export const PlayerActionSchema = z
   .strict();
 
 export type IntentAction = z.infer<typeof IntentActionSchema>;
+export type BackgroundIntentCandidate = z.infer<typeof BackgroundIntentCandidateSchema>;
+export type AssignedBackgroundIntentCandidate = z.infer<
+  typeof AssignedBackgroundIntentCandidateSchema
+>;
 export type PlayerAction = z.infer<typeof PlayerActionSchema>;
 export type PersistedWorldIntent = z.infer<typeof PersistedWorldIntentSchema>;
 export type WorldIntent = z.infer<typeof WorldIntentSchema>;

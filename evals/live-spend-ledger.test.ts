@@ -10,6 +10,11 @@ import { LiveSpendLedger } from "./live-spend-ledger";
 
 const SOURCE_A = "a".repeat(64);
 const SOURCE_B = "b".repeat(64);
+const RECOVERY_BASELINE = {
+  attemptCostUsd: 0.2,
+  priorSpendUsd: 2.5,
+  sourceReportSha256: SOURCE_A,
+} as const;
 
 const temporaryDirectories: string[] = [];
 
@@ -249,9 +254,8 @@ describe("durable live spend ledger", () => {
     markOwnerProcessDead(filename);
 
     const recovered = new LiveSpendLedger(filename, 3);
-    const newRun = randomUUID();
-    recovered.recoverStaleRun(staleRun, newRun);
-    recovered.synchronizeBaseline(newRun, {
+    recovered.recoverStaleRun(staleRun, RECOVERY_BASELINE, 0.24);
+    recovered.synchronizeBaseline(staleRun, {
       attemptCostUsd: 0.24,
       priorSpendUsd: 2.5,
       sourceReportSha256: SOURCE_B,
@@ -260,7 +264,88 @@ describe("durable live spend ledger", () => {
       baselineAttemptCostUsd: 0.24,
       totalExposureUsd: 2.74,
     });
-    recovered.releaseRun(newRun);
+    recovered.releaseRun(staleRun);
+    recovered.close();
+  });
+
+  it("verifies recovered sidecar spend without folding or reclaiming it", () => {
+    const filename = temporaryLedgerPath();
+    const staleRun = randomUUID();
+    const first = new LiveSpendLedger(filename, 3);
+    first.acquireRun(staleRun);
+    first.synchronizeBaseline(staleRun, {
+      attemptCostUsd: 0.2,
+      priorSpendUsd: 2.5,
+      sourceReportSha256: SOURCE_A,
+    });
+    const hooks = first.createCostHooks(staleRun);
+    hooks.reserve(reservation("known-before-sidecar", 0.1));
+    hooks.settle({ actualCostUsd: 0.04, id: "known-before-sidecar" });
+    first.close();
+    markOwnerProcessDead(filename);
+
+    const recovered = new LiveSpendLedger(filename, 3);
+    recovered.recoverStaleRun(staleRun, RECOVERY_BASELINE, 0.24);
+    expect(recovered.snapshot()).toMatchObject({
+      baselineAttemptCostUsd: 0.2,
+      knownReservationCostUsd: 0.04,
+      sourceReportSha256: SOURCE_A,
+      totalExposureUsd: 2.74,
+    });
+    recovered.releaseRun(staleRun);
+
+    const resumedRun = randomUUID();
+    recovered.acquireRun(resumedRun);
+    recovered.synchronizeBaseline(resumedRun, {
+      attemptCostUsd: 0.24,
+      priorSpendUsd: 2.5,
+      sourceReportSha256: SOURCE_B,
+    });
+    recovered.synchronizeBaseline(resumedRun, {
+      attemptCostUsd: 0.24,
+      priorSpendUsd: 2.5,
+      sourceReportSha256: SOURCE_B,
+    });
+    expect(recovered.snapshot()).toMatchObject({
+      baselineAttemptCostUsd: 0.24,
+      knownReservationCostUsd: 0,
+      sourceReportSha256: SOURCE_B,
+      totalExposureUsd: 2.74,
+    });
+    recovered.releaseRun(resumedRun);
+    recovered.close();
+  });
+
+  it("rejects recovered totals that omit or invent settled spend", () => {
+    const filename = temporaryLedgerPath();
+    const staleRun = randomUUID();
+    const first = new LiveSpendLedger(filename, 3);
+    first.acquireRun(staleRun);
+    first.synchronizeBaseline(staleRun, {
+      attemptCostUsd: 0.2,
+      priorSpendUsd: 2.5,
+      sourceReportSha256: SOURCE_A,
+    });
+    const hooks = first.createCostHooks(staleRun);
+    hooks.reserve(reservation("known-before-invalid-sidecar", 0.1));
+    hooks.settle({ actualCostUsd: 0.04, id: "known-before-invalid-sidecar" });
+    first.close();
+    markOwnerProcessDead(filename);
+
+    const recovered = new LiveSpendLedger(filename, 3);
+    expect(() => recovered.recoverStaleRun(staleRun, RECOVERY_BASELINE, 0.2)).toThrow(
+      "does not reconcile",
+    );
+    expect(() => recovered.recoverStaleRun(staleRun, RECOVERY_BASELINE, 0.25)).toThrow(
+      "does not reconcile",
+    );
+    expect(recovered.snapshot()).toMatchObject({
+      baselineAttemptCostUsd: 0.2,
+      knownReservationCostUsd: 0.04,
+      totalExposureUsd: 2.74,
+    });
+    recovered.recoverStaleRun(staleRun, RECOVERY_BASELINE, 0.24);
+    recovered.releaseRun(staleRun);
     recovered.close();
   });
 
@@ -269,8 +354,10 @@ describe("durable live spend ledger", () => {
     const liveRun = randomUUID();
     const live = new LiveSpendLedger(liveFilename, 3);
     live.acquireRun(liveRun);
-    expect(() => live.recoverStaleRun(liveRun, randomUUID())).toThrow("running owner");
-    expect(() => live.recoverStaleRun(randomUUID(), randomUUID())).toThrow("does not match");
+    expect(() => live.recoverStaleRun(liveRun, RECOVERY_BASELINE, 0.2)).toThrow("running owner");
+    expect(() => live.recoverStaleRun(randomUUID(), RECOVERY_BASELINE, 0.2)).toThrow(
+      "does not match",
+    );
     live.close();
 
     const activeFilename = temporaryLedgerPath();
@@ -287,13 +374,13 @@ describe("durable live spend ledger", () => {
     markOwnerProcessDead(activeFilename);
 
     const blocked = new LiveSpendLedger(activeFilename, 3);
-    expect(() => blocked.recoverStaleRun(activeRun, randomUUID())).toThrow(
+    expect(() => blocked.recoverStaleRun(activeRun, RECOVERY_BASELINE, 0.2)).toThrow(
       "external reconciliation",
     );
     blocked.close();
   });
 
-  it("blocks a recovered run when the source report omitted settled exposure", () => {
+  it("keeps the stale lock when the source report omitted settled exposure", () => {
     const filename = temporaryLedgerPath();
     const staleRun = randomUUID();
     const first = new LiveSpendLedger(filename, 3);
@@ -310,16 +397,11 @@ describe("durable live spend ledger", () => {
     markOwnerProcessDead(filename);
 
     const recovered = new LiveSpendLedger(filename, 3);
-    const newRun = randomUUID();
-    recovered.recoverStaleRun(staleRun, newRun);
-    expect(() =>
-      recovered.synchronizeBaseline(newRun, {
-        attemptCostUsd: 0.2,
-        priorSpendUsd: 2.5,
-        sourceReportSha256: SOURCE_A,
-      }),
-    ).toThrow("do not reconcile");
-    recovered.releaseRun(newRun);
+    expect(() => recovered.recoverStaleRun(staleRun, RECOVERY_BASELINE, 0.2)).toThrow(
+      "does not reconcile",
+    );
+    recovered.recoverStaleRun(staleRun, RECOVERY_BASELINE, 0.24);
+    recovered.releaseRun(staleRun);
     recovered.close();
   });
 });

@@ -2,7 +2,7 @@ import { ReasoningEffortSchema, type ModelCallTrace } from "@infinite-litrpg/sha
 import type OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
 import type { InputTokenCountParams } from "openai/resources/responses/input-tokens";
-import type { ParsedResponse, Response } from "openai/resources/responses/responses";
+import type { Response } from "openai/resources/responses/responses";
 import type { z } from "zod";
 
 import { OpenAIRuntimeError } from "./errors";
@@ -11,6 +11,7 @@ import { runRetriedRequest, type RuntimeCallResult, type RuntimePolicy } from ".
 import { estimateMaximumCountedRequestCostUsd, estimateMaximumRequestCostUsd } from "./usage";
 
 export type StableOpenAIClient = Pick<OpenAI, "responses">;
+export const NO_PROMPT_CACHE_OPTIONS = Object.freeze({ mode: "explicit" as const });
 
 export interface StructuredResponseRequest<T> {
   readonly agentId?: string | null;
@@ -18,11 +19,28 @@ export interface StructuredResponseRequest<T> {
   readonly instructions: string;
   readonly maxOutputTokens: number;
   readonly model: RuntimeModel;
+  readonly onCandidate?: (candidate: T, context: StructuredResponseCandidateContext) => void;
+  readonly onRawCandidate?: (context: StructuredResponseRawCandidateContext) => void;
   readonly policy: RuntimePolicy;
   readonly reasoningEffort: RuntimeReasoningEffort;
   readonly schema: z.ZodType<T>;
   readonly schemaName: string;
   readonly validate?: (data: T) => void;
+}
+
+export interface StructuredResponseCandidateContext {
+  readonly attempt: number;
+  readonly responseId: string;
+}
+
+export interface StructuredResponseRawCandidateContext extends StructuredResponseCandidateContext {
+  readonly rawOutputText: string;
+  readonly status: Response["status"];
+}
+
+interface AttemptedStructuredResponse {
+  readonly attempt: number;
+  readonly response: Response;
 }
 
 export async function runStructuredResponse<T>(
@@ -45,19 +63,22 @@ export async function runStructuredResponse<T>(
 
   return runRetriedRequest({
     agentId: request.agentId ?? null,
-    evaluate: (response: ParsedResponse<T>) => {
+    evaluate: ({ attempt, response }: AttemptedStructuredResponse) => {
       assertStableResponseCompleted(response);
       const refusal = findStableRefusal(response);
       if (refusal !== null) {
         throw new OpenAIRuntimeError("REFUSAL", refusal, { retryable: true });
       }
-      if (response.output_parsed === null) {
-        throw new OpenAIRuntimeError("INVALID_OUTPUT", "Structured response had no parsed output", {
+      let raw: unknown;
+      try {
+        raw = JSON.parse(response.output_text) as unknown;
+      } catch (error) {
+        throw new OpenAIRuntimeError("INVALID_OUTPUT", "Structured output was not valid JSON", {
+          cause: error,
           retryable: true,
         });
       }
-
-      const parsed = request.schema.safeParse(response.output_parsed);
+      const parsed = request.schema.safeParse(raw);
       if (!parsed.success) {
         throw new OpenAIRuntimeError(
           "INVALID_OUTPUT",
@@ -68,6 +89,10 @@ export async function runStructuredResponse<T>(
           },
         );
       }
+      invokeEvidenceHook(
+        () => request.onCandidate?.(parsed.data, { attempt, responseId: response.id }),
+        "Structured response candidate-evidence hook failed",
+      );
       try {
         request.validate?.(parsed.data);
       } catch (error) {
@@ -79,25 +104,48 @@ export async function runStructuredResponse<T>(
       }
       return { data: parsed.data, responseId: response.id };
     },
-    getResponseId: (response) => response.id,
-    getUsage: (response) => response.usage,
-    invoke: async (signal) =>
-      client.responses.parse(
+    getResponseId: ({ response }) => response.id,
+    getUsage: ({ response }) => response.usage,
+    invoke: async (signal, attempt): Promise<AttemptedStructuredResponse> => ({
+      attempt,
+      response: await client.responses.create(
         {
           input: request.input,
           instructions: request.instructions,
           max_output_tokens: request.maxOutputTokens,
           model,
+          prompt_cache_options: NO_PROMPT_CACHE_OPTIONS,
           reasoning: { effort: reasoningEffort },
           store: false,
           text: { format },
         },
         { signal },
       ),
+    }),
     model,
     maximumCostUsd,
+    observe: ({ attempt, response }) => {
+      invokeEvidenceHook(
+        () =>
+          request.onRawCandidate?.({
+            attempt,
+            rawOutputText: response.output_text,
+            responseId: response.id,
+            status: response.status,
+          }),
+        "Structured response raw-evidence hook failed",
+      );
+    },
     policy: request.policy,
   });
+}
+
+function invokeEvidenceHook(callback: () => void, message: string): void {
+  try {
+    callback();
+  } catch (error) {
+    throw new OpenAIRuntimeError("INVALID_POLICY", message, { cause: error });
+  }
 }
 
 export interface NarrativeAuditVerdict {
@@ -106,13 +154,28 @@ export interface NarrativeAuditVerdict {
   readonly reason?: string;
 }
 
+export interface NarrativeAuditContext {
+  readonly attempt: number;
+  readonly responseId: string;
+}
+
+export interface NarrationRawCandidateContext extends NarrativeAuditContext {
+  readonly bufferedOutputText: string;
+  readonly rawOutputText: string;
+  readonly status: Response["status"];
+}
+
 export interface BufferedNarrationRequest {
-  readonly audit: (completeProse: string) => NarrativeAuditVerdict | Promise<NarrativeAuditVerdict>;
+  readonly audit: (
+    completeProse: string,
+    context: NarrativeAuditContext,
+  ) => NarrativeAuditVerdict | Promise<NarrativeAuditVerdict>;
   readonly chunkCharacters?: number;
   readonly input: string | ((attempt: number) => string);
   readonly instructions: string;
   readonly maxOutputTokens: number;
   readonly model: RuntimeModel;
+  readonly onRawCandidate?: (context: NarrationRawCandidateContext) => void;
   readonly policy: RuntimePolicy;
   readonly reasoningEffort: RuntimeReasoningEffort;
 }
@@ -124,6 +187,7 @@ export interface AuditedNarrationResult extends Omit<RuntimeCallResult<string>, 
 }
 
 interface BufferedStreamResponse {
+  readonly attempt: number;
   readonly bufferedDelta: string;
   readonly response: Response;
 }
@@ -160,7 +224,7 @@ export async function createAuditedNarrationReplay(
   });
 
   const call = await runRetriedRequest({
-    evaluate: async ({ bufferedDelta, response }: BufferedStreamResponse) => {
+    evaluate: async ({ attempt, bufferedDelta, response }: BufferedStreamResponse) => {
       assertStableResponseCompleted(response);
       const refusal = findStableRefusal(response);
       if (refusal !== null) {
@@ -178,7 +242,10 @@ export async function createAuditedNarrationReplay(
           { retryable: true },
         );
       }
-      const audit = await request.audit(response.output_text);
+      const audit = await request.audit(response.output_text, {
+        attempt,
+        responseId: response.id,
+      });
       if (!audit.accepted) {
         throw new OpenAIRuntimeError(
           "NARRATIVE_AUDIT_REJECTED",
@@ -206,6 +273,7 @@ export async function createAuditedNarrationReplay(
           instructions: request.instructions,
           max_output_tokens: request.maxOutputTokens,
           model,
+          prompt_cache_options: NO_PROMPT_CACHE_OPTIONS,
           reasoning: { effort: reasoningEffort },
           store: false,
         },
@@ -216,10 +284,23 @@ export async function createAuditedNarrationReplay(
         if (event.type === "response.output_text.delta") bufferedDelta += event.delta;
       }
       const response = await stream.finalResponse();
-      return { bufferedDelta, response };
+      return { attempt, bufferedDelta, response };
     },
     model,
     maximumCostUsd,
+    observe: ({ attempt, bufferedDelta, response }) => {
+      invokeEvidenceHook(
+        () =>
+          request.onRawCandidate?.({
+            attempt,
+            bufferedOutputText: bufferedDelta,
+            rawOutputText: response.output_text,
+            responseId: response.id,
+            status: response.status,
+          }),
+        "Narration raw-evidence hook failed",
+      );
+    },
     policy: request.policy,
   });
 
@@ -314,6 +395,7 @@ function createStableMaximumCostResolver(
       request.model,
       promptBytes(input, request.instructions, request.format),
       request.maxOutputTokens,
+      { inputBilling: "uncached" },
     );
     if (byteBound <= request.policy.budget.remainingUsd) return byteBound;
 
@@ -357,6 +439,7 @@ async function countMaximumRequestCost(
       request.model,
       counted.input_tokens,
       request.maxOutputTokens,
+      { inputBilling: "uncached" },
     );
   } catch {
     return byteBound;

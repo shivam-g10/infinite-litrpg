@@ -8,7 +8,7 @@ Evals define completion. Implement runner before live prompt work.
 - `npm run evals:live:smoke`: smallest capped API suite.
 - `npm run evals:live:full`: release-only live suite with explicit cost confirmation.
 
-Live runs accept `--prior-spend-usd` and `--chapter-cap-usd`. Report version 7 records prior spend, the static worst-case projection, exact cumulative generation-attempt exposure, attempt phase, audit rejections, deterministic draft rejections, approved prose, prompt version, per-result Git and chapter-cap provenance, source-report hash, bridge hashes, and adapter checkpoint.
+Live runs accept `--prior-spend-usd` and `--chapter-cap-usd`. Report version 8 records prior spend, the static worst-case projection, exact cumulative generation-attempt exposure, attempt phase, every raw narration, recovery, and audit response, every merged narration candidate, recovery bounds and verdicts, parsed audit candidates, response IDs, canon inputs, deterministic rejections, approved prose, prompt and runtime-schema versions, per-candidate and per-result Git provenance, chapter-cap provenance, source-report hash, bridge hashes, and adapter checkpoint. Accepted results require one exact candidate and every trace call, raw response, and current-schema attempt must bind to its turn. A carried start index authenticates the unavailable prefix from a legacy report across later version 8 resumes. An ignored atomic evidence sidecar survives interruption before chapter commit.
 
 The static projection stays visible even when it exceeds `$3`; it is not the authority after a partial run. The durable SQLite ledger at ignored `evals/reports/live-spend-ledger.db` is authoritative. It reserves every generation request before provider transport and rejects a request that could take cumulative local exposure above `$3`. Returned usage settles to estimated actual cost before response validation. A timeout, transport failure, or interrupted process keeps the full reservation.
 
@@ -19,15 +19,15 @@ npm run evals:live:smoke -- --prior-spend-usd 1.25 --chapter-cap-usd 0.10
 npm run evals:live:full -- --prior-spend-usd 1.30 --chapter-cap-usd 0.09
 ```
 
-A full run requires a clean committed worktree. A failed version 5, 6, or 7 run can resume only with the same prior spend, adapter, and prompt version. Version 7 authenticates and retains each contiguous chapter prefix. A retained chapter keeps its original Git SHA and source cap; a new chapter uses the current run cap. Chapter 1 state is reconstructed from the seed fixture, player intent, accepted delta, and both trace state hashes before chapter 2 runs.
+A full run requires a clean committed worktree. A failed version 5, 6, 7, or 8 run can resume only with the same prior spend, adapter, and prompt version. Versions 7 and 8 authenticate and retain each contiguous chapter prefix. A retained chapter keeps its original Git SHA and source cap; a new chapter uses the current run cap. Chapter 1 state is reconstructed from the seed fixture, player intent, accepted delta, and both trace state hashes before chapter 2 runs.
 
 Current HEAD must equal the source checkpoint or differ only in committed non-runtime tests and release documentation. A legacy bridge additionally requires the exact audited hashes of every changed runtime file. Every source report must match a full-file SHA-256 and metadata entry in tracked `evals/resume-checkpoints.json`. Inspect and register each failed report before another resume. Never auto-resume an unregistered artifact.
 
 ```powershell
-npm run evals:live:full -- --prior-spend-usd 2.735142975 --chapter-cap-usd 0.0424
+npm run evals:live:full -- --prior-spend-usd 2.786385175 --chapter-cap-usd 0.0424
 ```
 
-Prompt `1.4.10` intentionally starts a fresh twelve-cycle matrix after folding exact prior exposure into the ledger. Prompt `1.4.9` results remain registered baseline evidence; they do not count toward the changed narration route.
+Prompt `1.4.11` requires a fresh twelve-cycle matrix after folding exact prior exposure into the ledger. Prompts `1.4.9` and `1.4.10` remain registered baseline evidence; they do not count toward the changed narration, audit, recovery, cache, and evidence route. The exact provider-counted clean-path projection is `$0.207336` against `$0.213614825` remaining headroom. The durable ledger remains authoritative if any retry changes that path.
 
 Runner must load root `.env`, redact secrets, write reports under ignored `evals/reports/`, and return nonzero on gate failure.
 
@@ -35,7 +35,7 @@ Cost gates cover estimated Responses generation exposure from returned usage. Th
 
 An interrupted provider request deliberately leaves the ledger locked. Do not delete the database or clear the lock. Reconcile the provider request first; without organization usage access, the full reservation remains spent.
 
-If the recorded process is dead and the ledger has zero active provider reservations, rerun the exact resume command with `--recover-stale-run <run-id>`. The lock error supplies the run ID. Recovery atomically transfers only the lock; it never changes exposure. Source-report reconciliation still runs before any provider request. A live owner, wrong run ID, active reservation, or omitted settled exposure fails closed.
+If the recorded process is dead and the ledger has zero active provider reservations, rerun the exact resume command with `--recover-stale-run <run-id>`. The lock error supplies the stable run ID. Recovery validates the append-only sidecar and exact settled exposure before atomically transferring only PID ownership; it never changes the run ID or exposure. Raw response and attempt evidence is checkpointed before a known reservation settles. If the sidecar adds evidence, recovery writes a reconciliation report and exits before replay or any provider request. The lock is released only after that report commits. Inspect and register it, then resume normally. An exact sidecar with no extension may continue. A live owner, wrong run ID, active reservation, changed prior or baseline exposure, mutated evidence, or omitted settled exposure fails closed without changing the ledger.
 
 ## Gates
 

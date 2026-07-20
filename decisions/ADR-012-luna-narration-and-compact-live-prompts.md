@@ -3,6 +3,7 @@
 - Status: Accepted
 - Date: 2026-07-20
 - Supersedes: ADR-003 and ADR-008 for chapter narration; ADR-009 for target and recovery bounds
+- Superseded in part by: ADR-013 for cache policy, audit grounding, recovery upper bound, and failed-candidate evidence
 
 ## Context
 

@@ -6,8 +6,12 @@ import { z } from "zod";
 import { OpenAIRuntimeError } from "./errors";
 import type { RuntimeModel } from "./models";
 
-export const PRICING_VERSION = "openai-standard-2026-07-19" as const;
+export const PRICING_VERSION = "openai-standard-explicit-no-cache-2026-07-20" as const;
 export const INPUT_TOKEN_COUNT_SAFETY_MARGIN = 512 as const;
+
+export interface MaximumRequestCostOptions {
+  readonly inputBilling?: "cache-write" | "uncached";
+}
 
 export type RuntimeUsage = z.infer<typeof UsageSchema>;
 
@@ -132,12 +136,14 @@ export function estimateMaximumRequestCostUsd(
   model: RuntimeModel,
   promptUtf8Bytes: number,
   maxOutputTokens: number,
+  options: MaximumRequestCostOptions = {},
 ): number {
   validateMaximumCostInputs(promptUtf8Bytes, maxOutputTokens);
   return estimateMaximumCostFromInputUpperBound(
     model,
     promptUtf8Bytes + INPUT_TOKEN_COUNT_SAFETY_MARGIN,
     maxOutputTokens,
+    options,
   );
 }
 
@@ -145,12 +151,14 @@ export function estimateMaximumCountedRequestCostUsd(
   model: RuntimeModel,
   countedInputTokens: number,
   maxOutputTokens: number,
+  options: MaximumRequestCostOptions = {},
 ): number {
   validateMaximumCostInputs(countedInputTokens, maxOutputTokens);
   return estimateMaximumCostFromInputUpperBound(
     model,
     countedInputTokens + INPUT_TOKEN_COUNT_SAFETY_MARGIN,
     maxOutputTokens,
+    options,
   );
 }
 
@@ -158,16 +166,16 @@ function estimateMaximumCostFromInputUpperBound(
   model: RuntimeModel,
   inputTokenUpperBound: number,
   maxOutputTokens: number,
+  options: MaximumRequestCostOptions,
 ): number {
   const price = MODEL_PRICES[model];
   const longContext = inputTokenUpperBound > price.longContextThresholdTokens;
   const inputMultiplier = longContext ? price.longContextInputMultiplier : 1;
   const outputMultiplier = longContext ? price.longContextOutputMultiplier : 1;
+  const inputBillingMultiplier =
+    options.inputBilling === "uncached" ? 1 : price.cacheWriteInputMultiplier;
   return (
-    (inputTokenUpperBound *
-      price.inputUsdPerMillion *
-      price.cacheWriteInputMultiplier *
-      inputMultiplier +
+    (inputTokenUpperBound * price.inputUsdPerMillion * inputBillingMultiplier * inputMultiplier +
       maxOutputTokens * price.outputUsdPerMillion * outputMultiplier) /
     1_000_000
   );

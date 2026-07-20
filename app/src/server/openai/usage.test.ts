@@ -6,6 +6,7 @@ import { parseRuntimeModel, RUNTIME_MODELS } from "./models";
 import { ChapterCostBudget } from "./policy";
 import {
   estimateMaximumCountedRequestCostUsd,
+  estimateMaximumRequestCostUsd,
   estimateResponseCostUsd,
   INPUT_TOKEN_COUNT_SAFETY_MARGIN,
   mapResponseUsage,
@@ -34,7 +35,7 @@ describe("OpenAI runtime models and accounting", () => {
   });
 
   it("uses versioned model prices and discounts cached input", () => {
-    expect(PRICING_VERSION).toBe("openai-standard-2026-07-19");
+    expect(PRICING_VERSION).toBe("openai-standard-explicit-no-cache-2026-07-20");
     expect(Object.keys(MODEL_PRICES).sort()).toEqual([...RUNTIME_MODELS].sort());
     expect(estimateResponseCostUsd("gpt-5.6-luna", mapResponseUsage(openAIUsage()))).toBeCloseTo(
       0.0018525,
@@ -84,6 +85,19 @@ describe("OpenAI runtime models and accounting", () => {
       0.0266875,
       10,
     );
+  });
+
+  it("reserves ordinary input when explicit mode disables cache writes", () => {
+    expect(
+      estimateMaximumCountedRequestCostUsd("gpt-5.6-luna", 2_947, 450, {
+        inputBilling: "uncached",
+      }),
+    ).toBeCloseTo(0.006159, 10);
+    expect(
+      estimateMaximumRequestCostUsd("gpt-5.6-luna", 2_947, 450, {
+        inputBilling: "uncached",
+      }),
+    ).toBeCloseTo(0.006159, 10);
   });
 
   it("locks the failed Rowan audit boundary at the remaining release budget", () => {

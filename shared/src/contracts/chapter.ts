@@ -79,6 +79,13 @@ export const ChapterFrameCandidateSchema = z
   })
   .strict();
 
+export const ChapterFrameModelCandidateSchema = z
+  .object({
+    o: z.array(IdSchema).max(2),
+    t: z.string().trim().min(1).max(120),
+  })
+  .strict();
+
 const NarrativeScoreSchema = z.number().int().min(0).max(2);
 
 export const NARRATIVE_AUDIT_DIMENSIONS = [
@@ -126,10 +133,28 @@ const NarrativeAuditScoresSchema = z
 export const NarrativeAuditCandidateSchema = z
   .object({
     evidence: z.array(z.string().trim().min(1).max(120)).length(NARRATIVE_AUDIT_DIMENSIONS.length),
-    leakedFactIds: z.array(IdSchema).max(20),
+    leakEvidence: z
+      .array(
+        z
+          .object({
+            factId: IdSchema,
+            proseQuote: z.string().trim().min(1).max(240),
+          })
+          .strict(),
+      )
+      .max(20),
     scores: z.array(NarrativeScoreSchema).length(NARRATIVE_AUDIT_DIMENSIONS.length),
   })
-  .strict();
+  .strict()
+  .superRefine(({ leakEvidence, scores }, context) => {
+    if (leakEvidence.length > 0 && scores[2] !== 0) {
+      context.addIssue({
+        code: "custom",
+        message: "Leak evidence requires a zero POV-safety score",
+        path: ["scores", 2],
+      });
+    }
+  });
 
 export const NarrativeAuditSchema = z
   .object({
@@ -229,6 +254,7 @@ export const ChapterRecordSchema = z
 export type ChapterDraft = z.infer<typeof ChapterDraftSchema>;
 export type ChapterDraftCandidate = z.infer<typeof ChapterDraftCandidateSchema>;
 export type ChapterFrameCandidate = z.infer<typeof ChapterFrameCandidateSchema>;
+export type ChapterFrameModelCandidate = z.infer<typeof ChapterFrameModelCandidateSchema>;
 export type ChapterFrame = z.infer<typeof ChapterFrameSchema>;
 export type ChapterRecord = z.infer<typeof ChapterRecordSchema>;
 export type Choice = z.infer<typeof ChoiceSchema>;

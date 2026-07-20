@@ -9,24 +9,43 @@ import {
   NARRATIVE_AUDIT_DIMENSIONS,
   PersistedTraceEnvelopeSchema,
   PROMPT_VERSION,
+  RUNTIME_SCHEMA_VERSION,
   TraceEnvelopeSchema,
+  buildChapterChoiceOptions,
+  buildPovContext,
+  canonicalizeChapterFrameCandidate,
+  resolveTurn,
+  stageWorldDelta,
+  type ChapterFrame,
+  type PlayerAction,
+  type WorldDelta,
+  type WorldIntent,
+  type WorldState,
+  validateWorldState,
 } from "@infinite-litrpg/shared";
 import { describe, expect, it } from "vitest";
 
 import {
   LegacyLiveReportSchema,
   LiveReportSchema,
+  NarrativeCandidateEvidenceSchema,
   Version6LiveReportSchema,
+  Version7LiveReportSchema,
   assertRegisteredResumeCheckpoint,
   assertResumeHarnessPaths,
   hasExactFullMatrix,
+  isAppendOnlyEvidence,
+  parseLiveReport,
   prepareResume,
   projectedCumulativeCostUsd,
+  readNarrativeEvidenceSidecar,
   resultTraceCostMatches,
   writeAtomicJson,
+  writeNarrativeEvidenceSidecar,
   type LiveReport,
   type LiveResult,
   type ResumeRequirements,
+  type Version7LiveReport,
 } from "./run-live";
 
 const GIT_SHA = "abcdef0";
@@ -38,7 +57,15 @@ const REQUIREMENTS: ResumeRequirements = {
   sourceGitSha: GIT_SHA,
 };
 
-describe("live report version 7", () => {
+describe("live report version 8", () => {
+  it("accepts only append-only stale-run evidence", () => {
+    const checkpointed = [{ id: 1 }, { id: 2 }];
+    expect(isAppendOnlyEvidence(checkpointed, [...checkpointed, { id: 3 }])).toBe(true);
+    expect(isAppendOnlyEvidence(checkpointed, [{ id: 1 }, { id: 9 }])).toBe(false);
+    expect(isAppendOnlyEvidence(checkpointed, [{ id: 2 }, { id: 1 }])).toBe(false);
+    expect(isAppendOnlyEvidence(checkpointed, [{ id: 1 }])).toBe(false);
+  });
+
   it("atomically replaces a checkpoint and preserves it when serialization fails", () => {
     const directory = mkdtempSync(join(tmpdir(), "infinite-litrpg-report-"));
     const filename = join(directory, "live.json");
@@ -57,22 +84,447 @@ describe("live report version 7", () => {
     }
   });
 
-  it("strictly parses current data and keeps a strict legacy parser", () => {
+  it("atomically checkpoints narrative evidence before a report exists", () => {
+    const directory = mkdtempSync(join(tmpdir(), "infinite-litrpg-evidence-"));
+    const filename = join(directory, "narrative-candidates.json");
+    try {
+      writeNarrativeEvidenceSidecar(
+        filename,
+        fakeResult("rowan-ashborn", 1, 0).trace.attempts,
+        [NarrativeCandidateEvidenceSchema.parse(fakeNarrativeCandidate())],
+        fakeNarrativeResponses([fakeNarrativeCandidate()]),
+        0,
+        [],
+        GIT_SHA,
+        "00000000-0000-4000-8000-000000000088",
+      );
+      const sidecar = JSON.parse(readFileSync(filename, "utf8")) as {
+        candidates: unknown[];
+        runtimeSchemaVersion: string;
+      };
+      expect(sidecar.candidates).toHaveLength(1);
+      expect(sidecar.runtimeSchemaVersion).toBe(RUNTIME_SCHEMA_VERSION);
+      expect(
+        readNarrativeEvidenceSidecar(filename, "00000000-0000-4000-8000-000000000088", GIT_SHA)
+          .narrativeResponses,
+      ).toHaveLength(2);
+      expect(() =>
+        readNarrativeEvidenceSidecar(filename, "00000000-0000-4000-8000-000000000089", GIT_SHA),
+      ).toThrow("different stale run");
+      expect(readdirSync(directory).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
+  it("strictly parses exact version 8, 7, 6, and 5 data", () => {
     const candidate = emptyReportData();
+    const version7 = emptyVersion7ReportData();
     const version6 = emptyVersion6ReportData();
+    const version5 = { ...version6, version: 5 };
 
     expect(LiveReportSchema.safeParse(candidate).success).toBe(true);
     expect(LiveReportSchema.safeParse({ ...candidate, unexpected: true }).success).toBe(false);
-    expect(LiveReportSchema.safeParse({ ...candidate, version: 5 }).success).toBe(false);
+    expect(LiveReportSchema.safeParse(version7).success).toBe(false);
+    expect(Version7LiveReportSchema.safeParse(version7).success).toBe(true);
+    expect(Version7LiveReportSchema.safeParse(candidate).success).toBe(false);
     expect(Version6LiveReportSchema.safeParse(version6).success).toBe(true);
-    expect(LegacyLiveReportSchema.safeParse({ ...version6, version: 5 }).success).toBe(true);
+    expect(LegacyLiveReportSchema.safeParse(version5).success).toBe(true);
     expect(LiveReportSchema.safeParse({ ...candidate, version: 4 }).success).toBe(false);
+    expect(
+      [candidate, version7, version6, version5].map((report) => parseLiveReport(report).version),
+    ).toEqual([8, 7, 6, 5]);
+  });
+
+  it("recomputes every stored release gate", () => {
+    const report = emptyReportData();
+    for (const gate of Object.keys(report.gates as Record<string, boolean>)) {
+      const gates = report.gates as Record<string, boolean>;
+      expect(
+        LiveReportSchema.safeParse({
+          ...report,
+          gates: { ...gates, [gate]: !gates[gate] },
+        }).success,
+        gate,
+      ).toBe(false);
+    }
+  });
+
+  it("binds turns, attempts, canon, and stream transcripts to committed evidence", () => {
+    const report = fakeSmokeReport();
+    expect(LiveReportSchema.safeParse(report).success).toBe(true);
+
+    const differentTurnId = fakeUuid(999);
+    expect(
+      LiveReportSchema.safeParse({
+        ...report,
+        narrativeCandidates: report.narrativeCandidates.map((candidate) => ({
+          ...candidate,
+          turn: { ...candidate.turn, turnId: differentTurnId },
+        })),
+        narrativeResponses: report.narrativeResponses.map((response) => ({
+          ...response,
+          turn: { ...response.turn, turnId: differentTurnId },
+        })),
+        runtimeAttemptEvidence: report.runtimeAttemptEvidence.map((evidence) => ({
+          ...evidence,
+          turn: { ...evidence.turn, turnId: differentTurnId },
+        })),
+      }).success,
+    ).toBe(false);
+
+    const narrationIndex = report.attempts.findIndex(({ phase }) => phase === "narration");
+    expect(narrationIndex).toBeGreaterThanOrEqual(0);
+    const changedAttempts = report.attempts.map((attempt, index) =>
+      index === narrationIndex ? { ...attempt, costUsd: attempt.costUsd + 0.001 } : attempt,
+    );
+    expect(
+      LiveReportSchema.safeParse({
+        ...report,
+        attempts: changedAttempts,
+        cumulativeCostUsd: report.cumulativeCostUsd + 0.001,
+        runtimeAttemptEvidence: report.runtimeAttemptEvidence.map((evidence, index) =>
+          index === narrationIndex ? { ...evidence, attempt: changedAttempts[index] } : evidence,
+        ),
+        totalCostUsd: report.totalCostUsd + 0.001,
+      }).success,
+    ).toBe(false);
+
+    const inventedFactId = "invented-visible-fact";
+    expect(
+      LiveReportSchema.safeParse({
+        ...report,
+        narrativeCandidates: report.narrativeCandidates.map((candidate) => ({
+          ...candidate,
+          allowedFactIds: [...candidate.allowedFactIds, inventedFactId],
+        })),
+        results: report.results.map((result) => ({
+          ...result,
+          canonicalNarrativeInput: {
+            ...result.canonicalNarrativeInput,
+            allowedFactIds: [
+              ...(result.canonicalNarrativeInput?.allowedFactIds ?? []),
+              inventedFactId,
+            ],
+          },
+        })),
+      }).success,
+    ).toBe(false);
+
+    expect(
+      LiveReportSchema.safeParse({
+        ...report,
+        results: report.results.map((result) => ({ ...result, streamChunks: ["changed"] })),
+      }).success,
+    ).toBe(false);
+  });
+
+  it("binds intent and frame calls to the committed turn", () => {
+    const base = fakeResult("rowan-ashborn", 1, 0);
+    const intentAttempt = {
+      ...base.trace.attempts[0],
+      agentId: "maelin-rook",
+      attempt: 0,
+      errorCode: null,
+      phase: "intent" as const,
+      responseId: "resp_intent_bound",
+    };
+    const intentCall = {
+      ...base.trace.calls[0],
+      agentId: "maelin-rook",
+      estimatedCostUsd: 0,
+      phase: "intent" as const,
+      responseId: "resp_intent_bound",
+      retries: 0,
+    };
+    const result = {
+      ...base,
+      trace: {
+        ...base.trace,
+        attempts: [intentAttempt, ...base.trace.attempts],
+        calls: [intentCall, ...base.trace.calls],
+      },
+    } as LiveResult;
+    const candidate = fakeNarrativeCandidate(result);
+    const report = {
+      ...fakeSmokeReport(),
+      attempts: result.trace.attempts,
+      narrativeCandidates: [candidate],
+      narrativeResponses: fakeNarrativeResponses([candidate]),
+      results: [result],
+      runtimeAttemptEvidence: fakeRuntimeAttemptEvidence([result]),
+    };
+    expect(LiveReportSchema.safeParse(report).success).toBe(true);
+
+    expect(
+      LiveReportSchema.safeParse({
+        ...report,
+        runtimeAttemptEvidence: report.runtimeAttemptEvidence.map((evidence, index) =>
+          index === 0
+            ? {
+                ...evidence,
+                turn: {
+                  ...evidence.turn,
+                  requestId: fakeUuid(990),
+                  turnId: fakeUuid(991),
+                },
+              }
+            : evidence,
+        ),
+      }).success,
+    ).toBe(false);
+  });
+
+  it("binds a retried narration call across interleaved nested attempts", () => {
+    const base = fakeResult("rowan-ashborn", 1, 0);
+    const baseNarration = base.trace.attempts.find(({ phase }) => phase === "narration");
+    const baseAudit = base.trace.attempts.find(({ phase }) => phase === "audit");
+    const narrationCall = base.trace.calls.find(({ phase }) => phase === "narration");
+    const auditCall = base.trace.calls.find(({ phase }) => phase === "audit");
+    if (!baseNarration || !baseAudit || !narrationCall || !auditCall) {
+      throw new Error("Fake retry trace inputs disappeared");
+    }
+    const recoveryAttempt = {
+      ...baseNarration,
+      errorCode: "INVALID_OUTPUT",
+      phase: "recovery" as const,
+      responseId: "resp_interleaved_recovery",
+    };
+    const rejectedNarrationAttempt = {
+      ...baseNarration,
+      errorCode: "NARRATIVE_AUDIT_REJECTED",
+      responseId: "resp_interleaved_narration_rejected",
+    };
+    const acceptedNarrationAttempt = { ...baseNarration, attempt: 1 };
+    const result = {
+      ...base,
+      trace: {
+        ...base.trace,
+        attempts: [recoveryAttempt, rejectedNarrationAttempt, baseAudit, acceptedNarrationAttempt],
+        calls: [{ ...narrationCall, retries: 1 }, auditCall],
+      },
+    } as LiveResult;
+    const candidate = fakeNarrativeCandidate(result);
+    const turn = fakeTurnIdentity(result);
+    const rawResponse = (
+      attempt: LiveReport["attempts"][number],
+      phase: "narration" | "recovery",
+    ) => ({
+      attempt: attempt.attempt,
+      bufferedOutputText: result.prose,
+      chapter: result.chapter,
+      phase,
+      povId: result.povId,
+      rawOutputText: result.prose,
+      responseId: attempt.responseId ?? "missing-response",
+      sourceGitSha: result.trace.gitSha,
+      status: "completed" as const,
+      turn,
+      worldVersionAfter: turn.worldVersionAfter,
+      worldVersionBefore: turn.worldVersionBefore,
+    });
+    const report = {
+      ...fakeSmokeReport(),
+      attempts: result.trace.attempts,
+      narrativeCandidates: [candidate],
+      narrativeResponses: [
+        rawResponse(recoveryAttempt, "recovery"),
+        rawResponse(rejectedNarrationAttempt, "narration"),
+        ...fakeNarrativeResponses([candidate]),
+      ],
+      results: [result],
+      runtimeAttemptEvidence: fakeRuntimeAttemptEvidence([result]),
+    };
+
+    expect(LiveReportSchema.safeParse(report).success).toBe(true);
+  });
+
+  it("allows authenticated retries of the same pending chapter to use new turn IDs", () => {
+    const report = fakeSmokeReport();
+    const acceptedCandidate = report.narrativeCandidates[0];
+    const acceptedNarration = report.attempts.find(({ phase }) => phase === "narration");
+    if (!acceptedCandidate || !acceptedNarration)
+      throw new Error("Fake smoke evidence disappeared");
+    const failedTurn = {
+      ...acceptedCandidate.turn,
+      requestId: fakeUuid(992),
+      turnId: fakeUuid(993),
+    };
+    const failedAttempt = {
+      ...acceptedNarration,
+      errorCode: "INVALID_OUTPUT",
+      responseId: "resp_failed_prior_turn",
+    };
+    const failedCandidate = NarrativeCandidateEvidenceSchema.parse({
+      ...acceptedCandidate,
+      accepted: false,
+      audit: null,
+      auditAttempts: [],
+      auditResponseId: null,
+      deterministicIssues: [
+        { code: "INVALID_SCHEMA", message: "Prior draft failed", path: "prose" },
+      ],
+      frame: { ...acceptedCandidate.frame, title: "Prior Failed Frame" },
+      narratorResponseId: failedAttempt.responseId,
+      rejectionStage: "deterministic",
+      turn: failedTurn,
+    });
+    const failedResponse = {
+      ...report.narrativeResponses.find(({ phase }) => phase === "narration"),
+      responseId: failedAttempt.responseId,
+      turn: failedTurn,
+    };
+    const resumed = {
+      ...report,
+      attempts: [failedAttempt, ...report.attempts],
+      narrativeCandidates: [failedCandidate, ...report.narrativeCandidates],
+      narrativeResponses: [failedResponse, ...report.narrativeResponses],
+      runtimeAttemptEvidence: [
+        { attempt: failedAttempt, turn: failedTurn },
+        ...report.runtimeAttemptEvidence,
+      ],
+    };
+
+    expect(LiveReportSchema.safeParse(resumed).success).toBe(true);
+  });
+
+  it("carries a legacy runtime-evidence gap across version 8 resumes", () => {
+    const report = fakeSmokeReport();
+    const legacyAttempt = {
+      ...report.attempts[0],
+      agentId: "maelin-rook",
+      phase: "intent" as const,
+      responseId: "resp_legacy_without_v8_evidence",
+    };
+    const sourceHash = "c".repeat(64);
+    const resumedFromVersion7 = {
+      ...report,
+      attempts: [legacyAttempt, ...report.attempts],
+      budgetLedger: { ...report.budgetLedger, sourceReportSha256: sourceHash },
+      resume: {
+        bridgeFiles: [],
+        changedPaths: [],
+        discardedResultCount: 0,
+        existingAttemptCostUsd: 0,
+        retainedPovIds: ["rowan-ashborn"],
+        retainedResults: [
+          {
+            chapter: 1,
+            povId: "rowan-ashborn",
+            sourceChapterCapUsd: REQUIREMENTS.chapterCostCapUsd,
+            sourceGitSha: GIT_SHA,
+          },
+        ],
+        sourceChapterCostCapUsd: REQUIREMENTS.chapterCostCapUsd,
+        sourceGitSha: GIT_SHA,
+        sourceReportPath: "version-7.json",
+        sourceReportSha256: sourceHash,
+        sourceReportVersion: 7,
+      },
+      runtimeEvidenceStartAttemptIndex: 1,
+    };
+    expect(LiveReportSchema.safeParse(resumedFromVersion7).success).toBe(true);
+
+    const resumedAgain = {
+      ...resumedFromVersion7,
+      resume: { ...resumedFromVersion7.resume, sourceReportVersion: 8 },
+    };
+    expect(LiveReportSchema.safeParse(resumedAgain).success).toBe(true);
+    expect(
+      prepareResume(
+        { ...LiveReportSchema.parse(resumedAgain), suite: "full" } as LiveReport,
+        REQUIREMENTS,
+      ),
+    ).toMatchObject({ runtimeEvidenceStartAttemptIndex: 1 });
+  });
+
+  it("parses a crash checkpoint with settled audit response evidence before a candidate", () => {
+    const result = fakeResult("rowan-ashborn", 1, 0);
+    const auditAttempt = result.trace.attempts.find(({ phase }) => phase === "audit");
+    const auditResponse = fakeNarrativeResponses([fakeNarrativeCandidate(result)]).find(
+      ({ phase }) => phase === "audit",
+    );
+    if (!auditAttempt || !auditResponse) throw new Error("Fake audit evidence disappeared");
+    const report = {
+      ...emptyReportData(),
+      attempts: [auditAttempt],
+      narrativeResponses: [auditResponse],
+      runtimeAttemptEvidence: [{ attempt: auditAttempt, turn: fakeTurnIdentity(result) }],
+    };
+    expect(LiveReportSchema.safeParse(report).success).toBe(true);
+    expect(LiveReportSchema.safeParse({ ...report, narrativeResponses: [] }).success).toBe(false);
+  });
+
+  it("cannot claim commit completion when the run ended with an error", () => {
+    const report = fakeSmokeReport();
+    const failed = {
+      ...report,
+      error: { code: "FAILED", message: "Failure after evidence capture" },
+      gates: { ...report.gates, allCommitsCompleted: false },
+    };
+    expect(LiveReportSchema.safeParse(failed).success).toBe(true);
+    expect(
+      LiveReportSchema.safeParse({
+        ...failed,
+        gates: { ...failed.gates, allCommitsCompleted: true },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("requires complete, internally consistent failed-candidate evidence", () => {
+    const evidenceResult = fakeResult("rowan-ashborn", 1, 0);
+    const candidate = fakeNarrativeCandidate(evidenceResult);
+
+    expect(NarrativeCandidateEvidenceSchema.safeParse(candidate).success).toBe(true);
+    expect(
+      NarrativeCandidateEvidenceSchema.safeParse({ ...candidate, rawWordCount: 899 }).success,
+    ).toBe(false);
+    const report = {
+      ...emptyReportData(),
+      attempts: evidenceResult.trace.attempts,
+      narrativeCandidates: [candidate],
+      narrativeResponses: fakeNarrativeResponses([candidate]),
+      runtimeAttemptEvidence: fakeRuntimeAttemptEvidence([evidenceResult]),
+    };
+    expect(LiveReportSchema.safeParse(report).success).toBe(true);
+    expect(
+      NarrativeCandidateEvidenceSchema.safeParse({
+        ...candidate,
+        auditAttempts: candidate.auditAttempts.map((attempt, index) =>
+          index === 0 ? { ...attempt, rawOutputText: '{"scores":[]}' } : attempt,
+        ),
+      }).success,
+    ).toBe(false);
+    expect(
+      NarrativeCandidateEvidenceSchema.safeParse({
+        ...candidate,
+        audit: {
+          ...candidate.audit,
+          evidence: candidate.audit?.evidence.map((entry, index) =>
+            index === 0 ? { ...entry, detail: "Fabricated approval." } : entry,
+          ),
+        },
+      }).success,
+    ).toBe(false);
+    expect(LiveReportSchema.safeParse({ ...report, narrativeResponses: [] }).success).toBe(false);
+    expect(
+      LiveReportSchema.safeParse({
+        ...report,
+        narrativeCandidates: [candidate, candidate],
+      }).success,
+    ).toBe(false);
+    expect(
+      Version7LiveReportSchema.safeParse({
+        ...emptyVersion7ReportData(),
+        narrativeCandidates: [candidate],
+      }).success,
+    ).toBe(false);
   });
 
   it("reads authenticated 1.4.9 traces without weakening current writes", () => {
     const result = historicalResult(fakeResult("rowan-ashborn", 1, 0.01));
     const candidate = {
-      ...emptyReportData(),
+      ...emptyVersion7ReportData(),
       attempts: result.trace.attempts,
       budgetLedger: {
         activeReservationCount: 0,
@@ -87,6 +539,10 @@ describe("live report version 7", () => {
       },
       completedChapters: 1,
       cumulativeCostUsd: 2.01,
+      gates: {
+        ...(emptyVersion7ReportData().gates as Record<string, boolean>),
+        p95WithinSixtySeconds: true,
+      },
       promptVersion: "1.4.9",
       resultChapterCaps: [
         { capUsd: REQUIREMENTS.chapterCostCapUsd, chapter: 1, povId: "rowan-ashborn" },
@@ -97,9 +553,13 @@ describe("live report version 7", () => {
 
     expect(TraceEnvelopeSchema.safeParse(result.trace).success).toBe(false);
     expect(PersistedTraceEnvelopeSchema.safeParse(result.trace).success).toBe(true);
-    expect(LiveReportSchema.safeParse(candidate).success).toBe(true);
+    const historicalParse = Version7LiveReportSchema.safeParse(candidate);
     expect(
-      LiveReportSchema.safeParse({
+      historicalParse.success,
+      historicalParse.success ? undefined : JSON.stringify(historicalParse.error.issues),
+    ).toBe(true);
+    expect(
+      Version7LiveReportSchema.safeParse({
         ...candidate,
         results: [
           {
@@ -121,13 +581,16 @@ describe("live report version 7", () => {
     const attempts = [{ costUsd: 0.08 }, { costUsd: 0.11 }] as LiveReport["attempts"];
     const auditRejections = [{ marker: "audit" }] as unknown as LiveReport["auditRejections"];
     const draftRejections = [{ marker: "draft" }] as unknown as LiveReport["draftRejections"];
+    const narrativeCandidates = [
+      fakeNarrativeCandidate(),
+    ] as unknown as LiveReport["narrativeCandidates"];
     const report = fakeReport(
       [
         fakeResult("rowan-ashborn", 2, 0.02),
         fakeResult("elara-voss", 1, 0.03),
         fakeResult("rowan-ashborn", 1, 0.01),
       ],
-      { attempts, auditRejections, draftRejections },
+      { attempts, auditRejections, draftRejections, narrativeCandidates },
     );
 
     const prepared = prepareResume(report, REQUIREMENTS);
@@ -143,6 +606,7 @@ describe("live report version 7", () => {
     expect(prepared.attempts).toEqual(attempts);
     expect(prepared.auditRejections).toEqual(auditRejections);
     expect(prepared.draftRejections).toEqual(draftRejections);
+    expect(prepared.narrativeCandidates).toEqual(narrativeCandidates);
     expect(prepared.existingAttemptCostUsd).toBeCloseTo(0.19, 10);
   });
 
@@ -201,6 +665,16 @@ describe("live report version 7", () => {
     const prepared = prepareResume(report, { ...REQUIREMENTS, chapterCostCapUsd: 0.0424 });
     expect(prepared.retainedPovIds).toEqual(["rowan-ashborn"]);
     expect(prepared.retainedResultCaps.map(({ capUsd }) => capUsd)).toEqual([0.03, 0.04]);
+
+    const version7Data = Object.fromEntries(
+      Object.entries(report).filter(([key]) => key !== "narrativeCandidates"),
+    );
+    const version7 = { ...version7Data, version: 7 } as unknown as Version7LiveReport;
+    const preparedVersion7 = prepareResume(version7, {
+      ...REQUIREMENTS,
+      chapterCostCapUsd: 0.0424,
+    });
+    expect(preparedVersion7.retainedResultCaps.map(({ capUsd }) => capUsd)).toEqual([0.03, 0.04]);
 
     expect(() =>
       prepareResume(
@@ -306,6 +780,44 @@ describe("live report version 7", () => {
     ).toThrow("audited hash");
   });
 
+  it("keeps the registered prompt 1.4.10 version 7 checkpoint parseable", () => {
+    const sourceGitSha = "a4f34af649055e4dfa52448aa3a8a66425577c1b";
+    const priorSpendUsd = 2.735142975;
+    const chapterCostCapUsd = 0.0424;
+    const report = Version7LiveReportSchema.parse({
+      ...emptyVersion7ReportData(),
+      budgetLedger: {
+        activeReservationCount: 0,
+        baselineAttemptCostUsd: 0,
+        headroomUsd: 3 - priorSpendUsd,
+        knownReservationCostUsd: 0,
+        priorSpendUsd,
+        sourceReportSha256: `fresh:${sourceGitSha}`,
+        totalCapUsd: 3,
+        totalExposureUsd: priorSpendUsd,
+        uncertainReservationCostUsd: 0,
+      },
+      chapterCostCapUsd,
+      cumulativeCostUsd: priorSpendUsd,
+      priorSpendUsd,
+      projectedMaximumCumulativeCostUsd:
+        priorSpendUsd + CHARACTER_IDS.length * 2 * chapterCostCapUsd,
+      promptVersion: "1.4.10",
+      sourceGitSha,
+    });
+    const registry = JSON.parse(
+      readFileSync(join(process.cwd(), "evals", "resume-checkpoints.json"), "utf8"),
+    ) as unknown;
+
+    expect(
+      assertRegisteredResumeCheckpoint(
+        report,
+        "7d907207f8cfa4b1806820d8ae23fdab7acf7a418624bf74b4d953c7eccc82c8",
+        registry,
+      ),
+    ).toEqual([]);
+  });
+
   it("parses declared mixed Git provenance and rejects an unlisted result SHA", () => {
     const currentGitSha = "1234567";
     const results = [
@@ -313,6 +825,7 @@ describe("live report version 7", () => {
       fakeResult("rowan-ashborn", 2, 0.01),
       fakeResult("elara-voss", 1, 0.01, [0.01], currentGitSha),
     ];
+    const narrativeCandidates = results.map((result) => fakeNarrativeCandidate(result));
     const attempts = results.flatMap(({ trace }) => trace.attempts);
     const candidate = {
       ...emptyReportData(),
@@ -331,12 +844,19 @@ describe("live report version 7", () => {
       completedChapters: results.length,
       cumulativeCostUsd: 2.03,
       projectedMaximumCumulativeCostUsd: 2.62,
+      narrativeCandidates,
+      narrativeResponses: fakeNarrativeResponses(narrativeCandidates),
+      gates: {
+        ...(emptyReportData().gates as Record<string, boolean>),
+        p95WithinSixtySeconds: true,
+      },
       resultChapterCaps: results.map(({ chapter, povId }) => ({
         capUsd: 0.06,
         chapter,
         povId,
       })),
       results,
+      runtimeAttemptEvidence: fakeRuntimeAttemptEvidence(results),
       resume: {
         bridgeFiles: [{ path: "evals/run-live.ts", sha256: "d".repeat(64) }],
         changedPaths: ["evals/run-live.ts"],
@@ -361,13 +881,34 @@ describe("live report version 7", () => {
         sourceGitSha: GIT_SHA,
         sourceReportPath: "legacy.json",
         sourceReportSha256: "c".repeat(64),
-        sourceReportVersion: 5,
+        sourceReportVersion: 8,
       },
       sourceGitSha: currentGitSha,
       totalCostUsd: 0.03,
     };
 
     expect(LiveReportSchema.safeParse(candidate).success).toBe(true);
+    expect(LiveReportSchema.safeParse({ ...candidate, narrativeCandidates: [] }).success).toBe(
+      false,
+    );
+    expect(
+      LiveReportSchema.safeParse({
+        ...candidate,
+        narrativeCandidates: candidate.narrativeCandidates.map((entry, index) =>
+          index === 0 ? { ...entry, narratorResponseId: "resp_unlinked" } : entry,
+        ),
+      }).success,
+    ).toBe(false);
+    const version7Candidate: Record<string, unknown> = { ...candidate };
+    delete version7Candidate.narrativeCandidates;
+    delete version7Candidate.narrativeResponses;
+    expect(
+      Version7LiveReportSchema.safeParse({
+        ...version7Candidate,
+        resume: { ...candidate.resume, sourceReportVersion: 8 },
+        version: 7,
+      }).success,
+    ).toBe(false);
     const tampered = {
       ...candidate,
       results: candidate.results.map((result, index) =>
@@ -456,11 +997,16 @@ function emptyReportData(): Record<string, unknown> {
       allPovLeakListsEmpty: false,
       allProseWithinWordLimit: false,
       allStreamsReconstructed: false,
+      narrativeEvidenceComplete: false,
       p95WithinSixtySeconds: false,
       traceCostMatchesAttempts: false,
       totalCostWithinCap: true,
     },
     nativeRequested: false,
+    narrativeCandidates: [],
+    narrativeResponses: [],
+    runtimeEvidenceStartAttemptIndex: 0,
+    runtimeAttemptEvidence: [],
     povFilter: null,
     priorSpendUsd: REQUIREMENTS.priorSpendUsd,
     projectedMaximumCumulativeCostUsd: 2.72,
@@ -473,12 +1019,24 @@ function emptyReportData(): Record<string, unknown> {
     suite: "full",
     totalCostCapUsd: 3,
     totalCostUsd: 0,
-    version: 7,
+    version: 8,
   };
 }
 
-function emptyVersion6ReportData(): Record<string, unknown> {
+function emptyVersion7ReportData(): Record<string, unknown> {
   const report = { ...emptyReportData() };
+  delete report.narrativeCandidates;
+  delete report.narrativeResponses;
+  delete report.runtimeEvidenceStartAttemptIndex;
+  delete report.runtimeAttemptEvidence;
+  const gates = { ...(report.gates as Record<string, unknown>) };
+  delete gates.narrativeEvidenceComplete;
+  report.gates = gates;
+  return { ...report, version: 7 };
+}
+
+function emptyVersion6ReportData(): Record<string, unknown> {
+  const report = { ...emptyVersion7ReportData() };
   delete report.budgetLedger;
   delete report.budgetMode;
   delete report.resultChapterCaps;
@@ -493,10 +1051,58 @@ function fakeReport(results: LiveResult[], overrides: Partial<LiveReport> = {}):
       chapter,
       povId,
     })),
+    runtimeAttemptEvidence: fakeRuntimeAttemptEvidence(results),
     ...overrides,
     completedChapters: results.length,
     results,
   } as unknown as LiveReport;
+}
+
+function fakeSmokeReport(): LiveReport {
+  const result = fakeResult("rowan-ashborn", 1, 0);
+  const narrativeCandidates = [fakeNarrativeCandidate(result)];
+  return {
+    ...emptyReportData(),
+    attempts: result.trace.attempts,
+    budgetLedger: {
+      activeReservationCount: 0,
+      baselineAttemptCostUsd: 0,
+      headroomUsd: 1,
+      knownReservationCostUsd: 0,
+      priorSpendUsd: REQUIREMENTS.priorSpendUsd,
+      sourceReportSha256: `fresh:${GIT_SHA}`,
+      totalCapUsd: 3,
+      totalExposureUsd: REQUIREMENTS.priorSpendUsd,
+      uncertainReservationCostUsd: 0,
+    },
+    completedChapters: 1,
+    gates: {
+      allAuditsApproved: true,
+      allCommitsCompleted: true,
+      allCostsWithinChapterCap: true,
+      allPovLeakListsEmpty: true,
+      allProseWithinWordLimit: true,
+      allStreamsReconstructed: true,
+      narrativeEvidenceComplete: true,
+      p95WithinSixtySeconds: true,
+      traceCostMatchesAttempts: true,
+      totalCostWithinCap: true,
+    },
+    narrativeCandidates,
+    narrativeResponses: fakeNarrativeResponses(narrativeCandidates),
+    povFilter: "rowan-ashborn",
+    projectedMaximumCumulativeCostUsd: REQUIREMENTS.priorSpendUsd + REQUIREMENTS.chapterCostCapUsd,
+    resultChapterCaps: [
+      {
+        capUsd: REQUIREMENTS.chapterCostCapUsd,
+        chapter: result.chapter,
+        povId: result.povId,
+      },
+    ],
+    results: [result],
+    runtimeAttemptEvidence: fakeRuntimeAttemptEvidence([result]),
+    suite: "smoke",
+  } as LiveReport;
 }
 
 function fakeResult(
@@ -516,9 +1122,93 @@ function fakeResult(
     reasoningTokens: 0,
     totalTokens: 0,
   };
-  return {
-    adapterMode: "sequential",
-    audit: {
+  const canonical = fakeCanonicalTurn(povId, chapter);
+  const turnId = fakeUuid(CHARACTER_IDS.indexOf(povId) * 10 + chapter);
+  const requestId = fakeUuid(100 + CHARACTER_IDS.indexOf(povId) * 10 + chapter);
+  const attempts = [
+    ...attemptCosts.map((attemptCost, index) => ({
+      agentId: null,
+      attempt: index,
+      costUsd: attemptCost,
+      errorCode: index === attemptCosts.length - 1 ? null : ("NARRATIVE_AUDIT_REJECTED" as const),
+      latencyMs: 1,
+      model: "gpt-5.6-luna" as const,
+      phase: "narration" as const,
+      responseId: `resp_narration_${povId}_${chapter}_${index}`,
+      usage,
+    })),
+    {
+      agentId: null,
+      attempt: 0,
+      costUsd: 0,
+      errorCode: null,
+      latencyMs: 1,
+      model: "gpt-5.6-luna" as const,
+      phase: "audit" as const,
+      responseId: `resp_audit_${povId}_${chapter}`,
+      usage,
+    },
+  ];
+  const trace = {
+    acceptedDelta: canonical.delta,
+    adapterMode: "sequential" as const,
+    attempts,
+    calls: [
+      {
+        agentId: null,
+        errorCode: null,
+        estimatedCostUsd: costUsd,
+        latencyMs: 1,
+        model: "gpt-5.6-luna" as const,
+        phase: "narration" as const,
+        reasoningEffort: "none" as const,
+        refusal: false,
+        responseId: `resp_narration_${povId}_${chapter}_${attemptCosts.length - 1}`,
+        retries: 0,
+        timedOut: false,
+        usage,
+      },
+      {
+        agentId: null,
+        errorCode: null,
+        estimatedCostUsd: 0,
+        latencyMs: 1,
+        model: "gpt-5.6-luna" as const,
+        phase: "audit" as const,
+        reasoningEffort: "none" as const,
+        refusal: false,
+        responseId: `resp_audit_${povId}_${chapter}`,
+        retries: 0,
+        timedOut: false,
+        usage,
+      },
+    ],
+    contractVersion: CONTRACT_VERSION,
+    fixtureId: canonical.stateBefore.id,
+    fixtureVersion: canonical.stateBefore.fixtureVersion,
+    gateResult: "passed" as const,
+    gitSha,
+    intents: canonical.intents,
+    multiAgentOutputItems: [],
+    pricingVersion: "test-pricing",
+    promptVersion: PROMPT_VERSION,
+    runId: turnId,
+    schemaVersion: RUNTIME_SCHEMA_VERSION,
+    seed: canonical.stateBefore.chapter,
+    stateAfterHash: hashJson(canonical.stateAfter),
+    stateBeforeHash: hashJson(canonical.stateBefore),
+    totalEstimatedCostUsd: costUsd,
+    totalLatencyMs: 1,
+    totalUsage: usage,
+    validationFailures: [],
+  };
+  const chapterRecord = {
+    chapter,
+    choices: canonical.frame.choices,
+    estimatedCostUsd: costUsd,
+    id: `chapter-${String(chapter).padStart(3, "0")}`,
+    latencyMs: 1,
+    narrativeAudit: {
       approved: true,
       evidence: NARRATIVE_AUDIT_DIMENSIONS.map((dimension) => ({
         detail: "Passes fixed release rubric.",
@@ -537,99 +1227,256 @@ function fakeResult(
         prose: 2,
       },
     },
+    playerAction: canonical.playerAction,
+    povCharacterId: povId,
+    prose,
+    proseHash,
+    requestId,
+    safeContextHash: hashJson(buildPovContext(canonical.stateAfter, povId)),
+    stateAfterVersion: canonical.stateAfter.version,
+    stateBeforeVersion: canonical.stateBefore.version,
+    terminal: canonical.stateAfter.terminal,
+    title: canonical.frame.title,
+    traceId: turnId,
+    usage,
+  };
+  return {
+    adapterMode: "sequential",
+    audit: chapterRecord.narrativeAudit,
+    canonicalNarrativeInput: {
+      allowedFactIds: canonical.allowedFactIds,
+      chapterRecord,
+      forbiddenFacts: canonical.forbiddenFacts,
+      frame: canonical.frame,
+      playerAction: canonical.playerAction,
+      stateAfter: canonical.stateAfter,
+      stateBefore: canonical.stateBefore,
+      worldVersionAfter: canonical.stateAfter.version,
+      worldVersionBefore: canonical.stateBefore.version,
+    },
     chapter,
     costUsd,
     latencyMs: 1,
     povId,
     prose,
     streamChunkCount: 1,
+    streamChunks: [prose],
     streamingLatencyMs: 1,
     streamReconstructed: true,
-    trace: {
-      acceptedDelta: {
-        acceptedIntentIds: [],
-        clock: {
-          convergencePressure: false,
-          fromAct: 1,
-          fromChapter: 0,
-          terminal: false,
-          toAct: 1,
-          toChapter: 1,
-          transitionRequired: false,
-        },
-        contractVersion: CONTRACT_VERSION,
-        events: [],
-        expectedWorldVersion: 1,
-        knowledgeMutations: [],
-        promptVersion: PROMPT_VERSION,
-        rejectedIntents: [],
-        stateMutations: [],
-        surfacedClueFactIds: [],
-      },
-      adapterMode: "sequential",
-      attempts: attemptCosts.map((attemptCost, index) => ({
-        agentId: null,
-        attempt: index,
-        costUsd: attemptCost,
-        errorCode: null,
-        latencyMs: 1,
-        model: "gpt-5.6-terra" as const,
-        phase: "narration" as const,
-        responseId: `resp_attempt_${chapter}_${index}`,
-        usage,
-      })),
-      calls: [
-        {
-          agentId: null,
-          errorCode: null,
-          estimatedCostUsd: costUsd,
-          latencyMs: 1,
-          model: "gpt-5.6-terra",
-          phase: "narration",
-          reasoningEffort: "none",
-          refusal: false,
-          responseId: `resp_narration_${chapter}`,
-          retries: 0,
-          timedOut: false,
-          usage,
-        },
-        {
-          agentId: null,
-          errorCode: null,
-          estimatedCostUsd: 0,
-          latencyMs: 1,
-          model: "gpt-5.6-luna",
-          phase: "audit",
-          reasoningEffort: "none",
-          refusal: false,
-          responseId: `resp_audit_${chapter}`,
-          retries: 0,
-          timedOut: false,
-          usage,
-        },
-      ],
-      contractVersion: CONTRACT_VERSION,
-      fixtureId: "test-fixture",
-      fixtureVersion: "1.1.0",
-      gateResult: "passed",
-      gitSha,
-      intents: [],
-      multiAgentOutputItems: [],
-      pricingVersion: "test-pricing",
-      promptVersion: PROMPT_VERSION,
-      runId: "00000000-0000-4000-8000-000000000001",
-      schemaVersion: CONTRACT_VERSION,
-      seed: 0,
-      stateAfterHash: "a".repeat(64),
-      stateBeforeHash: "b".repeat(64),
-      totalEstimatedCostUsd: costUsd,
-      totalLatencyMs: 1,
-      totalUsage: usage,
-      validationFailures: [],
-    },
+    trace,
     usage,
     wordCount: 900,
   } as unknown as LiveResult;
+}
+
+function fakeCanonicalTurn(povId: (typeof CHARACTER_IDS)[number], chapter: 1 | 2) {
+  const raw = JSON.parse(
+    readFileSync(join(process.cwd(), "evals", "fixtures", "demon-king-world.json"), "utf8"),
+  ) as unknown;
+  const validated = validateWorldState(raw);
+  if (!validated.ok) throw new Error("Fake live seed is invalid");
+  const locked = structuredClone(validated.data);
+  locked.lockedPovId = povId;
+  const lockedValidation = validateWorldState(locked);
+  if (!lockedValidation.ok) throw new Error("Fake live seed cannot lock POV");
+  let state = lockedValidation.data;
+  let finalTurn:
+    | {
+        allowedFactIds: string[];
+        delta: WorldDelta;
+        forbiddenFacts: { claim: string; id: string }[];
+        frame: ChapterFrame;
+        intents: readonly WorldIntent[];
+        playerAction: PlayerAction;
+        stateAfter: WorldState;
+        stateBefore: WorldState;
+      }
+    | undefined;
+  for (let currentChapter = 1; currentChapter <= chapter; currentChapter += 1) {
+    const stateBefore = state;
+    const choice = buildChapterChoiceOptions(stateBefore)[0];
+    if (!choice) throw new Error("Fake live state has no choice");
+    const playerAction = {
+      action: choice.action,
+      actorId: povId,
+      description: choice.description,
+      milestoneId: choice.milestoneId,
+      source: "suggested" as const,
+      stateVersion: stateBefore.version,
+    };
+    const resolved = resolveTurn(stateBefore, playerAction, []);
+    if (!resolved.ok) throw new Error("Fake live turn cannot resolve");
+    const staged = stageWorldDelta(stateBefore, resolved.data.intents, resolved.data.delta);
+    if (!staged.ok) throw new Error("Fake live turn cannot stage");
+    const options = buildChapterChoiceOptions(staged.data.state);
+    const frame = canonicalizeChapterFrameCandidate(staged.data.state, {
+      optionIds: options.slice(0, 2).map(({ id }) => id),
+      title: `Ash Road ${currentChapter}`,
+    });
+    if (!frame.ok) throw new Error("Fake live frame is invalid");
+    const povContext = buildPovContext(staged.data.state, povId);
+    const allowedFactIds = [...povContext.factIds].sort();
+    const allowed = new Set(allowedFactIds);
+    finalTurn = {
+      allowedFactIds,
+      delta: resolved.data.delta,
+      forbiddenFacts: staged.data.state.facts
+        .filter(({ id }) => !allowed.has(id))
+        .map(({ claim, id }) => ({ claim, id })),
+      frame: frame.data,
+      intents: resolved.data.intents,
+      playerAction,
+      stateAfter: staged.data.state,
+      stateBefore,
+    };
+    state = staged.data.state;
+  }
+  if (finalTurn === undefined) throw new Error("Fake live turn disappeared");
+  return finalTurn;
+}
+
+function fakeTurnIdentity(result: LiveResult) {
+  const canonical = result.canonicalNarrativeInput;
+  if (canonical === undefined || canonical.chapterRecord.requestId === undefined) {
+    throw new Error("Fake result lacks turn identity");
+  }
+  return {
+    chapter: result.chapter,
+    povId: result.povId,
+    requestId: canonical.chapterRecord.requestId,
+    turnId: result.trace.runId,
+    worldVersionAfter: canonical.worldVersionAfter,
+    worldVersionBefore: canonical.worldVersionBefore,
+  } as const;
+}
+
+function fakeRuntimeAttemptEvidence(results: readonly LiveResult[]) {
+  return results.flatMap((result) =>
+    result.trace.attempts.map((attempt) => ({ attempt, turn: fakeTurnIdentity(result) })),
+  );
+}
+
+function fakeUuid(value: number): string {
+  return `00000000-0000-4000-8000-${String(value).padStart(12, "0")}`;
+}
+
+function hashJson(value: unknown): string {
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+function fakeNarrativeCandidate(
+  result: LiveResult = fakeResult("rowan-ashborn", 1, 0),
+): LiveReport["narrativeCandidates"][number] {
+  const narratorAttempt = result.trace.attempts.findLast(
+    ({ errorCode, phase }) => phase === "narration" && errorCode === null,
+  );
+  const auditResponseId = result.trace.calls.find(({ phase }) => phase === "audit")?.responseId;
+  if (!narratorAttempt?.responseId || !auditResponseId) {
+    throw new Error("Fake narrative evidence needs narrator and audit response IDs");
+  }
+  const canonical = result.canonicalNarrativeInput;
+  if (canonical === undefined || canonical.chapterRecord.requestId === undefined) {
+    throw new Error("Fake narrative evidence needs canonical turn data");
+  }
+  const auditCandidate = {
+    evidence: NARRATIVE_AUDIT_DIMENSIONS.map(() => "Passes fixed release rubric."),
+    leakEvidence: [],
+    scores: [2, 2, 2, 2, 2, 2, 2],
+  } as const;
+  return NarrativeCandidateEvidenceSchema.parse({
+    accepted: true,
+    adapterMode: "sequential",
+    allowedFactIds: canonical.allowedFactIds,
+    audit: result.audit,
+    auditAttempts: [
+      {
+        attempt: 0,
+        candidate: auditCandidate,
+        rawOutputText: JSON.stringify(auditCandidate),
+        responseId: auditResponseId,
+        status: "completed",
+      },
+    ],
+    auditResponseId,
+    backgroundIntents: result.trace.intents,
+    chapter: result.chapter,
+    delta: result.trace.acceptedDelta,
+    deterministicIssues: [],
+    forbiddenFacts: canonical.forbiddenFacts,
+    frame: canonical.frame,
+    mergedProse: result.prose,
+    mergedWordCount: 900,
+    multiAgentOutputItems: result.trace.multiAgentOutputItems,
+    narratorAttempt: narratorAttempt.attempt,
+    narratorResponseId: narratorAttempt.responseId,
+    playerAction: canonical.playerAction,
+    povId: result.povId,
+    promptVersion: PROMPT_VERSION,
+    rawProse: result.prose,
+    rawWordCount: 900,
+    recovery: null,
+    rejectionStage: "accepted",
+    schemaVersion: RUNTIME_SCHEMA_VERSION,
+    sourceGitSha: result.trace.gitSha,
+    stateAfter: canonical.stateAfter,
+    stateBefore: canonical.stateBefore,
+    turn: fakeTurnIdentity(result),
+    worldVersionAfter: canonical.worldVersionAfter,
+    worldVersionBefore: canonical.worldVersionBefore,
+  });
+}
+
+function fakeNarrativeResponses(
+  candidates: readonly LiveReport["narrativeCandidates"][number][],
+): LiveReport["narrativeResponses"] {
+  return candidates.flatMap((candidate) => [
+    {
+      attempt: candidate.narratorAttempt,
+      bufferedOutputText: candidate.rawProse,
+      chapter: candidate.chapter,
+      phase: "narration" as const,
+      povId: candidate.povId,
+      rawOutputText: candidate.rawProse,
+      responseId: candidate.narratorResponseId,
+      sourceGitSha: candidate.sourceGitSha,
+      status: "completed" as const,
+      turn: candidate.turn,
+      worldVersionAfter: candidate.worldVersionAfter,
+      worldVersionBefore: candidate.worldVersionBefore,
+    },
+    ...(candidate.recovery === null
+      ? []
+      : [
+          {
+            attempt: candidate.recovery.attempt,
+            bufferedOutputText: candidate.recovery.prose,
+            chapter: candidate.chapter,
+            phase: "recovery" as const,
+            povId: candidate.povId,
+            rawOutputText: candidate.recovery.prose,
+            responseId: candidate.recovery.responseId,
+            sourceGitSha: candidate.sourceGitSha,
+            status: "completed" as const,
+            turn: candidate.turn,
+            worldVersionAfter: candidate.worldVersionAfter,
+            worldVersionBefore: candidate.worldVersionBefore,
+          },
+        ]),
+    ...candidate.auditAttempts.map((auditAttempt) => ({
+      attempt: auditAttempt.attempt,
+      bufferedOutputText: auditAttempt.rawOutputText,
+      chapter: candidate.chapter,
+      phase: "audit" as const,
+      povId: candidate.povId,
+      rawOutputText: auditAttempt.rawOutputText,
+      responseId: auditAttempt.responseId,
+      sourceGitSha: candidate.sourceGitSha,
+      status: auditAttempt.status,
+      turn: candidate.turn,
+      worldVersionAfter: candidate.worldVersionAfter,
+      worldVersionBefore: candidate.worldVersionBefore,
+    })),
+  ]);
 }
 
 function historicalResult(result: LiveResult): LiveResult {
@@ -638,19 +1485,7 @@ function historicalResult(result: LiveResult): LiveResult {
     trace: {
       ...result.trace,
       acceptedDelta: { ...result.trace.acceptedDelta, promptVersion: "1.4.9" },
-      intents: [
-        {
-          action: { type: "wait" },
-          actorId: result.povId,
-          contractVersion: CONTRACT_VERSION,
-          expectedEffect: "Hold position without changing canon.",
-          goal: "Observe the immediate area.",
-          id: `intent-player-historical-${result.chapter}`,
-          prerequisites: { requiredFactIds: [], requiredItemIds: [], requiredSkillIds: [] },
-          promptVersion: "1.4.9",
-          stateVersion: 1,
-        },
-      ],
+      intents: result.trace.intents.map((intent) => ({ ...intent, promptVersion: "1.4.9" })),
       promptVersion: "1.4.9",
     },
   };

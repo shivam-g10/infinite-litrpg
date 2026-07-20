@@ -14,6 +14,7 @@ import {
 import {
   buildChapterChoiceOptions,
   canonicalizeChapterFrameCandidate,
+  decodeChapterFrameModelCandidate,
   validateChapterDraft,
   validateChapterFrameSafety,
   validateSuggestedChoices,
@@ -21,6 +22,29 @@ import {
 import { validateWorldState } from "./validation";
 
 describe("narrative gates", () => {
+  it("decodes the compact frame candidate without losing title or option IDs", () => {
+    expect(
+      decodeChapterFrameModelCandidate({
+        o: ["option-2", "option-1"],
+        t: "The Ash Road",
+      }),
+    ).toEqual({
+      optionIds: ["option-2", "option-1"],
+      title: "The Ash Road",
+    });
+  });
+
+  it("rejects malformed compact frame candidates", () => {
+    expect(() =>
+      decodeChapterFrameModelCandidate({
+        extra: true,
+        o: ["option-1"],
+        t: "The Ash Road",
+      }),
+    ).toThrow();
+    expect(() => decodeChapterFrameModelCandidate({ o: "option-1", t: "The Ash Road" })).toThrow();
+  });
+
   it("accepts two distinct, legal choices and a 900-word safe draft", () => {
     const state = seedState();
     const choices = legalChoices();
@@ -177,7 +201,7 @@ describe("narrative gates", () => {
         "arcProgress",
         "prose",
       ].map(() => "The chapter contradicts the committed location."),
-      leakedFactIds: [],
+      leakEvidence: [],
       scores: [2, 2, 2, 2, 0, 2, 2],
     };
     expect(NarrativeAuditCandidateSchema.safeParse(candidate).success).toBe(true);
@@ -189,7 +213,7 @@ describe("narrative gates", () => {
           dimension,
           issueCode: dimension === "continuity" ? "contradiction" : "pass",
         })),
-        leakedFactIds: candidate.leakedFactIds,
+        leakedFactIds: candidate.leakEvidence.map(({ factId }) => factId),
         proseHash: "a".repeat(64),
         scores: {
           arcProgress: candidate.scores[5],
@@ -207,7 +231,7 @@ describe("narrative gates", () => {
   it("rejects failure evidence attached to a positive audit score", () => {
     const candidate = {
       evidence: NARRATIVE_AUDIT_DIMENSIONS.map(() => "Checked against supplied canon."),
-      leakedFactIds: [],
+      leakEvidence: [],
       scores: [2, 2, 2, 2, 2, 2, 2],
     };
 
@@ -220,7 +244,7 @@ describe("narrative gates", () => {
           dimension,
           issueCode: dimension === "povSafety" ? "hidden-knowledge" : "pass",
         })),
-        leakedFactIds: candidate.leakedFactIds,
+        leakedFactIds: candidate.leakEvidence.map(({ factId }) => factId),
         proseHash: "a".repeat(64),
         scores: {
           arcProgress: candidate.scores[5],
@@ -245,6 +269,23 @@ describe("narrative gates", () => {
       NarrativeAuditCandidateSchema.safeParse({
         ...candidate,
         scores: candidate.scores.slice(0, -1),
+      }).success,
+    ).toBe(false);
+  });
+
+  it("allows POV-safety failure without a canonical fact ID but binds listed leaks", () => {
+    const base = {
+      evidence: NARRATIVE_AUDIT_DIMENSIONS.map(() => "Exact prose evidence."),
+      leakEvidence: [],
+      scores: [2, 2, 0, 2, 2, 2, 2],
+    };
+
+    expect(NarrativeAuditCandidateSchema.safeParse(base).success).toBe(true);
+    expect(
+      NarrativeAuditCandidateSchema.safeParse({
+        ...base,
+        leakEvidence: [{ factId: "hidden-fact", proseQuote: "Exact hidden prose evidence." }],
+        scores: [2, 2, 2, 2, 2, 2, 2],
       }).success,
     ).toBe(false);
   });

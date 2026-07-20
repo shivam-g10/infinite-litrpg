@@ -5,12 +5,13 @@ import { resolve } from "node:path";
 
 import {
   CONTRACT_VERSION,
-  ChapterFrameCandidateSchema,
+  ChapterFrameModelCandidateSchema,
   NARRATIVE_AUDIT_DIMENSIONS,
   NarrativeAuditCandidateSchema,
   NarrativeAuditSchema,
   PlayerActionSchema,
   PROMPT_VERSION,
+  RUNTIME_SCHEMA_VERSION,
   type ChapterFrame,
   type ChapterRecord,
   type Choice,
@@ -20,9 +21,11 @@ import {
   type PlayerAction,
   type TraceEnvelope,
   type ValidationIssue,
+  type WorldDelta,
   type WorldState,
   buildPovContext,
   canonicalizeChapterFrameCandidate,
+  decodeChapterFrameModelCandidate,
   getClockPolicy,
   resolveTurn,
   stageWorldDelta,
@@ -46,6 +49,7 @@ import {
   type RuntimeCallResult,
   type RuntimeCostHooks,
   type RuntimeUsage,
+  type NarrationRawCandidateContext,
 } from "../openai";
 import { StaleWorldVersionError, StoryStore } from "../storage/story-store";
 import {
@@ -62,14 +66,113 @@ import {
 const WORLD_ID = "ashen-crown-v1";
 export const CHAPTER_NARRATION_MODEL = "gpt-5.6-luna" as const;
 
+export interface NarrativeTurnIdentity {
+  readonly chapter: number;
+  readonly povId: string;
+  readonly requestId: string;
+  readonly turnId: string;
+  readonly worldVersionAfter: number;
+  readonly worldVersionBefore: number;
+}
+
+export interface NarrativeRecoveryEvidence {
+  readonly accepted: boolean;
+  readonly attempt: number;
+  readonly maximumAdditionalWords: number;
+  readonly minimumAdditionalWords: number;
+  readonly prose: string;
+  readonly rejectionReason: string | null;
+  readonly responseId: string;
+  readonly wordCount: number;
+}
+
+export interface NarrativeResponseEvidence {
+  readonly attempt: number;
+  readonly bufferedOutputText: string;
+  readonly chapter: number;
+  readonly phase: "audit" | "narration" | "recovery";
+  readonly povId: string;
+  readonly rawOutputText: string;
+  readonly responseId: string;
+  readonly sourceGitSha: string;
+  readonly status: NarrationRawCandidateContext["status"];
+  readonly turn: NarrativeTurnIdentity;
+  readonly worldVersionAfter: number;
+  readonly worldVersionBefore: number;
+}
+
+export interface NarrativeAuditAttemptEvidence {
+  readonly attempt: number;
+  readonly candidate: NarrativeAuditCandidate | null;
+  readonly rawOutputText: string;
+  readonly responseId: string;
+  readonly status: NarrationRawCandidateContext["status"];
+}
+
+export interface NarrativeCandidateEvidence {
+  readonly accepted: boolean;
+  readonly adapterMode: TraceEnvelope["adapterMode"];
+  readonly allowedFactIds: readonly string[];
+  readonly audit: NarrativeAudit | null;
+  readonly auditAttempts: readonly NarrativeAuditAttemptEvidence[];
+  readonly auditResponseId: string | null;
+  readonly backgroundIntents: TraceEnvelope["intents"];
+  readonly chapter: number;
+  readonly delta: WorldDelta;
+  readonly deterministicIssues: readonly ValidationIssue[];
+  readonly forbiddenFacts: readonly { readonly claim: string; readonly id: string }[];
+  readonly frame: ChapterFrame;
+  readonly mergedProse: string;
+  readonly mergedWordCount: number;
+  readonly multiAgentOutputItems: TraceEnvelope["multiAgentOutputItems"];
+  readonly narratorAttempt: number;
+  readonly narratorResponseId: string;
+  readonly playerAction: PlayerAction;
+  readonly povId: string;
+  readonly promptVersion: typeof PROMPT_VERSION;
+  readonly rawProse: string;
+  readonly rawWordCount: number;
+  readonly recovery: NarrativeRecoveryEvidence | null;
+  readonly rejectionStage: "accepted" | "audit" | "audit-invalid" | "deterministic" | "recovery";
+  readonly schemaVersion: typeof RUNTIME_SCHEMA_VERSION;
+  readonly sourceGitSha: string;
+  readonly stateAfter: WorldState;
+  readonly stateBefore: WorldState;
+  readonly turn: NarrativeTurnIdentity;
+  readonly worldVersionAfter: number;
+  readonly worldVersionBefore: number;
+}
+
+type NarrativeCandidateOutcome = Pick<
+  NarrativeCandidateEvidence,
+  | "accepted"
+  | "audit"
+  | "auditAttempts"
+  | "auditResponseId"
+  | "deterministicIssues"
+  | "mergedProse"
+  | "mergedWordCount"
+  | "narratorAttempt"
+  | "narratorResponseId"
+  | "rawProse"
+  | "rawWordCount"
+  | "recovery"
+  | "rejectionStage"
+>;
+
 export interface StoryServiceOptions {
   readonly costHooks?: RuntimeCostHooks;
   readonly maxBackgroundAgents: number;
   readonly maxCostUsdPerChapter: number;
   readonly nativeMultiAgent: boolean;
   readonly onNarrativeAudit?: (audit: NarrativeAudit) => void;
+  readonly onNarrativeCandidate?: (candidate: NarrativeCandidateEvidence) => void;
+  readonly onNarrativeResponse?: (response: NarrativeResponseEvidence) => void;
   readonly onNarrativeDraftRejected?: (issues: readonly ValidationIssue[]) => void;
-  readonly onRuntimeAttempt?: (attempt: TraceEnvelope["attempts"][number]) => void;
+  readonly onRuntimeAttempt?: (
+    attempt: TraceEnvelope["attempts"][number],
+    turn: NarrativeTurnIdentity,
+  ) => void;
 }
 
 export interface TakeChoiceCommand {
@@ -184,6 +287,15 @@ export class StoryService {
     if (before.lockedPovId === null) throw new StoryServiceError("Viewpoint is not locked", 409);
 
     const startedAt = performance.now();
+    const turnId = randomUUID();
+    const turnIdentity: NarrativeTurnIdentity = {
+      chapter: before.chapter + 1,
+      povId: before.lockedPovId,
+      requestId: command.requestId,
+      turnId,
+      worldVersionAfter: before.version + 1,
+      worldVersionBefore: before.version,
+    };
     const budget = new ChapterCostBudget(this.options.maxCostUsdPerChapter);
     const priorFailures = this.store
       .loadFailedTurnTraces(WORLD_ID)
@@ -204,7 +316,7 @@ export class StoryService {
         const tracedAttempt = { ...attempt, phase: attemptPhase };
         attempts.push(tracedAttempt);
         currentAttempts.push(tracedAttempt);
-        this.options.onRuntimeAttempt?.(tracedAttempt);
+        this.options.onRuntimeAttempt?.(tracedAttempt, turnIdentity);
       },
       timeoutMs: 60_000,
     } as const;
@@ -278,12 +390,9 @@ export class StoryService {
           maxOutputTokens: 700,
           policy,
           reasoningEffort: "none",
-          resolverInput: JSON.stringify({
-            chapter: before.chapter,
-            immutableStateVersion: before.version,
-            instruction: "Emit intent only. Never mutate canonical state.",
-          }),
+          resolverInput: "Use assigned actor instructions. Intent only.",
           rootAgentName: "/root",
+          stateVersion: before.version,
         });
         backgroundIntents = luna.batch.intents;
         adapterMode = luna.mode;
@@ -303,15 +412,19 @@ export class StoryService {
 
       const frameCandidateCall = await runStructuredResponse(this.client, {
         input: buildChapterFramePrompt(prospective),
-        instructions: "Return a short title and ranked option IDs. Return schema JSON only.",
+        instructions:
+          'Return {"t":title,"o":rankedOptionIds}. Use a short title and at most two IDs from optionsByIdAsDescription. Never reveal hidden facts. Application code owns terminal state, actions, IDs, descriptions, and targets. Return schema JSON only.',
         maxOutputTokens: 400,
         model: "gpt-5.6-luna",
         policy,
         reasoningEffort: "none",
-        schema: ChapterFrameCandidateSchema,
-        schemaName: "chapter_frame",
+        schema: ChapterFrameModelCandidateSchema,
+        schemaName: "chapter_frame_candidate",
         validate: (candidate) => {
-          const frameValidation = canonicalizeChapterFrameCandidate(prospective, candidate);
+          const frameValidation = canonicalizeChapterFrameCandidate(
+            prospective,
+            decodeChapterFrameModelCandidate(candidate),
+          );
           if (!frameValidation.ok) {
             throw new OpenAIRuntimeError(
               "INVALID_OUTPUT",
@@ -323,7 +436,7 @@ export class StoryService {
       });
       const frameValidation = canonicalizeChapterFrameCandidate(
         prospective,
-        frameCandidateCall.data,
+        decodeChapterFrameModelCandidate(frameCandidateCall.data),
       );
       if (!frameValidation.ok) {
         throw new StoryServiceError(
@@ -342,15 +455,84 @@ export class StoryService {
       let approvedAudit: NarrativeAudit | null = null;
       let retryDirective: string | null = null;
       const allowedFactIds = new Set(buildPovContext(prospective, before.lockedPovId).factIds);
-      const forbiddenFactIds = new Set(
-        prospective.facts.filter(({ id }) => !allowedFactIds.has(id)).map(({ id }) => id),
+      const forbiddenFacts = prospective.facts
+        .filter(({ id }) => !allowedFactIds.has(id))
+        .map(({ claim, id }) => ({ claim, id }));
+      const forbiddenFactsById = new Map(
+        forbiddenFacts.map(({ claim, id }) => [id, claim] as const),
       );
       const narrationBrief = JSON.parse(
         buildNarrationPrompt(before, prospective, playerAction, resolved.data.delta),
       ) as unknown;
+      const candidateBase = {
+        adapterMode,
+        allowedFactIds: [...allowedFactIds].sort(),
+        backgroundIntents: [...resolved.data.intents],
+        chapter: prospective.chapter,
+        delta: resolved.data.delta,
+        forbiddenFacts,
+        frame: frameCall.data,
+        multiAgentOutputItems: [...multiAgentOutputItems],
+        playerAction,
+        povId: before.lockedPovId,
+        promptVersion: PROMPT_VERSION,
+        schemaVersion: RUNTIME_SCHEMA_VERSION,
+        sourceGitSha: currentGitSha(),
+        stateAfter: prospective,
+        stateBefore: before,
+        turn: turnIdentity,
+        worldVersionAfter: prospective.version,
+        worldVersionBefore: before.version,
+      } satisfies Omit<NarrativeCandidateEvidence, keyof NarrativeCandidateOutcome>;
+      const emitCandidate = (outcome: NarrativeCandidateOutcome): void => {
+        try {
+          this.options.onNarrativeCandidate?.({ ...candidateBase, ...outcome });
+        } catch (error) {
+          throw new OpenAIRuntimeError("INVALID_POLICY", "Narrative evidence hook failed", {
+            cause: error,
+          });
+        }
+      };
+      const emitNarrativeResponse = (
+        phase: NarrativeResponseEvidence["phase"],
+        context: {
+          readonly attempt: number;
+          readonly bufferedOutputText?: string;
+          readonly rawOutputText: string;
+          readonly responseId: string;
+          readonly status: NarrationRawCandidateContext["status"];
+        },
+      ): void => {
+        try {
+          this.options.onNarrativeResponse?.({
+            attempt: context.attempt,
+            bufferedOutputText: context.bufferedOutputText ?? context.rawOutputText,
+            chapter: candidateBase.chapter,
+            phase,
+            povId: candidateBase.povId,
+            rawOutputText: context.rawOutputText,
+            responseId: context.responseId,
+            sourceGitSha: candidateBase.sourceGitSha,
+            status: context.status,
+            turn: candidateBase.turn,
+            worldVersionAfter: candidateBase.worldVersionAfter,
+            worldVersionBefore: candidateBase.worldVersionBefore,
+          });
+        } catch (error) {
+          throw new OpenAIRuntimeError(
+            "INVALID_POLICY",
+            "Narrative response evidence hook failed",
+            {
+              cause: error,
+            },
+          );
+        }
+      };
       attemptPhase = "narration";
       const narration = await createAuditedNarrationReplay(this.client, {
-        audit: async (prose) => {
+        audit: async (prose, narratorContext) => {
+          const rawWordCount = countWords(prose);
+          let recoveryEvidence: NarrativeRecoveryEvidence | null = null;
           let auditedProse = prose;
           let draft = validateChapterDraft(prospective, {
             choices: frameCall.data.choices,
@@ -362,20 +544,34 @@ export class StoryService {
           if (!draft.ok) {
             this.options.onNarrativeDraftRejected?.(draft.issues);
             if (canRecoverShortNarration(prose, draft.issues)) {
+              const initialIssues = [...draft.issues];
               const recoveryPrompt = buildNarrationRecoveryPrompt(prose);
               attemptPhase = "recovery";
               try {
                 const recoveryCall = await createAuditedNarrationReplay(this.client, {
-                  audit: (continuation) => {
+                  audit: (continuation, recoveryContext) => {
                     const continuationWords = countWords(continuation);
                     const accepted =
                       continuationWords >= recoveryPrompt.minimumAdditionalWords &&
                       continuationWords <= recoveryPrompt.maximumAdditionalWords;
+                    const rejectionReason = accepted
+                      ? null
+                      : `Continuation must contain ${recoveryPrompt.minimumAdditionalWords} to ${recoveryPrompt.maximumAdditionalWords} words`;
+                    recoveryEvidence = {
+                      accepted,
+                      attempt: recoveryContext.attempt,
+                      maximumAdditionalWords: recoveryPrompt.maximumAdditionalWords,
+                      minimumAdditionalWords: recoveryPrompt.minimumAdditionalWords,
+                      prose: continuation,
+                      rejectionReason,
+                      responseId: recoveryContext.responseId,
+                      wordCount: continuationWords,
+                    };
                     return accepted
                       ? { accepted: true }
                       : {
                           accepted: false,
-                          reason: `Continuation must contain ${recoveryPrompt.minimumAdditionalWords} to ${recoveryPrompt.maximumAdditionalWords} words`,
+                          reason: rejectionReason ?? "Continuation failed its word range",
                         };
                   },
                   chunkCharacters: 512,
@@ -383,11 +579,30 @@ export class StoryService {
                   instructions: recoveryPrompt.instructions,
                   maxOutputTokens: recoveryPrompt.maxOutputTokens,
                   model: "gpt-5.6-luna",
+                  onRawCandidate: (context) => emitNarrativeResponse("recovery", context),
                   policy: { ...policy, maxRetries: 0 },
                   reasoningEffort: "none",
                 });
                 recoveryCalls.push(recoveryCall);
                 auditedProse = `${prose.trim()} ${recoveryCall.prose.trim()}`;
+              } catch (error) {
+                retryDirective = `The prior draft had ${rawWordCount} words and its bounded continuation failed. Regenerate complete prose at 900 to 925 words. Remove unsupported facts and actions. Never repeat text absent from the supplied POV canon.`;
+                emitCandidate({
+                  accepted: false,
+                  audit: null,
+                  auditAttempts: [],
+                  auditResponseId: null,
+                  deterministicIssues: initialIssues,
+                  mergedProse: prose,
+                  mergedWordCount: rawWordCount,
+                  narratorAttempt: narratorContext.attempt,
+                  narratorResponseId: narratorContext.responseId,
+                  rawProse: prose,
+                  rawWordCount,
+                  recovery: recoveryEvidence,
+                  rejectionStage: "recovery",
+                });
+                throw error;
               } finally {
                 attemptPhase = "narration";
               }
@@ -404,9 +619,25 @@ export class StoryService {
           if (!draft.ok) {
             const safeIssueCodes = [...new Set(draft.issues.map(({ code }) => code))].sort();
             retryDirective = `The prior draft failed deterministic validation with issue codes: ${safeIssueCodes.join(", ")}. Write 900 to 925 words. Remove every unsupported fact or action. Never repeat prior text that is absent from the supplied POV canon.`;
+            emitCandidate({
+              accepted: false,
+              audit: null,
+              auditAttempts: [],
+              auditResponseId: null,
+              deterministicIssues: [...draft.issues],
+              mergedProse: auditedProse,
+              mergedWordCount: countWords(auditedProse),
+              narratorAttempt: narratorContext.attempt,
+              narratorResponseId: narratorContext.responseId,
+              rawProse: prose,
+              rawWordCount,
+              recovery: recoveryEvidence,
+              rejectionStage: "deterministic",
+            });
             return { accepted: false, reason: formatIssues(draft.issues) };
           }
-          const proseHash = hashText(auditedProse);
+          const auditAttempts: NarrativeAuditAttemptEvidence[] = [];
+          const auditAttemptStart = currentAttempts.length;
           attemptPhase = "audit";
           let auditCall: RuntimeCallResult<NarrativeAudit>;
           try {
@@ -422,22 +653,70 @@ export class StoryService {
               instructions: "Audit canon. Return schema JSON only.",
               maxOutputTokens: 450,
               model: "gpt-5.6-luna",
+              onCandidate: (candidate, context) => {
+                const index = auditAttempts.findLastIndex(
+                  (entry) =>
+                    entry.attempt === context.attempt && entry.responseId === context.responseId,
+                );
+                const raw = auditAttempts[index];
+                if (index < 0 || raw === undefined) {
+                  throw new Error("Parsed audit candidate has no raw response evidence");
+                }
+                auditAttempts[index] = { ...raw, candidate };
+              },
+              onRawCandidate: (context) => {
+                auditAttempts.push({
+                  attempt: context.attempt,
+                  candidate: null,
+                  rawOutputText: context.rawOutputText,
+                  responseId: context.responseId,
+                  status: context.status,
+                });
+                emitNarrativeResponse("audit", context);
+              },
               policy,
               reasoningEffort: "none",
               schema: NarrativeAuditCandidateSchema,
               schemaName: "narrative_audit",
               validate: (audit) => {
-                canonicalizeNarrativeAuditOutput(audit, proseHash, forbiddenFactIds);
+                canonicalizeNarrativeAuditOutput(audit, auditedProse, forbiddenFactsById);
               },
             });
             auditCall = {
               ...candidateCall,
               data: canonicalizeNarrativeAuditOutput(
                 candidateCall.data,
-                proseHash,
-                forbiddenFactIds,
+                auditedProse,
+                forbiddenFactsById,
               ),
             };
+          } catch (error) {
+            const auditResponseId =
+              auditAttempts.at(-1)?.responseId ??
+              currentAttempts.slice(auditAttemptStart).findLast(({ phase }) => phase === "audit")
+                ?.responseId ??
+              null;
+            emitCandidate({
+              accepted: false,
+              audit: null,
+              auditAttempts,
+              auditResponseId,
+              deterministicIssues: [],
+              mergedProse: auditedProse,
+              mergedWordCount: countWords(auditedProse),
+              narratorAttempt: narratorContext.attempt,
+              narratorResponseId: narratorContext.responseId,
+              rawProse: prose,
+              rawWordCount,
+              recovery: recoveryEvidence,
+              rejectionStage: "audit-invalid",
+            });
+            if (error instanceof OpenAIRuntimeError && !error.retryable) throw error;
+            throw new OpenAIRuntimeError(
+              "INVALID_OUTPUT",
+              "Narrative audit exhausted retries for the fixed prose",
+              { cause: error },
+            );
           } finally {
             attemptPhase = "narration";
           }
@@ -455,6 +734,21 @@ export class StoryService {
             }
             retryDirective = `The prior draft failed fixed rubric checks: ${[...new Set(safeFailures)].join(", ") || "quality"}. Remove unsupported claims, durable facts, and extra actions. Keep only supplied viewpoint canon and canonical effects. Never repeat prior text that is absent from the supplied POV canon.`;
           }
+          emitCandidate({
+            accepted: approvedAudit.approved,
+            audit: approvedAudit,
+            auditAttempts,
+            auditResponseId: auditCall.responseId,
+            deterministicIssues: [],
+            mergedProse: auditedProse,
+            mergedWordCount: countWords(auditedProse),
+            narratorAttempt: narratorContext.attempt,
+            narratorResponseId: narratorContext.responseId,
+            rawProse: prose,
+            rawWordCount,
+            recovery: recoveryEvidence,
+            rejectionStage: approvedAudit.approved ? "accepted" : "audit",
+          });
           return {
             accepted: approvedAudit.approved,
             auditedProse,
@@ -468,9 +762,10 @@ export class StoryService {
             ...(retryDirective === null ? {} : { retryDirective }),
           }),
         instructions:
-          "Write close-third Ashen Crown prose. Obey the supplied canon whitelist exactly.",
+          "Write only complete close-third Ashen Crown chapter prose, 900 to 925 words. Never stop before 900. No meta commentary. Never mention prompts, fields, whitelists, canon rules, allowed facts, or supplied context. Obey supplied story facts exactly.",
         maxOutputTokens: 1_400,
         model: CHAPTER_NARRATION_MODEL,
+        onRawCandidate: (context) => emitNarrativeResponse("narration", context),
         policy,
         reasoningEffort: "none",
       });
@@ -492,7 +787,7 @@ export class StoryService {
       const totalLatencyMs = Math.max(0, Math.round(performance.now() - startedAt));
       const totalEstimatedCostUsd = attempts.reduce((sum, attempt) => sum + attempt.costUsd, 0);
       const proseHash = hashText(narration.prose);
-      const runId = randomUUID();
+      const runId = turnId;
       const trace: TraceEnvelope = {
         acceptedDelta: resolved.data.delta,
         adapterMode,
@@ -508,7 +803,7 @@ export class StoryService {
         pricingVersion: PRICING_VERSION,
         promptVersion: PROMPT_VERSION,
         runId,
-        schemaVersion: CONTRACT_VERSION,
+        schemaVersion: RUNTIME_SCHEMA_VERSION,
         seed: before.chapter,
         stateAfterHash: hashJson(prospective),
         stateBeforeHash: hashJson(before),
@@ -577,8 +872,8 @@ export class StoryService {
           pricingVersion: PRICING_VERSION,
           promptVersion: PROMPT_VERSION,
           requestId: command.requestId,
-          runId: randomUUID(),
-          schemaVersion: CONTRACT_VERSION,
+          runId: turnId,
+          schemaVersion: RUNTIME_SCHEMA_VERSION,
           stateBeforeHash: hashJson(before),
           totalEstimatedCostUsd: currentAttempts.reduce((sum, attempt) => sum + attempt.costUsd, 0),
           totalLatencyMs: Math.max(0, Math.round(performance.now() - startedAt)),
@@ -942,8 +1237,8 @@ export function validateNarrativeAuditOutput(
 
 export function canonicalizeNarrativeAuditOutput(
   audit: NarrativeAuditCandidate,
-  proseHash: string,
-  forbiddenFactIds: ReadonlySet<string>,
+  prose: string,
+  forbiddenFactsById: ReadonlyMap<string, string>,
 ): NarrativeAudit {
   const scores: NarrativeAudit["scores"] = {
     arcProgress: audit.scores[5]!,
@@ -968,17 +1263,87 @@ export function canonicalizeNarrativeAuditOutput(
     dimension,
     issueCode: scores[dimension] > 0 ? ("pass" as const) : zeroIssueCodes[dimension],
   }));
+  for (const [index, dimension] of NARRATIVE_AUDIT_DIMENSIONS.entries()) {
+    const detail = audit.evidence[index];
+    if (scores[dimension] === 0 && (detail === undefined || !prose.includes(detail))) {
+      throw invalidAudit(`Audit zero for ${dimension} must quote the prose exactly`);
+    }
+  }
+  for (const leak of audit.leakEvidence) {
+    const forbiddenClaim = forbiddenFactsById.get(leak.factId);
+    if (forbiddenClaim === undefined) {
+      throw invalidAudit(`Audit invented leaked fact ID ${leak.factId}`);
+    }
+    if (!prose.includes(leak.proseQuote)) {
+      throw invalidAudit(`Audit leak for ${leak.factId} must quote the prose exactly`);
+    }
+    if (sharedSignificantTokenCount(leak.proseQuote, forbiddenClaim) < 2) {
+      throw invalidAudit(`Audit leak for ${leak.factId} lacks forbidden-fact anchors`);
+    }
+  }
+  const leakedFactIds = [...new Set(audit.leakEvidence.map(({ factId }) => factId))].sort();
+  const proseHash = hashText(prose);
   const canonical = NarrativeAuditSchema.parse({
     evidence,
-    leakedFactIds: audit.leakedFactIds,
+    leakedFactIds,
     approved:
       NARRATIVE_AUDIT_DIMENSIONS.every((dimension) => scores[dimension] >= 1) &&
-      audit.leakedFactIds.length === 0,
+      leakedFactIds.length === 0,
     proseHash,
     scores,
   });
-  validateNarrativeAuditOutput(canonical, proseHash, forbiddenFactIds);
+  validateNarrativeAuditOutput(canonical, proseHash, new Set(forbiddenFactsById.keys()));
   return canonical;
+}
+
+const AUDIT_ANCHOR_STOP_WORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "as",
+  "at",
+  "be",
+  "beneath",
+  "by",
+  "for",
+  "from",
+  "he",
+  "her",
+  "his",
+  "in",
+  "is",
+  "it",
+  "of",
+  "on",
+  "or",
+  "she",
+  "that",
+  "the",
+  "their",
+  "they",
+  "to",
+  "under",
+  "was",
+  "were",
+  "with",
+]);
+
+function sharedSignificantTokenCount(left: string, right: string): number {
+  const leftTokens = significantTokens(left);
+  const rightTokens = significantTokens(right);
+  let shared = 0;
+  for (const token of leftTokens) {
+    if (rightTokens.has(token)) shared += 1;
+  }
+  return shared;
+}
+
+function significantTokens(value: string): Set<string> {
+  return new Set(
+    (value.toLocaleLowerCase("en-US").match(/[\p{L}\p{N}]+/gu) ?? []).filter(
+      (token) => token.length > 2 && !AUDIT_ANCHOR_STOP_WORDS.has(token),
+    ),
+  );
 }
 
 export function validateCustomActionTranslation(

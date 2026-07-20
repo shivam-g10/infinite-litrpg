@@ -4,6 +4,8 @@ import {
   ChapterDraftSchema,
   type ChapterFrame,
   type ChapterFrameCandidate,
+  ChapterFrameCandidateSchema,
+  ChapterFrameModelCandidateSchema,
   ChapterFrameSchema,
   type Choice,
   ChoiceSchema,
@@ -14,6 +16,14 @@ import { getClockPolicy } from "./clock";
 import { buildPovContext } from "./knowledge";
 import { resolveTurn } from "./resolver";
 import type { ValidationIssue, ValidationResult } from "./validation";
+
+export function decodeChapterFrameModelCandidate(input: unknown): ChapterFrameCandidate {
+  const candidate = ChapterFrameModelCandidateSchema.parse(input);
+  return ChapterFrameCandidateSchema.parse({
+    optionIds: candidate.o,
+    title: candidate.t,
+  });
+}
 
 export function validateSuggestedChoices(
   state: WorldState,

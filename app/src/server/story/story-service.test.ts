@@ -2,22 +2,23 @@ import { createHash } from "node:crypto";
 
 import {
   CHARACTER_IDS,
-  CONTRACT_VERSION,
+  type BackgroundIntentCandidate,
   NARRATIVE_AUDIT_DIMENSIONS,
-  PROMPT_VERSION,
   type NarrativeAudit,
   type NarrativeAuditCandidate,
   type TraceEnvelope,
   type ValidationIssue,
-  type WorldIntent,
 } from "@infinite-litrpg/shared";
 import type OpenAI from "openai";
-import type { ParsedResponse, Response, ResponseUsage } from "openai/resources/responses/responses";
+import type { Response, ResponseUsage } from "openai/resources/responses/responses";
 import { describe, expect, it, vi } from "vitest";
 
 import { StoryStore } from "../storage/story-store";
 import {
   canonicalizeNarrativeAuditOutput,
+  type NarrativeCandidateEvidence,
+  type NarrativeResponseEvidence,
+  type NarrativeTurnIdentity,
   StoryService,
   StoryServiceError,
   validateCustomActionTranslation,
@@ -44,6 +45,64 @@ describe("StoryService", () => {
 
     expect(() => service.selectPov("elara-voss")).toThrowError(StoryServiceError);
     expect(service.getStory()?.pov.id).toBe("rowan-ashborn");
+    store.close();
+  });
+
+  it("does not retry narration when narrative evidence persistence fails", async () => {
+    const store = new StoryStore();
+    const prose = Array.from({ length: 900 }, (_, index) => `ember${index}`).join(" ");
+    const proseHash = createHash("sha256").update(prose).digest("hex");
+    const frame = {
+      choices: [],
+      terminal: false,
+      title: "The Ash Road",
+    };
+    const audit: NarrativeAudit = {
+      approved: true,
+      evidence: NARRATIVE_AUDIT_DIMENSIONS.map((dimension) => ({
+        detail: "pass",
+        dimension,
+        issueCode: "pass",
+      })),
+      leakedFactIds: [],
+      proseHash,
+      scores: {
+        arcProgress: 2,
+        characterAutonomy: 2,
+        choiceFulfillment: 2,
+        continuity: 2,
+        litrpgMechanics: 2,
+        povSafety: 2,
+        prose: 2,
+      },
+    };
+    const parse = vi
+      .fn()
+      .mockResolvedValueOnce(parsedResponse(frame, "resp_evidence_frame"))
+      .mockResolvedValueOnce(parsedResponse(audit, "resp_evidence_audit"));
+    const stream = vi.fn().mockReturnValue(fakeStream(prose, "resp_evidence_narration"));
+    const service = new StoryService(
+      store,
+      { responses: { create: parse, stream } } as unknown as OpenAI,
+      {
+        ...options(),
+        onNarrativeCandidate: () => {
+          throw new Error("evidence disk unavailable");
+        },
+      },
+    );
+    const selected = service.selectPov("rowan-ashborn");
+
+    await expect(
+      service.takeTurn({
+        choiceId: selected.chapter.choices[0]?.id ?? "missing",
+        expectedWorldVersion: 1,
+        requestId: "00000000-0000-4000-8000-000000000099",
+        type: "take_action",
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_POLICY" });
+    expect(stream).toHaveBeenCalledTimes(1);
+    expect(parse).toHaveBeenCalledTimes(2);
     store.close();
   });
 
@@ -98,14 +157,20 @@ describe("StoryService", () => {
       .mockReturnValueOnce(fakeStream(oversizedProse, "resp_narration_rejected"))
       .mockReturnValueOnce(fakeStream(prose, "resp_narration_approved"));
     const client = {
-      responses: { parse, stream },
+      responses: { create: parse, stream },
     } as unknown as OpenAI;
     const draftRejections: (readonly ValidationIssue[])[] = [];
+    const narrativeCandidates: NarrativeCandidateEvidence[] = [];
     const runtimeAttempts: TraceEnvelope["attempts"] = [];
+    const runtimeTurns: NarrativeTurnIdentity[] = [];
     const service = new StoryService(store, client, {
       ...options(),
       onNarrativeDraftRejected: (issues) => draftRejections.push(issues),
-      onRuntimeAttempt: (attempt) => runtimeAttempts.push(attempt),
+      onNarrativeCandidate: (candidate) => narrativeCandidates.push(candidate),
+      onRuntimeAttempt: (attempt, turn) => {
+        runtimeAttempts.push(attempt);
+        runtimeTurns.push(turn);
+      },
     });
     const selected = service.selectPov("rowan-ashborn");
     const replayed: string[] = [];
@@ -131,6 +196,7 @@ describe("StoryService", () => {
     expect(result.chapter).toMatchObject({ title: "The Ash Road" });
     expect(result.chapter.prose.split(/\s+/u)).toHaveLength(900);
     expect(result.godMode).toMatchObject({ gateResult: "passed" });
+    expect(result.godMode).toMatchObject({ schemaVersion: "1.1.0-runtime-candidates-4" });
     expect(store.loadChapters("ashen-crown-v1")).toHaveLength(1);
     expect(replayed.join("")).toBe(prose);
     expect(store.loadFailedTurnTraces("ashen-crown-v1")).toEqual([]);
@@ -138,9 +204,35 @@ describe("StoryService", () => {
     expect(stream).toHaveBeenCalledTimes(2);
     expect(draftRejections).toHaveLength(1);
     expect(draftRejections[0]?.some(({ code }) => code === "INVALID_SCHEMA")).toBe(true);
+    expect(narrativeCandidates).toHaveLength(2);
+    expect(narrativeCandidates[0]).toMatchObject({
+      accepted: false,
+      deterministicIssues: [expect.objectContaining({ code: "INVALID_SCHEMA" })],
+      narratorAttempt: 0,
+      narratorResponseId: "resp_narration_rejected",
+      rawProse: oversizedProse,
+      rawWordCount: 1_301,
+      rejectionStage: "deterministic",
+    });
+    expect(narrativeCandidates[1]).toMatchObject({
+      accepted: true,
+      auditResponseId: "resp_audit",
+      mergedProse: prose,
+      narratorAttempt: 1,
+      narratorResponseId: "resp_narration_approved",
+      rejectionStage: "accepted",
+    });
     expect(runtimeAttempts).toContainEqual(
       expect.objectContaining({ errorCode: "NARRATIVE_AUDIT_REJECTED", phase: "narration" }),
     );
+    const committedChapter = store.loadChapter("ashen-crown-v1", 1);
+    if (!committedChapter) throw new Error("Committed chapter missing");
+    const committedTrace = store.loadTrace(committedChapter.traceId);
+    if (!committedTrace) throw new Error("Committed trace missing");
+    const committedRunId = committedTrace.runId;
+    expect(new Set(runtimeTurns.map(({ turnId }) => turnId))).toEqual(new Set([committedRunId]));
+    expect(runtimeTurns.every(({ requestId }) => requestId === command.requestId)).toBe(true);
+    expect(narrativeCandidates.every(({ turn }) => turn.turnId === committedRunId)).toBe(true);
     const calls = result.godMode.calls as readonly {
       model: string;
       phase: string;
@@ -179,7 +271,6 @@ describe("StoryService", () => {
     const hiddenFactId = "malachar-contained-the-void";
     const hiddenProse = `${hiddenClaim} ${Array.from({ length: 841 }, (_, index) => `ember${index}`).join(" ")}`;
     const auditedProse = Array.from({ length: 900 }, (_, index) => `cinder${index}`).join(" ");
-    const finalProse = Array.from({ length: 900 }, (_, index) => `ash${index}`).join(" ");
     const frame = {
       choices: [
         {
@@ -228,7 +319,7 @@ describe("StoryService", () => {
         issueCode: "pass",
       })),
       leakedFactIds: [],
-      proseHash: createHash("sha256").update(finalProse).digest("hex"),
+      proseHash: createHash("sha256").update(auditedProse).digest("hex"),
       scores: {
         arcProgress: 2,
         characterAutonomy: 2,
@@ -247,11 +338,10 @@ describe("StoryService", () => {
     const stream = vi
       .fn()
       .mockReturnValueOnce(fakeStream(hiddenProse, "resp_literal_hidden_draft"))
-      .mockReturnValueOnce(fakeStream(auditedProse, "resp_semantic_hidden_draft"))
-      .mockReturnValueOnce(fakeStream(finalProse, "resp_safe_draft"));
+      .mockReturnValueOnce(fakeStream(auditedProse, "resp_semantic_hidden_draft"));
     const service = new StoryService(
       store,
-      { responses: { parse, stream } } as unknown as OpenAI,
+      { responses: { create: parse, stream } } as unknown as OpenAI,
       options(),
     );
     const selected = service.selectPov("rowan-ashborn");
@@ -263,18 +353,19 @@ describe("StoryService", () => {
       type: "take_action",
     });
 
-    expect(result.chapter.prose).toBe(finalProse);
-    expect(stream).toHaveBeenCalledTimes(3);
+    expect(result.chapter.prose).toBe(auditedProse);
+    expect(stream).toHaveBeenCalledTimes(2);
+    expect(parse).toHaveBeenCalledTimes(3);
     const deterministicRetryInput = (stream.mock.calls[1]?.[0] as { input?: string } | undefined)
       ?.input;
-    const auditRetryInput = (stream.mock.calls[2]?.[0] as { input?: string } | undefined)?.input;
-    for (const retryInput of [deterministicRetryInput, auditRetryInput]) {
-      expect(retryInput).toBeTypeOf("string");
-      expect(retryInput).not.toContain(hiddenClaim);
-      expect(retryInput).not.toContain(hiddenFactId);
-    }
+    expect(deterministicRetryInput).toBeTypeOf("string");
+    expect(deterministicRetryInput).not.toContain(hiddenClaim);
+    expect(deterministicRetryInput).not.toContain(hiddenFactId);
     expect(deterministicRetryInput).toContain("POV_LEAK");
-    expect(auditRetryInput).toContain("povSafety: hidden-knowledge");
+    const rejectedAuditInput = (parse.mock.calls[1]?.[0] as { input?: string } | undefined)?.input;
+    const acceptedAuditInput = (parse.mock.calls[2]?.[0] as { input?: string } | undefined)?.input;
+    expect(rejectedAuditInput).toBe(acceptedAuditInput);
+    expect(rejectedAuditInput).toContain(auditedProse);
     store.close();
   });
 
@@ -329,11 +420,9 @@ describe("StoryService", () => {
     };
     const parse = vi
       .fn()
-      .mockResolvedValueOnce(parsedResponse(waitIntent(actorIds[0], 0), "resp_lucan", meteredUsage))
-      .mockResolvedValueOnce(
-        parsedResponse(waitIntent(actorIds[1], 1), "resp_maelin", meteredUsage),
-      )
-      .mockResolvedValueOnce(parsedResponse(waitIntent(actorIds[2], 2), "resp_nyra", meteredUsage))
+      .mockResolvedValueOnce(parsedResponse(waitIntent(), "resp_lucan", meteredUsage))
+      .mockResolvedValueOnce(parsedResponse(waitIntent(), "resp_maelin", meteredUsage))
+      .mockResolvedValueOnce(parsedResponse(waitIntent(), "resp_nyra", meteredUsage))
       .mockResolvedValueOnce(
         parsedResponse(unsafeFrame, "resp_frame_hidden_1", usage(1_853, 112, 0, 1_850)),
       )
@@ -350,13 +439,15 @@ describe("StoryService", () => {
       .fn()
       .mockResolvedValueOnce({ input_tokens: 1_400, object: "response.input_tokens" })
       .mockResolvedValueOnce({ input_tokens: 3_200, object: "response.input_tokens" });
+    const narrativeCandidates: NarrativeCandidateEvidence[] = [];
     const service = new StoryService(
       store,
-      { responses: { inputTokens: { count }, parse, stream } } as unknown as OpenAI,
+      { responses: { create: parse, inputTokens: { count }, stream } } as unknown as OpenAI,
       {
         maxBackgroundAgents: 3,
         maxCostUsdPerChapter: 0.0405,
         nativeMultiAgent: false,
+        onNarrativeCandidate: (candidate) => narrativeCandidates.push(candidate),
       },
     );
     const selected = service.selectPov("elara-voss");
@@ -378,9 +469,41 @@ describe("StoryService", () => {
     expect(result.estimatedCostUsd).toBeLessThanOrEqual(0.0405);
     expect(result.chapter.prose).toBe(prose);
     expect(parse).toHaveBeenCalledTimes(7);
+    expect(parse.mock.calls.slice(0, 3).map(([body]) => (body as { input: string }).input)).toEqual(
+      [
+        "Use assigned actor instructions. Intent only.",
+        "Use assigned actor instructions. Intent only.",
+        "Use assigned actor instructions. Intent only.",
+      ],
+    );
+    expect(
+      parse.mock.calls.slice(3, 6).map(([body]) => (body as { instructions: string }).instructions),
+    ).toEqual([
+      expect.stringContaining("optionsByIdAsDescription"),
+      expect.stringContaining("optionsByIdAsDescription"),
+      expect.stringContaining("optionsByIdAsDescription"),
+    ]);
     expect(stream).toHaveBeenCalledTimes(2);
     expect(count).not.toHaveBeenCalled();
     expect(replayed.join("")).toBe(prose);
+    expect(narrativeCandidates).toHaveLength(1);
+    expect(narrativeCandidates[0]).toMatchObject({
+      accepted: true,
+      auditResponseId: "resp_audit_three",
+      mergedProse: prose,
+      mergedWordCount: 900,
+      narratorResponseId: "resp_narration_three",
+      rawProse,
+      rawWordCount: 812,
+      recovery: {
+        accepted: true,
+        maximumAdditionalWords: 113,
+        minimumAdditionalWords: 88,
+        prose: continuation,
+        responseId: "resp_recovery_three",
+        wordCount: 88,
+      },
+    });
     const calls = result.godMode.calls as readonly {
       agentId: string | null;
       model: string;
@@ -416,11 +539,117 @@ describe("StoryService", () => {
     store.close();
   });
 
-  it("records exhausted audit retries before a regenerated narration succeeds", async () => {
+  it("records an out-of-range recovery before retrying narration", async () => {
+    const store = new StoryStore();
+    const rawProse = "ember ".repeat(820).trim();
+    const rejectedContinuation = "cinder ".repeat(10).trim();
+    const finalProse = "ash ".repeat(900).trim();
+    const frame = {
+      choices: [
+        {
+          action: { type: "wait" },
+          description: "Wait and watch the road for movement.",
+          id: "choice-1",
+          milestoneId: null,
+        },
+        {
+          action: { subjectId: "ash-road", type: "investigate" },
+          description: "Inspect the ash road for a fresh trail.",
+          id: "choice-2",
+          milestoneId: null,
+        },
+      ],
+      terminal: false,
+      title: "The Ash Road",
+    } as const;
+    const audit: NarrativeAudit = {
+      approved: true,
+      evidence: NARRATIVE_AUDIT_DIMENSIONS.map((dimension) => ({
+        detail: "The chapter stays inside supplied canon.",
+        dimension,
+        issueCode: "pass",
+      })),
+      leakedFactIds: [],
+      proseHash: createHash("sha256").update(finalProse).digest("hex"),
+      scores: {
+        arcProgress: 2,
+        characterAutonomy: 2,
+        choiceFulfillment: 2,
+        continuity: 2,
+        litrpgMechanics: 2,
+        povSafety: 2,
+        prose: 2,
+      },
+    };
+    const parse = vi
+      .fn()
+      .mockResolvedValueOnce(parsedResponse(frame, "resp_recovery_frame"))
+      .mockResolvedValueOnce(parsedResponse(audit, "resp_recovery_audit"));
+    const stream = vi
+      .fn()
+      .mockReturnValueOnce(fakeStream(rawProse, "resp_short_narration"))
+      .mockReturnValueOnce(fakeStream(rejectedContinuation, "resp_bad_recovery"))
+      .mockReturnValueOnce(fakeStream(finalProse, "resp_retried_narration"));
+    const narrativeCandidates: NarrativeCandidateEvidence[] = [];
+    const narrativeResponses: NarrativeResponseEvidence[] = [];
+    const service = new StoryService(
+      store,
+      { responses: { create: parse, stream } } as unknown as OpenAI,
+      {
+        ...options(),
+        maxBackgroundAgents: 0,
+        onNarrativeCandidate: (candidate) => narrativeCandidates.push(candidate),
+        onNarrativeResponse: (response) => narrativeResponses.push(response),
+      },
+    );
+    const selected = service.selectPov("rowan-ashborn");
+
+    const result = await service.takeTurn({
+      choiceId: selected.chapter.choices[0]?.id ?? "missing",
+      expectedWorldVersion: 1,
+      requestId: "00000000-0000-4000-8000-000000000353",
+      type: "take_action",
+    });
+
+    expect(result.chapter.prose).toBe(finalProse);
+    expect(narrativeCandidates).toHaveLength(2);
+    expect(narrativeResponses.map(({ phase, responseId }) => [phase, responseId])).toEqual([
+      ["narration", "resp_short_narration"],
+      ["recovery", "resp_bad_recovery"],
+      ["narration", "resp_retried_narration"],
+      ["audit", "resp_recovery_audit"],
+    ]);
+    expect(narrativeCandidates[0]).toMatchObject({
+      accepted: false,
+      mergedProse: rawProse,
+      narratorResponseId: "resp_short_narration",
+      rawWordCount: 820,
+      recovery: {
+        accepted: false,
+        maximumAdditionalWords: 105,
+        minimumAdditionalWords: 80,
+        prose: rejectedContinuation,
+        responseId: "resp_bad_recovery",
+        wordCount: 10,
+      },
+      rejectionStage: "recovery",
+    });
+    expect(narrativeCandidates[1]).toMatchObject({
+      accepted: true,
+      narratorAttempt: 1,
+      narratorResponseId: "resp_retried_narration",
+      rejectionStage: "accepted",
+    });
+    const retryInput = (stream.mock.calls[2]?.[0] as { input?: string } | undefined)?.input;
+    expect(retryInput).toContain("prior draft had 820 words");
+    expect(retryInput).not.toContain(rawProse);
+    store.close();
+  });
+
+  it("stops after exhausted same-prose audit retries without regenerating narration", async () => {
     const store = new StoryStore();
     const firstProse = Array.from({ length: 900 }, (_, index) => `ember${index}`).join(" ");
-    const recoveredProse = Array.from({ length: 900 }, (_, index) => `cinder${index}`).join(" ");
-    const proseHash = createHash("sha256").update(recoveredProse).digest("hex");
+    const proseHash = createHash("sha256").update(firstProse).digest("hex");
     const frame = {
       choices: [
         {
@@ -468,32 +697,41 @@ describe("StoryService", () => {
       .mockResolvedValueOnce(parsedResponse(frame, "resp_frame_retry"))
       .mockResolvedValueOnce(parsedResponse(invalidAudit, "resp_audit_bad_1"))
       .mockResolvedValueOnce(parsedResponse(invalidAudit, "resp_audit_bad_2"))
-      .mockResolvedValueOnce(parsedResponse(invalidAudit, "resp_audit_bad_3"))
-      .mockResolvedValueOnce(parsedResponse(audit, "resp_audit_recovered"));
+      .mockResolvedValueOnce(parsedResponse(invalidAudit, "resp_audit_bad_3"));
     const stream = vi
       .fn()
-      .mockReturnValueOnce(fakeStream(firstProse, "resp_narration_audit_failed"))
-      .mockReturnValueOnce(fakeStream(recoveredProse, "resp_narration_recovered"));
+      .mockReturnValueOnce(fakeStream(firstProse, "resp_narration_audit_failed"));
+    const narrativeCandidates: NarrativeCandidateEvidence[] = [];
+    const runtimeTurns: NarrativeTurnIdentity[] = [];
     const service = new StoryService(
       store,
-      { responses: { parse, stream } } as unknown as OpenAI,
-      options(),
+      { responses: { create: parse, stream } } as unknown as OpenAI,
+      {
+        ...options(),
+        onNarrativeCandidate: (candidate) => narrativeCandidates.push(candidate),
+        onRuntimeAttempt: (_attempt, turn) => runtimeTurns.push(turn),
+      },
     );
     const selected = service.selectPov("rowan-ashborn");
 
-    const result = await service.takeTurn({
-      choiceId: selected.chapter.choices[0]?.id ?? "missing",
-      expectedWorldVersion: 1,
-      requestId: "00000000-0000-4000-8000-000000000003",
-      type: "take_action",
+    await expect(
+      service.takeTurn({
+        choiceId: selected.chapter.choices[0]?.id ?? "missing",
+        expectedWorldVersion: 1,
+        requestId: "00000000-0000-4000-8000-000000000003",
+        type: "take_action",
+      }),
+    ).rejects.toMatchObject({
+      code: "INVALID_OUTPUT",
+      message: "Narrative audit exhausted retries for the fixed prose",
     });
 
-    const chapter = store.loadChapter("ashen-crown-v1", 1);
-    if (!chapter) throw new Error("Committed chapter missing");
-    const trace = store.loadTrace(chapter.traceId);
-    if (!trace) throw new Error("Committed trace missing");
-    expect(result.chapter.prose).toBe(recoveredProse);
-    expect(trace.attempts).toHaveLength(7);
+    expect(store.loadChapters("ashen-crown-v1")).toHaveLength(0);
+    const failures = store.loadFailedTurnTraces("ashen-crown-v1");
+    expect(failures).toHaveLength(1);
+    const trace = failures[0];
+    if (!trace) throw new Error("Failed trace missing");
+    expect(trace.attempts).toHaveLength(5);
     const failedAudits = trace.attempts.filter(
       ({ errorCode, phase }) => phase === "audit" && errorCode === "INVALID_OUTPUT",
     );
@@ -517,10 +755,24 @@ describe("StoryService", () => {
     );
     expect(trace.totalEstimatedCostUsd).toBe(attemptCost);
     expect(trace.totalUsage.totalTokens).toBe(attemptTokens);
-    expect(result.estimatedCostUsd).toBe(attemptCost);
-    expect(result.usage).toEqual(trace.totalUsage);
-    expect(parse).toHaveBeenCalledTimes(5);
-    expect(stream).toHaveBeenCalledTimes(2);
+    expect(new Set(runtimeTurns.map(({ turnId }) => turnId))).toEqual(new Set([trace.runId]));
+    expect(narrativeCandidates[0]?.turn.turnId).toBe(trace.runId);
+    expect(narrativeCandidates).toEqual([
+      expect.objectContaining({
+        accepted: false,
+        auditAttempts: expect.arrayContaining([
+          expect.objectContaining({ responseId: "resp_audit_bad_1" }),
+          expect.objectContaining({ responseId: "resp_audit_bad_2" }),
+          expect.objectContaining({ responseId: "resp_audit_bad_3" }),
+        ]),
+        narratorAttempt: 0,
+        narratorResponseId: "resp_narration_audit_failed",
+        rawProse: firstProse,
+        rejectionStage: "audit-invalid",
+      }),
+    ]);
+    expect(parse).toHaveBeenCalledTimes(4);
+    expect(stream).toHaveBeenCalledTimes(1);
     store.close();
   });
 
@@ -532,7 +784,7 @@ describe("StoryService", () => {
     const stream = vi.fn();
     const service = new StoryService(
       store,
-      { responses: { parse, stream } } as unknown as OpenAI,
+      { responses: { create: parse, stream } } as unknown as OpenAI,
       options(),
     );
 
@@ -561,7 +813,7 @@ describe("StoryService", () => {
       const stream = vi.fn();
       const service = new StoryService(
         store,
-        { responses: { parse, stream } } as unknown as OpenAI,
+        { responses: { create: parse, stream } } as unknown as OpenAI,
         options(),
         () => locked,
       );
@@ -592,7 +844,7 @@ describe("StoryService", () => {
     const stream = vi.fn();
     const service = new StoryService(
       store,
-      { responses: { parse, stream } } as unknown as OpenAI,
+      { responses: { create: parse, stream } } as unknown as OpenAI,
       options(),
     );
     service.selectPov("rowan-ashborn");
@@ -611,7 +863,7 @@ describe("StoryService", () => {
       const structuredRequest = request as
         { model?: string; text?: { format?: { name?: string } } } | undefined;
       expect(structuredRequest?.model).toBe("gpt-5.6-luna");
-      expect(structuredRequest?.text?.format?.name).toBe("chapter_frame");
+      expect(structuredRequest?.text?.format?.name).toBe("chapter_frame_candidate");
     }
     expect(stream).not.toHaveBeenCalled();
     expect(store.loadWorldState("ashen-crown-v1")).toMatchObject({ chapter: 0, version: 1 });
@@ -624,7 +876,7 @@ describe("StoryService", () => {
     const stream = vi.fn();
     const service = new StoryService(
       store,
-      { responses: { parse, stream } } as unknown as OpenAI,
+      { responses: { create: parse, stream } } as unknown as OpenAI,
       options(),
     );
     service.selectPov("rowan-ashborn");
@@ -716,7 +968,7 @@ describe("StoryService", () => {
     const stream = vi.fn().mockReturnValueOnce(fakeStream(prose, "resp_custom_narration"));
     const service = new StoryService(
       store,
-      { responses: { parse, stream } } as unknown as OpenAI,
+      { responses: { create: parse, stream } } as unknown as OpenAI,
       options(),
     );
     service.selectPov("rowan-ashborn");
@@ -780,7 +1032,7 @@ describe("StoryService", () => {
       .mockResolvedValueOnce(parsedResponse(unsafeFrame, "resp_failed_frame_2"))
       .mockResolvedValueOnce(parsedResponse(unsafeFrame, "resp_failed_frame_3"));
     const stream = vi.fn();
-    const client = { responses: { parse, stream } } as unknown as OpenAI;
+    const client = { responses: { create: parse, stream } } as unknown as OpenAI;
     const service = new StoryService(store, client, options());
     const selected = service.selectPov("rowan-ashborn");
     const command = {
@@ -920,14 +1172,15 @@ describe("StoryService", () => {
   });
 
   it("derives audit approval and locks the prose hash deterministically", () => {
-    const expectedHash = "a".repeat(64);
+    const prose = "The chapter stays inside supplied canon.";
+    const expectedHash = createHash("sha256").update(prose).digest("hex");
     const candidate: NarrativeAuditCandidate = {
       evidence: NARRATIVE_AUDIT_DIMENSIONS.map(() => "The chapter stays inside supplied canon."),
-      leakedFactIds: [],
+      leakEvidence: [],
       scores: [2, 2, 2, 2, 2, 1, 1],
     };
 
-    expect(canonicalizeNarrativeAuditOutput(candidate, expectedHash, new Set())).toMatchObject({
+    expect(canonicalizeNarrativeAuditOutput(candidate, prose, new Map())).toMatchObject({
       approved: true,
       proseHash: expectedHash,
       scores: {
@@ -941,17 +1194,110 @@ describe("StoryService", () => {
       },
     });
 
-    const rejected = {
+    const rejectedProse = `${prose} Forbidden signal crossed the room.`;
+    const rejected: NarrativeAuditCandidate = {
       ...candidate,
+      evidence: NARRATIVE_AUDIT_DIMENSIONS.map((_, index) =>
+        index === 2 || index === 4
+          ? "Forbidden signal crossed the room."
+          : "The chapter stays inside supplied canon.",
+      ),
       scores: [2, 2, 0, 2, 0, 1, 1] as NarrativeAuditCandidate["scores"],
     };
-    expect(canonicalizeNarrativeAuditOutput(rejected, expectedHash, new Set())).toMatchObject({
+    expect(canonicalizeNarrativeAuditOutput(rejected, rejectedProse, new Map())).toMatchObject({
       approved: false,
       evidence: expect.arrayContaining([
         expect.objectContaining({ dimension: "povSafety", issueCode: "hidden-knowledge" }),
         expect.objectContaining({ dimension: "continuity", issueCode: "unsupported-canon" }),
       ]),
     });
+  });
+
+  it("rejects an allowed reincarnation identity misreported as a hidden fact", () => {
+    const prose = "Rowan remembered that he was Malachar reincarnated.";
+    const candidate: NarrativeAuditCandidate = {
+      evidence: NARRATIVE_AUDIT_DIMENSIONS.map((_, index) =>
+        index === 2 ? prose : "The chapter stays inside supplied canon.",
+      ),
+      leakEvidence: [
+        {
+          factId: "malachar-contained-the-void",
+          proseQuote: prose,
+        },
+      ],
+      scores: [2, 2, 0, 2, 2, 2, 2],
+    };
+
+    expect(() =>
+      canonicalizeNarrativeAuditOutput(
+        candidate,
+        prose,
+        new Map([
+          ["malachar-contained-the-void", "Malachar contained the Void beneath his throne."],
+        ]),
+      ),
+    ).toThrow("lacks forbidden-fact anchors");
+  });
+
+  it("rejects a real forbidden fact grounded in an exact prose quote", () => {
+    const prose = "Malachar contained the Void beneath his throne.";
+    const candidate: NarrativeAuditCandidate = {
+      evidence: NARRATIVE_AUDIT_DIMENSIONS.map((_, index) =>
+        index === 2 ? prose : "The chapter stays inside supplied canon.",
+      ),
+      leakEvidence: [
+        {
+          factId: "malachar-contained-the-void",
+          proseQuote: prose,
+        },
+      ],
+      scores: [2, 2, 0, 2, 2, 2, 2],
+    };
+
+    expect(
+      canonicalizeNarrativeAuditOutput(
+        candidate,
+        prose,
+        new Map([
+          ["malachar-contained-the-void", "Malachar contained the Void beneath his throne."],
+        ]),
+      ),
+    ).toMatchObject({
+      approved: false,
+      leakedFactIds: ["malachar-contained-the-void"],
+      scores: { povSafety: 0 },
+    });
+  });
+
+  it("accepts multiple grounded quotes for one leaked fact and deduplicates its ID", () => {
+    const prose =
+      "Malachar contained the Void beneath his throne. The Void remained contained by Malachar.";
+    const candidate: NarrativeAuditCandidate = {
+      evidence: NARRATIVE_AUDIT_DIMENSIONS.map((_, index) =>
+        index === 2 ? "Malachar contained the Void beneath his throne." : "pass",
+      ),
+      leakEvidence: [
+        {
+          factId: "malachar-contained-the-void",
+          proseQuote: "Malachar contained the Void beneath his throne.",
+        },
+        {
+          factId: "malachar-contained-the-void",
+          proseQuote: "The Void remained contained by Malachar.",
+        },
+      ],
+      scores: [2, 2, 0, 2, 2, 2, 2],
+    };
+
+    expect(
+      canonicalizeNarrativeAuditOutput(
+        candidate,
+        prose,
+        new Map([
+          ["malachar-contained-the-void", "Malachar contained the Void beneath his throne."],
+        ]),
+      ).leakedFactIds,
+    ).toEqual(["malachar-contained-the-void"]);
   });
 
   it("rejects a custom investigation translated as waiting", () => {
@@ -1049,7 +1395,7 @@ function milestoneLockedWorld() {
 function unusedClient(): OpenAI {
   return {
     responses: {
-      parse: vi.fn(() => {
+      create: vi.fn(() => {
         throw new Error("Unexpected model call");
       }),
       stream: vi.fn(() => {
@@ -1063,18 +1409,17 @@ function parsedResponse<T>(
   output: T,
   id: string,
   responseUsage: ResponseUsage = usage(),
-): ParsedResponse<T> {
+): Response {
   const modelOutput = structuredCandidateOutput(output);
   return {
     error: null,
     id,
     incomplete_details: null,
     output: [],
-    output_parsed: modelOutput,
     output_text: JSON.stringify(modelOutput),
     status: "completed",
     usage: responseUsage,
-  } as unknown as ParsedResponse<T>;
+  } as unknown as Response;
 }
 
 function structuredCandidateOutput(output: unknown): unknown {
@@ -1086,7 +1431,7 @@ function structuredCandidateOutput(output: unknown): unknown {
     "title" in output &&
     !("prose" in output)
   ) {
-    return { optionIds: [], title: (output as { title: unknown }).title };
+    return { o: [], t: (output as { title: unknown }).title };
   }
   if (
     typeof output !== "object" ||
@@ -1102,7 +1447,12 @@ function structuredCandidateOutput(output: unknown): unknown {
   const audit = output as NarrativeAudit;
   return {
     evidence: audit.evidence.map(({ detail }) => detail),
-    leakedFactIds: audit.leakedFactIds,
+    leakEvidence: audit.leakedFactIds.map((factId) => ({
+      factId,
+      proseQuote:
+        audit.evidence.find(({ dimension }) => dimension === "povSafety")?.detail ??
+        "Missing POV evidence",
+    })),
     scores: NARRATIVE_AUDIT_DIMENSIONS.map((dimension) => audit.scores[dimension]),
   };
 }
@@ -1143,16 +1493,11 @@ function usage(
   };
 }
 
-function waitIntent(actorId: (typeof CHARACTER_IDS)[number], index: number): WorldIntent {
+function waitIntent(): BackgroundIntentCandidate {
   return {
-    action: { type: "wait" },
-    actorId,
-    contractVersion: CONTRACT_VERSION,
-    expectedEffect: "Observe the current situation.",
-    goal: "Survive the chapter.",
-    id: `intent-background-${index}`,
-    prerequisites: { requiredFactIds: [], requiredItemIds: [], requiredSkillIds: [] },
-    promptVersion: PROMPT_VERSION,
-    stateVersion: 1,
+    a: { t: "wait", v: [] },
+    e: "Observe the current situation.",
+    g: "Survive the chapter.",
+    r: { f: [], i: [], s: [] },
   };
 }

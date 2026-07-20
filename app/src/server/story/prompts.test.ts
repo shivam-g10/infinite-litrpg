@@ -2,15 +2,19 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import {
+  BackgroundIntentCandidateSchema,
   CHARACTER_IDS,
+  ChapterFrameModelCandidateSchema,
   CONTRACT_VERSION,
   PROMPT_VERSION,
+  buildChapterChoiceOptions,
   buildPovContext,
   validateWorldState,
   type PovContext,
   type WorldDelta,
   type WorldState,
 } from "@infinite-litrpg/shared";
+import { zodTextFormat } from "openai/helpers/zod";
 import { describe, expect, it } from "vitest";
 
 import { estimateMaximumRequestCostUsd } from "../openai";
@@ -30,7 +34,11 @@ const ROWAN_IDENTITY_PROSE = `Rowan knew he was Malachar reincarnated. ${"Ash ".
 
 describe("background actor selection", () => {
   it("versions and losslessly compacts every live agent and frame prompt", () => {
-    expect(PROMPT_VERSION).toBe("1.4.10");
+    expect(PROMPT_VERSION).toBe("1.4.11");
+    const backgroundFormat = zodTextFormat(BackgroundIntentCandidateSchema, "background_intent");
+    const frameFormat = zodTextFormat(ChapterFrameModelCandidateSchema, "chapter_frame_candidate");
+    expect(JSON.stringify(frameFormat)).not.toMatch(/"items":\[/u);
+    let totalBackgroundRequestBytes = 0;
 
     for (const povId of CHARACTER_IDS) {
       const state = seed();
@@ -51,15 +59,37 @@ describe("background actor selection", () => {
           expectedCompleteCompactPov(buildPovContext(state, actor.id)),
         );
         expect(payload.world).toEqual(world);
+        expect(payload).not.toHaveProperty("contractVersion");
+        expect(payload).not.toHaveProperty("promptVersion");
+        expect(payload).not.toHaveProperty("stateVersion");
+        expect(input.instructions).toContain(
+          'Output={"a":{"t":type,"v":[args]},"g":goal,"e":expectedEffect,"r":{"f":factIds,"i":itemIds,"s":skillIds}}',
+        );
+        expect(input.instructions).toContain("use_item item,qty,target");
+        expect(JSON.stringify(backgroundFormat)).not.toMatch(/"items":\[/u);
         expect(new TextEncoder().encode(input.instructions).byteLength).toBeLessThanOrEqual(4_600);
+        totalBackgroundRequestBytes += new TextEncoder().encode(
+          `${input.instructions}\nUse assigned actor instructions. Intent only.\n${JSON.stringify(backgroundFormat)}`,
+        ).byteLength;
       }
 
       const frameText = buildChapterFramePrompt(state);
       const frame = JSON.parse(frameText) as Record<string, unknown>;
+      const expectedOptions = buildChapterChoiceOptions(state).map(({ description, id }) => [
+        id,
+        description,
+      ]);
       expect(frame.viewpoint).toEqual(expectedCompleteCompactPov(buildPovContext(state, povId)));
       expect(frame.world).toEqual(world);
-      expect(new TextEncoder().encode(frameText).byteLength).toBeLessThanOrEqual(4_800);
+      expect(Object.entries(frame.optionsByIdAsDescription as Record<string, string>)).toEqual(
+        expectedOptions,
+      );
+      expect(frame).not.toHaveProperty("instruction");
+      expect(frame).not.toHaveProperty("options");
+      expect(frame).not.toHaveProperty("stateVersion");
+      expect(new TextEncoder().encode(frameText).byteLength).toBeLessThanOrEqual(4_220);
     }
+    expect(totalBackgroundRequestBytes).toBeLessThanOrEqual(79_300);
   });
 
   it("selects relevant actors only and never fills empty slots", () => {
@@ -134,6 +164,12 @@ describe("background actor selection", () => {
     expect(prompt).toHaveProperty("beforeValues.experience", 0);
     expect(prompt).not.toHaveProperty("worldBefore");
     expect(prompt).toHaveProperty("currentEffects.stateMutations.0.amount", 10);
+    expect(prompt).toHaveProperty(
+      "currentEffects.clockAsFromActFromChapterToActToChapterTerminalConvergenceTransition",
+      [1, 0, 1, 1, false, false, false],
+    );
+    expect(prompt).not.toHaveProperty("chapter");
+    expect(prompt).not.toHaveProperty("stateTransition");
     expect(prompt).not.toHaveProperty("playerAction.source");
     expect(prompt).not.toHaveProperty("playerAction.stateVersion");
     expect(prompt.instruction).toContain("happen now");
@@ -151,13 +187,14 @@ describe("background actor selection", () => {
       stateVersion: before.version,
     };
     const delta = emptyDelta(before);
+    const choices = buildChapterChoiceOptions(before).slice(0, 2);
     const prompt = JSON.parse(
       buildAuditPrompt(
         before,
         before,
         action,
         delta,
-        { choices: [], terminal: false, title: "A safe frame" },
+        { choices, terminal: false, title: "A safe frame" },
         ROWAN_IDENTITY_PROSE,
       ),
     ) as Record<string, unknown>;
@@ -192,6 +229,12 @@ describe("background actor selection", () => {
     expect(prompt).not.toHaveProperty("proseHash");
     expect(prompt).not.toHaveProperty("rubricDimensions");
     expect(prompt).not.toHaveProperty("allowedIssueCodes");
+    expect(prompt).toHaveProperty("nextChoices.0", [
+      choices[0]?.action,
+      choices[0]?.description,
+      choices[0]?.milestoneId,
+    ]);
+    expect(prompt.instruction).toContain("nextChoices tuples=[action,description,milestoneId]");
     expect(prompt).not.toHaveProperty("world.version");
     expect(prompt).not.toHaveProperty("world.factionsByIdAsNameGoal.solar-church");
     expect(prompt).not.toHaveProperty("afterCanon.povCharacter.equipmentItemIds");
@@ -359,8 +402,11 @@ describe("background actor selection", () => {
     );
     expect(prompt).toHaveProperty("forbiddenRemote.state.0.actorId", "varek-thorn");
     expect(JSON.stringify(prompt.currentEffects)).not.toContain("varek-thorn");
-    expect(prompt.instruction).toContain("forbiddenFacts/forbiddenRemote are detection-only");
-    expect(prompt.instruction).toContain("content exclusive to them makes povSafety 0");
+    expect(prompt.instruction).toContain("forbiddenFacts and forbiddenRemote are detection-only");
+    expect(prompt.instruction).toContain(
+      "add leakEvidence with its factId and an exact proseQuote",
+    );
+    expect(prompt.instruction).toContain("Set every positive evidence string to pass");
   });
 
   it("sends a current visible event once while preserving older observed canon", () => {
@@ -527,11 +573,11 @@ describe("background actor selection", () => {
 
     expect(frame).not.toHaveProperty("milestone");
     expect(frame).not.toHaveProperty("legalActionTargets");
-    expect(frame).toHaveProperty("options.0.id", "option-1");
-    expect(frame).toHaveProperty("options.1.id", "option-2");
+    expect(frame).toHaveProperty("optionsByIdAsDescription.option-1");
+    expect(frame).toHaveProperty("optionsByIdAsDescription.option-2");
     expect(JSON.stringify(frame)).toContain("urgent danger");
     expect(JSON.stringify(frame)).not.toContain("first seal fracture");
-    expect(frame.instruction).toContain("Application code owns");
+    expect(frame).not.toHaveProperty("instruction");
     expect(custom).toHaveProperty("milestone.id", "act-one-survival");
     expect(custom).toHaveProperty("milestone.completed", false);
     expect(custom).toHaveProperty("legalActionTargets.investigate");
@@ -570,7 +616,7 @@ describe("background actor selection", () => {
     ).byteLength;
 
     expect(recovery.minimumAdditionalWords).toBe(100);
-    expect(recovery.maximumAdditionalWords).toBe(115);
+    expect(recovery.maximumAdditionalWords).toBe(125);
     expect(recovery.maxOutputTokens).toBe(230);
     expect(requestBytes).toBeLessThanOrEqual(MAX_NARRATION_RECOVERY_PROMPT_BYTES);
     expect(
@@ -579,6 +625,11 @@ describe("background actor selection", () => {
     expect(recovery.input).not.toContain("ember0");
     expect(recovery.input).toContain("ember799");
     expect(() => buildNarrationRecoveryPrompt("ember ".repeat(799))).toThrow("800 and 899");
+
+    const shortGap = buildNarrationRecoveryPrompt("ember ".repeat(872));
+    expect(shortGap.minimumAdditionalWords).toBe(28);
+    expect(shortGap.maximumAdditionalWords).toBe(53);
+    expect(shortGap.maxOutputTokens).toBe(106);
   });
 });
 

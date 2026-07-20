@@ -39,14 +39,16 @@ describe("durable runtime cost hooks", () => {
     expect(hooks.markUncertain).not.toHaveBeenCalled();
   });
 
-  it("settles known usage before output validation", async () => {
-    const reserve = vi.fn();
-    const settle = vi.fn();
+  it("persists attempt evidence before settling known usage after output validation", async () => {
+    const order: string[] = [];
+    const reserve = vi.fn(() => order.push("reserve"));
+    const settle = vi.fn(() => order.push("settle"));
     const markUncertain = vi.fn();
 
     await expect(
       runRetriedRequest({
         evaluate: () => {
+          order.push("evaluate");
           throw new OpenAIRuntimeError("INVALID_OUTPUT", "bad schema");
         },
         getResponseId: (response: { id: string }) => response.id,
@@ -54,10 +56,12 @@ describe("durable runtime cost hooks", () => {
         invoke: async () => ({ id: "resp_known" }),
         maximumCostUsd: 0.01,
         model: "gpt-5.6-terra",
+        observe: () => order.push("observe"),
         policy: {
           budget: new ChapterCostBudget(0.02),
           costHooks: { markUncertain, reserve, settle },
           maxRetries: 0,
+          onAttempt: () => order.push("attempt"),
         },
       }),
     ).rejects.toMatchObject({ code: "INVALID_OUTPUT" });
@@ -67,6 +71,7 @@ describe("durable runtime cost hooks", () => {
       expect.objectContaining({ actualCostUsd: expect.any(Number) }),
     );
     expect(markUncertain).not.toHaveBeenCalled();
+    expect(order).toEqual(["reserve", "observe", "evaluate", "attempt", "settle"]);
   });
 
   it("keeps the full reservation when transport usage is unknown", async () => {
@@ -95,5 +100,58 @@ describe("durable runtime cost hooks", () => {
     const reservation = reserve.mock.calls[0]?.[0];
     expect(markUncertain).toHaveBeenCalledWith(reservation?.id);
     expect(settle).not.toHaveBeenCalled();
+  });
+
+  it("does not retry or report twice when attempt evidence persistence fails", async () => {
+    const invoke = vi.fn().mockResolvedValue({ id: "resp_attempt_hook" });
+    const onAttempt = vi.fn(() => {
+      throw new Error("disk unavailable");
+    });
+
+    await expect(
+      runRetriedRequest({
+        evaluate: (response: { id: string }) => ({ data: response.id, responseId: response.id }),
+        getResponseId: (response: { id: string }) => response.id,
+        getUsage: () => USAGE,
+        invoke,
+        maximumCostUsd: 0.01,
+        model: "gpt-5.6-terra",
+        policy: {
+          budget: new ChapterCostBudget(0.02),
+          maxRetries: 2,
+          onAttempt,
+        },
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_POLICY" });
+
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(onAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the durable reservation active when attempt evidence persistence fails", async () => {
+    const settle = vi.fn();
+    const markUncertain = vi.fn();
+
+    await expect(
+      runRetriedRequest({
+        evaluate: (response: { id: string }) => ({ data: response.id, responseId: response.id }),
+        getResponseId: (response: { id: string }) => response.id,
+        getUsage: () => USAGE,
+        invoke: async () => ({ id: "resp_uncheckpointed" }),
+        maximumCostUsd: 0.01,
+        model: "gpt-5.6-terra",
+        policy: {
+          budget: new ChapterCostBudget(0.02),
+          costHooks: { markUncertain, reserve: vi.fn(), settle },
+          maxRetries: 0,
+          onAttempt: () => {
+            throw new Error("disk unavailable");
+          },
+        },
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_POLICY" });
+
+    expect(settle).not.toHaveBeenCalled();
+    expect(markUncertain).not.toHaveBeenCalled();
   });
 });

@@ -114,10 +114,16 @@ export class LiveSpendLedger {
     transaction.immediate();
   }
 
-  recoverStaleRun(staleRunId: string, newRunId: string): void {
+  recoverStaleRun(
+    staleRunId: string,
+    baseline: LiveSpendBaseline,
+    recoveredAttemptCostUsd: number,
+  ): void {
     validateRunId(staleRunId);
-    validateRunId(newRunId);
-    if (staleRunId === newRunId) throw new Error("Recovery needs a new live run ID");
+    validateShaOrFreshId(baseline.sourceReportSha256);
+    const priorSpendNano = usdToNano(baseline.priorSpendUsd, "prior spend");
+    const baselineAttemptNano = usdToNano(baseline.attemptCostUsd, "attempt cost");
+    const recoveredAttemptNano = usdToNano(recoveredAttemptCostUsd, "recovered attempt cost");
     const transaction = this.db.transaction(() => {
       const existing = this.readRunLock();
       if (!existing || existing.run_id !== staleRunId) {
@@ -129,13 +135,22 @@ export class LiveSpendLedger {
       if (this.countReservations("active") !== 0) {
         throw new Error("Active provider reservations require external reconciliation");
       }
+      const meta = this.readMeta();
+      if (
+        meta.prior_spend_nano !== priorSpendNano ||
+        meta.baseline_attempt_nano !== baselineAttemptNano ||
+        meta.source_report_sha256 !== baseline.sourceReportSha256 ||
+        baselineAttemptNano + this.settledReservationNano() !== recoveredAttemptNano
+      ) {
+        throw new Error("Recovered checkpoint does not reconcile with durable exposure");
+      }
       const update = this.db
         .prepare(
           `UPDATE run_lock
-              SET run_id = ?, pid = ?, started_at = ?
+              SET pid = ?, started_at = ?
             WHERE id = 1 AND run_id = ?`,
         )
-        .run(newRunId, process.pid, new Date().toISOString(), staleRunId);
+        .run(process.pid, new Date().toISOString(), staleRunId);
       if (update.changes !== 1)
         throw new Error("Live spend stale run lock changed during recovery");
     });

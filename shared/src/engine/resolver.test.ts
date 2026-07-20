@@ -7,10 +7,133 @@ import { CONTRACT_VERSION, PROMPT_VERSION, type WorldIntent, type WorldState } f
 import { stageWorldDelta } from "./delta";
 import { getClockPolicy } from "./clock";
 import { buildPovContext } from "./knowledge";
-import { resolveTurn } from "./resolver";
+import { canonicalizeBackgroundIntentCandidate, resolveTurn } from "./resolver";
 import { validateWorldState } from "./validation";
 
 describe("deterministic turn resolution", () => {
+  it("application-owns background intent identity, versions, and direct prerequisites", () => {
+    const intent = canonicalizeBackgroundIntentCandidate(
+      {
+        a: { t: "use_skill", v: ["grave-command", "rowan-ashborn"] },
+        e: "Hold the ash road.",
+        g: "Protect the survivors.",
+        r: {
+          f: ["cinder-village-raided"],
+          i: ["ember-key"],
+          s: ["grave-command"],
+        },
+      },
+      "nyra-vale",
+      7,
+      2,
+    );
+
+    expect(intent).toEqual({
+      action: { skillId: "grave-command", targetId: "rowan-ashborn", type: "use_skill" },
+      actorId: "nyra-vale",
+      contractVersion: CONTRACT_VERSION,
+      expectedEffect: "Hold the ash road.",
+      goal: "Protect the survivors.",
+      id: "intent-background-7-2",
+      prerequisites: {
+        requiredFactIds: ["cinder-village-raided"],
+        requiredItemIds: ["ember-key"],
+        requiredSkillIds: ["grave-command"],
+      },
+      promptVersion: PROMPT_VERSION,
+      stateVersion: 7,
+    });
+    expect(() =>
+      canonicalizeBackgroundIntentCandidate(
+        {
+          a: { t: "wait", v: [] },
+          e: "Wait.",
+          extra: true,
+          g: "Wait.",
+          r: { f: [], i: [], s: [] },
+        },
+        "nyra-vale",
+        7,
+        1,
+      ),
+    ).toThrow();
+    expect(() =>
+      canonicalizeBackgroundIntentCandidate(
+        { a: { t: "wait", v: [] }, e: "Wait.", g: "Wait.", r: { f: [], i: [], s: [] } },
+        "nyra-vale",
+        7,
+        4,
+      ),
+    ).toThrow("between one and three");
+  });
+
+  it.each([
+    [
+      { t: "move", v: ["ash-road"] },
+      { destinationId: "ash-road", type: "move" },
+    ],
+    [
+      { t: "use_item", v: ["ember-key", 2, null] },
+      { itemId: "ember-key", quantity: 2, targetId: null, type: "use_item" },
+    ],
+    [
+      { t: "use_skill", v: ["grave-command", "rowan-ashborn"] },
+      { skillId: "grave-command", targetId: "rowan-ashborn", type: "use_skill" },
+    ],
+    [
+      { t: "investigate", v: ["cinder-raid-aftermath"] },
+      { subjectId: "cinder-raid-aftermath", type: "investigate" },
+    ],
+    [
+      { t: "interact", v: ["nyra-vale", "Offer a guarded truce."] },
+      { approach: "Offer a guarded truce.", targetId: "nyra-vale", type: "interact" },
+    ],
+    [
+      { t: "defend", v: ["nyra-vale"] },
+      { targetId: "nyra-vale", type: "defend" },
+    ],
+    [
+      { t: "rally", v: ["cinder-survivors", "cinder-village"] },
+      { factionId: "cinder-survivors", locationId: "cinder-village", type: "rally" },
+    ],
+    [{ t: "wait", v: [] }, { type: "wait" }],
+  ])("losslessly decodes compact background action %#", (actionCandidate, expectedAction) => {
+    const intent = canonicalizeBackgroundIntentCandidate(
+      {
+        a: actionCandidate,
+        e: "Preserve the opening.",
+        g: "Hold position.",
+        r: { f: [], i: [], s: [] },
+      },
+      "nyra-vale",
+      7,
+      1,
+    );
+
+    expect(intent.action).toEqual(expectedAction);
+  });
+
+  it.each([
+    ["missing move destination", { t: "move", v: [] }],
+    ["invalid item quantity", { t: "use_item", v: ["ember-key", 0, null] }],
+    ["extra wait argument", { t: "wait", v: ["extra"] }],
+    ["unknown action", { t: "teleport", v: ["capital"] }],
+  ])("rejects malformed compact background action: %s", (_label, actionCandidate) => {
+    expect(() =>
+      canonicalizeBackgroundIntentCandidate(
+        {
+          a: actionCandidate,
+          e: "Preserve the opening.",
+          g: "Hold position.",
+          r: { f: [], i: [], s: [] },
+        },
+        "nyra-vale",
+        7,
+        1,
+      ),
+    ).toThrow();
+  });
+
   it("stages a legal player move without mutating the input", () => {
     const state = seedState();
     const before = structuredClone(state);

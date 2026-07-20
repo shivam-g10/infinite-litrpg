@@ -155,6 +155,7 @@ interface RetriedRequestOptions<TResponse, TData> {
   readonly invoke: (signal: AbortSignal, attempt: number) => Promise<TResponse>;
   readonly maximumCostUsd: number | ((attempt: number) => number | Promise<number>);
   readonly model: RuntimeModel;
+  readonly observe?: (response: TResponse) => void;
   readonly policy: RuntimePolicy;
 }
 
@@ -166,6 +167,7 @@ export async function runRetriedRequest<TResponse, TData>({
   invoke,
   maximumCostUsd,
   model,
+  observe,
   policy,
 }: RetriedRequestOptions<TResponse, TData>): Promise<RuntimeCallResult<TData>> {
   const maxRetries = validateMaxRetries(policy.maxRetries ?? MAX_RETRIES);
@@ -192,17 +194,22 @@ export async function runRetriedRequest<TResponse, TData>({
       );
     }
     let durableReservationActive = policy.costHooks !== undefined;
+    let attemptReported = false;
+    let attemptEvidenceFailed = false;
     let attemptCostUsd = reservedCostUsd;
     let attemptUsage = ZERO_USAGE;
+    let providerUsageKnown = false;
     let responseId: string | null = null;
     aggregateCostUsd += reservedCostUsd;
     try {
       const response = await withTimeout((signal) => invoke(signal, attempt), timeoutMs);
       responseId = getResponseId(response);
+      observe?.(response);
       const usage = mapResponseUsage(getUsage(response));
       const costUsd = estimateResponseCostUsd(model, usage);
       attemptUsage = usage;
       attemptCostUsd = costUsd;
+      providerUsageKnown = true;
       aggregateUsage = addUsage(aggregateUsage, usage);
       aggregateCostUsd += costUsd - reservedCostUsd;
       let localSettlementError: unknown = null;
@@ -211,25 +218,31 @@ export async function runRetriedRequest<TResponse, TData>({
       } catch (error) {
         localSettlementError = error;
       }
+      if (localSettlementError !== null) throw localSettlementError;
+      const evaluated = await evaluate(response);
+
+      attemptReported = true;
+      try {
+        invokeAttemptHook(policy, {
+          agentId,
+          attempt,
+          costUsd: attemptCostUsd,
+          errorCode: null,
+          latencyMs: Math.max(0, Math.round(performance.now() - attemptStartedAt)),
+          model,
+          responseId,
+          usage: attemptUsage,
+        });
+      } catch (error) {
+        attemptEvidenceFailed = true;
+        throw error;
+      }
       if (policy.costHooks) {
         invokeCostHook(() =>
           policy.costHooks?.settle({ actualCostUsd: costUsd, id: reservationId }),
         );
         durableReservationActive = false;
       }
-      if (localSettlementError !== null) throw localSettlementError;
-
-      const evaluated = await evaluate(response);
-      policy.onAttempt?.({
-        agentId,
-        attempt,
-        costUsd: attemptCostUsd,
-        errorCode: null,
-        latencyMs: Math.max(0, Math.round(performance.now() - attemptStartedAt)),
-        model,
-        responseId,
-        usage: attemptUsage,
-      });
       return {
         data: evaluated.data,
         estimatedCostUsd: aggregateCostUsd,
@@ -240,24 +253,43 @@ export async function runRetriedRequest<TResponse, TData>({
       };
     } catch (error) {
       let runtimeError = asRuntimeError(error);
-      if (durableReservationActive && policy.costHooks) {
+      if (!attemptReported) {
+        attemptReported = true;
         try {
-          invokeCostHook(() => policy.costHooks?.markUncertain(reservationId));
+          invokeAttemptHook(policy, {
+            agentId,
+            attempt,
+            costUsd: attemptCostUsd,
+            errorCode: runtimeError.code,
+            latencyMs: Math.max(0, Math.round(performance.now() - attemptStartedAt)),
+            model,
+            responseId,
+            usage: attemptUsage,
+          });
+        } catch (hookError) {
+          attemptEvidenceFailed = true;
+          runtimeError = asRuntimeError(hookError);
+        }
+      }
+      if (
+        durableReservationActive &&
+        policy.costHooks &&
+        !attemptEvidenceFailed &&
+        runtimeError.code !== "INVALID_POLICY"
+      ) {
+        try {
+          if (providerUsageKnown) {
+            invokeCostHook(() =>
+              policy.costHooks?.settle({ actualCostUsd: attemptCostUsd, id: reservationId }),
+            );
+          } else {
+            invokeCostHook(() => policy.costHooks?.markUncertain(reservationId));
+          }
           durableReservationActive = false;
         } catch (hookError) {
           runtimeError = asRuntimeError(hookError);
         }
       }
-      policy.onAttempt?.({
-        agentId,
-        attempt,
-        costUsd: attemptCostUsd,
-        errorCode: runtimeError.code,
-        latencyMs: Math.max(0, Math.round(performance.now() - attemptStartedAt)),
-        model,
-        responseId,
-        usage: attemptUsage,
-      });
       if (!runtimeError.retryable || attempt === maxRetries) throw runtimeError;
     }
   }
@@ -271,6 +303,16 @@ function invokeCostHook(callback: () => void): void {
   } catch (error) {
     if (error instanceof OpenAIRuntimeError) throw error;
     throw new OpenAIRuntimeError("INVALID_POLICY", "Durable cost ledger operation failed", {
+      cause: error,
+    });
+  }
+}
+
+function invokeAttemptHook(policy: RuntimePolicy, attempt: RuntimeAttempt): void {
+  try {
+    policy.onAttempt?.(attempt);
+  } catch (error) {
+    throw new OpenAIRuntimeError("INVALID_POLICY", "Runtime attempt evidence hook failed", {
       cause: error,
     });
   }

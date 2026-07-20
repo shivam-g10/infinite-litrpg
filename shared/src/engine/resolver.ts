@@ -1,5 +1,7 @@
 import {
+  BackgroundIntentCandidateSchema,
   CONTRACT_VERSION,
+  IntentActionSchema,
   IntentBatchSchema,
   type IntentAction,
   type KnowledgeMutation,
@@ -11,6 +13,7 @@ import {
   type StateMutation,
   type WorldDelta,
   type WorldIntent,
+  WorldIntentSchema,
   type WorldState,
 } from "../contracts";
 import { getClockPolicy } from "./clock";
@@ -31,6 +34,94 @@ export interface CanonicalIntentDisposition {
   readonly accepted: readonly WorldIntent[];
   readonly intents: readonly WorldIntent[];
   readonly rejected: WorldDelta["rejectedIntents"];
+}
+
+export function canonicalizeBackgroundIntentCandidate(
+  candidateInput: unknown,
+  actorId: string,
+  stateVersion: number,
+  ordinal: number,
+): WorldIntent {
+  const candidate = BackgroundIntentCandidateSchema.parse(candidateInput);
+  if (!Number.isInteger(ordinal) || ordinal < 1 || ordinal > 3) {
+    throw new Error("Background intent ordinal must be between one and three");
+  }
+  const action = canonicalizeBackgroundIntentAction(candidate.a);
+  return WorldIntentSchema.parse({
+    action,
+    actorId,
+    contractVersion: CONTRACT_VERSION,
+    expectedEffect: candidate.e,
+    goal: candidate.g,
+    id: `intent-background-${stateVersion}-${ordinal}`,
+    prerequisites: {
+      requiredFactIds: candidate.r.f,
+      requiredItemIds: candidate.r.i,
+      requiredSkillIds: candidate.r.s,
+    },
+    promptVersion: PROMPT_VERSION,
+    stateVersion,
+  });
+}
+
+function canonicalizeBackgroundIntentAction(
+  candidate: ReturnType<typeof BackgroundIntentCandidateSchema.parse>["a"],
+): IntentAction {
+  const args = candidate.v;
+  switch (candidate.t) {
+    case "move": {
+      assertBackgroundActionArity(candidate.t, args, 1);
+      return IntentActionSchema.parse({ destinationId: args[0], type: candidate.t });
+    }
+    case "use_item":
+      assertBackgroundActionArity(candidate.t, args, 3);
+      return IntentActionSchema.parse({
+        itemId: args[0],
+        quantity: args[1],
+        targetId: args[2],
+        type: candidate.t,
+      });
+    case "use_skill":
+      assertBackgroundActionArity(candidate.t, args, 2);
+      return IntentActionSchema.parse({
+        skillId: args[0],
+        targetId: args[1],
+        type: candidate.t,
+      });
+    case "investigate":
+      assertBackgroundActionArity(candidate.t, args, 1);
+      return IntentActionSchema.parse({ subjectId: args[0], type: candidate.t });
+    case "interact":
+      assertBackgroundActionArity(candidate.t, args, 2);
+      return IntentActionSchema.parse({
+        approach: args[1],
+        targetId: args[0],
+        type: candidate.t,
+      });
+    case "defend":
+      assertBackgroundActionArity(candidate.t, args, 1);
+      return IntentActionSchema.parse({ targetId: args[0], type: candidate.t });
+    case "rally":
+      assertBackgroundActionArity(candidate.t, args, 2);
+      return IntentActionSchema.parse({
+        factionId: args[0],
+        locationId: args[1],
+        type: candidate.t,
+      });
+    case "wait":
+      assertBackgroundActionArity(candidate.t, args, 0);
+      return IntentActionSchema.parse({ type: candidate.t });
+  }
+}
+
+function assertBackgroundActionArity(
+  type: string,
+  args: readonly unknown[],
+  expected: number,
+): void {
+  if (args.length !== expected) {
+    throw new Error(`Background ${type} action requires ${expected} arguments`);
+  }
 }
 
 export function resolveTurn(
