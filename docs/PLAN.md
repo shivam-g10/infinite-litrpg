@@ -153,4 +153,4 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 
 ## Current Milestone
 
-Phase 5 release eval: commit the independently reviewed, fully green prompt `1.4.10` checkpoint. Then fold exact `$2.735142975` exposure into a fresh ledger chain and run all twelve Luna-narrated current-route chapters at a `$0.0424` chapter cap. Every request stays under the immutable `$3` global cap.
+Phase 5 release eval: checkpoint `35a341c` is independently reviewed, fully green, and clean-clone verified. Fold exact `$2.735142975` exposure into a fresh ledger chain and run all twelve Luna-narrated current-route chapters at a `$0.0424` chapter cap. Every request stays under the immutable `$3` global cap.

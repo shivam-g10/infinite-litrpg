@@ -2,7 +2,7 @@
 
 - Updated: 2026-07-20
 - Layer: Release evaluation
-- Current phase: Phase 5 prompt `1.4.10` clean checkpoint commit
+- Current phase: Phase 5 prompt `1.4.10` fresh paid matrix
 - Repository: initialized on `main`
 - Remote: `git@github.com:shivam-g10/infinite-litrpg.git`
 - Initial commit: `39b19a2` (`chore: scaffold agent workflow`)
@@ -26,7 +26,7 @@
 
 ## Next Action
 
-Commit prompt `1.4.10`. Then fold exact exposure into a fresh twelve-chapter live chain with prior spend `$2.735142975` and chapter cap `$0.0424`.
+Run the fresh twelve-chapter live chain with prior spend `$2.735142975` and chapter cap `$0.0424`. Stop after any failure and reconcile the durable ledger before another request.
 
 ## Evidence Log
 
@@ -118,5 +118,7 @@ Commit prompt `1.4.10`. Then fold exact exposure into a fresh twelve-chapter liv
 - 2026-07-20 prompt `1.4.10` test-first slice: five new or changed routing, prompt, recovery, and cost assertions failed against `1.4.9` before implementation. Luna now owns primary narration while Terra remains the custom-action translator. Narration targets 900–925 words. A sole 800–899-word failure receives one tail-only Luna recovery capped at 1,200 bytes and at most 230 output tokens. The three-agent 812-word regression commits under `$0.0405`, reruns deterministic validation and full audit, records Luna narration and recovery, hashes only final prose, and exactly replays it. The first full non-live run passed 142 tests, every offline gate, build, E2E, security, licensing, and audit.
 - 2026-07-20 prompt `1.4.10` independent review then found two P1 defects: the compact background context omitted provenance, visibility, skill metadata, and secret IDs; the version literal made registered prompt `1.4.9` traces unreadable. Complete six-POV equality now covers every selected-POV and public-world field. Seed agent instructions are 4,083–4,374 bytes and frames 4,293–4,608 bytes. Current writes remain strict `1.4.10`; persisted reads accept only `1.4.9` or `1.4.10` with identical top-level and nested versions. Focused storage and live-report regressions pass. The exact registered version 7 artifact parses with 37 attempts, four results, cumulative `$2.735142975`, zero bridge files, and SHA-256 `ccd1c9cd70a459e892810fd7dcf5cb353c90986cd227135d69eee751878ce063`; current resume rejects it for prompt mismatch.
 - 2026-07-20 prompt `1.4.10` corrected full non-live gate: `npm run check` and `npm audit` exited 0. Format, lint, strict typecheck, 144 tests across 14 files, all six offline gates with 1,000 simulations and chapter 351 blocked, production build, 17 E2E passes with one intentional desktop skip, secret scan across 159 working files plus ignored reports and Git history, client-bundle scan, 526 package licenses, and zero vulnerabilities passed. Independent evaluation reran 57 focused tests, typecheck, offline evals, the six-POV byte probe, and the exact version 7 artifact probe. Final read-only review found no blocker.
+- 2026-07-20 prompt `1.4.10` clean checkpoint: commit `35a341c` (`feat(story): route narration through Luna`) contains the reviewed runtime, regressions, ADR, and release docs. `npm run verify:clean-clone` exited 0 in 49.2 seconds with 144 tests, all offline evals, build, 17 E2E passes with one intentional skip, security, 526 licenses, and zero vulnerabilities green.
+- 2026-07-20 fresh-run ledger preflight: read-only SQLite inspection found no run lock, no active or uncertain reservation, eleven known reservations totaling `69506375` nano-USD, baseline attempts `174579650` nano-USD, and prior spend `2491056950` nano-USD. Exact durable exposure remains `$2.735142975`; headroom remains `$0.264857025`.
 
 Add exact command, date, exit code, cost, and report path after every future milestone gate.
