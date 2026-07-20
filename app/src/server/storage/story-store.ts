@@ -13,6 +13,7 @@ import {
   WorldStateSchema,
   stageWorldDelta,
   validateChapterDraft,
+  validateNarrativeStateClaims,
   validateWorldState,
   type ChapterRecord,
   type FailedTurnTrace,
@@ -347,6 +348,16 @@ export class StoryStore {
         }
         if (prepared.trace.stateAfterHash !== hashJson(prepared.state)) {
           throw new InvalidCommitError("Trace state-after hash does not match staged canon");
+        }
+        const narrativeStateIssues = validateNarrativeStateClaims(
+          currentState,
+          prepared.state,
+          prepared.chapter.prose,
+        );
+        if (narrativeStateIssues.length > 0) {
+          throw new InvalidCommitError(
+            `Chapter prose contradicts staged canon: ${JSON.stringify(narrativeStateIssues)}`,
+          );
         }
 
         const update = this.db

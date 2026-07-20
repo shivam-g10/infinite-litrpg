@@ -305,6 +305,110 @@ describe("StoryService", () => {
     },
   );
 
+  it.each([
+    {
+      characterId: "rowan-ashborn" as const,
+      defect: "Two mana left him in a measured thread. His mana settled at sixteen of eighteen.",
+      expectedIssue: "mana as 16/18",
+      label: "uncommitted mana spend",
+    },
+    {
+      characterId: "elara-voss" as const,
+      defect:
+        "She crossed beneath them into the shadow of Aurelis Capital. Stone replaced packed earth.",
+      expectedIssue: "arrival at Aurelis Capital",
+      label: "movement beyond the committed destination",
+    },
+    {
+      characterId: "lucan-aurelis" as const,
+      defect: "Lucan judged it likely that Varek Thorn planned to stage a border coup.",
+      expectedIssue: "Lucan Aurelis's canon to Varek Thorn",
+      label: "private plan attributed to another character",
+    },
+  ])("rejects live $label before model audit", async ({ characterId, defect, expectedIssue }) => {
+    const store = new StoryStore();
+    const rejectedProse = exactWordCount(defect, 900, "ash");
+    const acceptedProse = exactWordCount(
+      "The road held steady while the viewpoint character completed the accepted action.",
+      900,
+      "cinder",
+    );
+    const proseHash = createHash("sha256").update(acceptedProse).digest("hex");
+    const frame = { choices: [], terminal: false, title: "The Canon Road" };
+    const audit: NarrativeAudit = {
+      approved: true,
+      evidence: NARRATIVE_AUDIT_DIMENSIONS.map((dimension) => ({
+        detail: "pass",
+        dimension,
+        issueCode: "pass",
+      })),
+      leakedFactIds: [],
+      proseHash,
+      scores: {
+        arcProgress: 2,
+        characterAutonomy: 2,
+        choiceFulfillment: 2,
+        continuity: 2,
+        litrpgMechanics: 2,
+        povSafety: 2,
+        prose: 2,
+      },
+    };
+    const parse = vi
+      .fn()
+      .mockResolvedValueOnce(parsedResponse(frame, `resp_${characterId}_frame`))
+      .mockResolvedValueOnce(parsedResponse(audit, `resp_${characterId}_audit`));
+    const stream = vi
+      .fn()
+      .mockReturnValueOnce(fakeStream(rejectedProse, `resp_${characterId}_rejected`))
+      .mockReturnValueOnce(fakeStream(acceptedProse, `resp_${characterId}_accepted`));
+    const draftRejections: (readonly ValidationIssue[])[] = [];
+    const narrativeCandidates: NarrativeCandidateEvidence[] = [];
+    const service = new StoryService(
+      store,
+      { responses: { create: parse, stream } } as unknown as OpenAI,
+      {
+        ...options(),
+        onNarrativeCandidate: (candidate) => narrativeCandidates.push(candidate),
+        onNarrativeDraftRejected: (issues) => draftRejections.push(issues),
+      },
+    );
+    const selected = service.selectPov(characterId);
+
+    const result = await service.takeTurn({
+      choiceId: selected.chapter.choices[0]?.id ?? "missing",
+      expectedWorldVersion: 1,
+      requestId:
+        characterId === "rowan-ashborn"
+          ? "00000000-0000-4000-8000-000000000210"
+          : "00000000-0000-4000-8000-000000000211",
+      type: "take_action",
+    });
+
+    expect(result.world).toMatchObject({ chapter: 1, version: 2 });
+    expect(draftRejections).toHaveLength(1);
+    expect(draftRejections[0]).toEqual([
+      expect.objectContaining({
+        code: "INVALID_SCHEMA",
+        message: expect.stringContaining(expectedIssue),
+        path: "prose",
+      }),
+    ]);
+    expect(narrativeCandidates).toHaveLength(2);
+    expect(narrativeCandidates[0]).toMatchObject({
+      accepted: false,
+      audit: null,
+      rejectionStage: "deterministic",
+    });
+    expect(narrativeCandidates[1]).toMatchObject({
+      accepted: true,
+      rejectionStage: "accepted",
+    });
+    expect(parse).toHaveBeenCalledTimes(2);
+    expect(stream).toHaveBeenCalledTimes(2);
+    store.close();
+  });
+
   it("never echoes hidden canon into narration retries", async () => {
     const store = new StoryStore();
     const hiddenClaim = "Malachar contained the Void beneath his throne.";
@@ -1459,6 +1563,11 @@ function options() {
     maxCostUsdPerChapter: 1,
     nativeMultiAgent: false,
   } as const;
+}
+
+function exactWordCount(seed: string, count: number, filler: string): string {
+  const words = seed.trim().split(/\s+/u);
+  return [...words, ...Array.from({ length: count - words.length }, () => filler)].join(" ");
 }
 
 function terminalWorld() {

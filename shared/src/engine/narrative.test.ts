@@ -17,6 +17,7 @@ import {
   decodeChapterFrameModelCandidate,
   validateChapterDraft,
   validateChapterFrameSafety,
+  validateNarrativeStateClaims,
   validateSuggestedChoices,
 } from "./narrative";
 import { validateWorldState } from "./validation";
@@ -301,6 +302,122 @@ describe("narrative gates", () => {
     if (!result.ok) {
       expect(result.issues.some(({ code }) => code === "POV_LEAK")).toBe(true);
     }
+  });
+
+  it("rejects Rowan's exact uncommitted mana-spend claim", () => {
+    const before = seedState();
+    before.characters.find(({ id }) => id === "rowan-ashborn")!.locationId = "ash-road";
+    const after = structuredClone(before);
+    after.chapter = 2;
+    after.version = 3;
+
+    const result = validateNarrativeStateClaims(
+      before,
+      after,
+      "Two mana left him in a measured thread. His mana settled at sixteen of eighteen.",
+    );
+
+    expect(result).toEqual([
+      expect.objectContaining({
+        code: "INVALID_SCHEMA",
+        message: expect.stringContaining("mana as 16/18"),
+        path: "prose",
+      }),
+    ]);
+    expect(
+      validateNarrativeStateClaims(
+        before,
+        after,
+        "Ember Sense would cost two mana. His mana remained eighteen of eighteen.",
+      ),
+    ).toEqual([]);
+  });
+
+  it("rejects Elara's exact arrival beyond the committed destination", () => {
+    const before = seedState();
+    before.lockedPovId = "elara-voss";
+    const elaraBefore = before.characters.find(({ id }) => id === "elara-voss")!;
+    elaraBefore.locationId = "capital";
+    const after = structuredClone(before);
+    after.characters.find(({ id }) => id === "elara-voss")!.locationId = "capital-road";
+    after.chapter = 1;
+    after.version = 2;
+
+    const result = validateNarrativeStateClaims(
+      before,
+      after,
+      "She crossed beneath them into the shadow of Aurelis Capital. Stone replaced packed earth.",
+    );
+
+    expect(result).toEqual([
+      expect.objectContaining({
+        code: "INVALID_SCHEMA",
+        message: expect.stringContaining("arrival at Aurelis Capital"),
+        path: "prose",
+      }),
+    ]);
+    expect(
+      validateNarrativeStateClaims(
+        before,
+        after,
+        "Aurelis Capital waited beyond its gates. She crossed fully onto Capital Road.",
+      ),
+    ).toEqual([]);
+    expect(
+      validateNarrativeStateClaims(
+        before,
+        after,
+        "She crossed onto Capital Road toward Aurelis Capital.",
+      ),
+    ).toEqual([]);
+    expect(
+      validateNarrativeStateClaims(
+        seedState(),
+        seedState(),
+        "The old battlefields widened and the road divided toward Capital Road and the Black March.",
+      ),
+    ).toEqual([]);
+  });
+
+  it("rejects Lucan's exact reversed route and private-plan attribution", () => {
+    const before = seedState();
+    before.lockedPovId = "lucan-aurelis";
+    const lucanBefore = before.characters.find(({ id }) => id === "lucan-aurelis")!;
+    lucanBefore.locationId = "capital";
+    const after = structuredClone(before);
+    after.characters.find(({ id }) => id === "lucan-aurelis")!.locationId = "capital-road";
+    after.chapter = 1;
+    after.version = 2;
+
+    expect(
+      validateNarrativeStateClaims(
+        before,
+        after,
+        "Behind him lay Ash Road. Ahead waited Aurelis Capital.",
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        message: expect.stringContaining("departed location Aurelis Capital"),
+      }),
+    ]);
+    expect(
+      validateNarrativeStateClaims(
+        before,
+        after,
+        "Lucan judged it likely that Varek Thorn planned to stage a border coup.",
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        message: expect.stringContaining("Lucan Aurelis's canon to Varek Thorn"),
+      }),
+    ]);
+    expect(
+      validateNarrativeStateClaims(
+        before,
+        after,
+        "Aurelis Capital fell behind him. Lucan planned to stage a border coup.",
+      ),
+    ).toEqual([]);
   });
 });
 

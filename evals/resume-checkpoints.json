@@ -198,6 +198,87 @@
       "reportVersion": 9,
       "serviceTier": "flex",
       "sourceGitSha": "4d47dfb7c748b9d620a81f37a849bf4c96b14edb"
+    },
+    {
+      "adapterMode": "sequential",
+      "bridgeFiles": [
+        {
+          "path": ".prettierignore",
+          "sha256": "ea4643f512b2b72f469526e3e94e1b81d6f6f4468e7cac4abc4cc8ba9e795d18"
+        },
+        {
+          "path": "app/src/server/storage/story-store.test.ts",
+          "sha256": "80f1d84ab4c42a9184041164da7a3290bd546e0a7481883f3020cabda48413cb"
+        },
+        {
+          "path": "app/src/server/storage/story-store.ts",
+          "sha256": "297490434b9fe21f1274e08b3437a2944e29a227208932520b8ce19d4b8cc6da"
+        },
+        {
+          "path": "app/src/server/story/story-service.ts",
+          "sha256": "89a22d07c0ebbd7357a6e6eea551279a26ed4f38a61600ffb42843a81c6e4fb8"
+        },
+        {
+          "path": "decisions/ADR-016-narrated-canon-validation.md",
+          "sha256": "981a5f0cded8816c7f0bf7f1d819a4aa870dd9920fc84bab1a463223b9aeb342"
+        },
+        {
+          "path": "docs/review-packets/elara-voss.md",
+          "sha256": "1957f688bf6b0e08e36877e5588fd2b9c273948a124ead64f065e5959a7e79e7"
+        },
+        {
+          "path": "docs/review-packets/lucan-aurelis.md",
+          "sha256": "856732db5d172f8a192fdae4d77ef5348c99cc6ac6cd7d1025bf2fa112c524bc"
+        },
+        {
+          "path": "docs/review-packets/maelin-rook.md",
+          "sha256": "55d8bc06058b0d0fdce84d034fdba505953a38a95e701deb0dc0bc5daa0f124a"
+        },
+        {
+          "path": "docs/review-packets/manifest.json",
+          "sha256": "d2b94b23adca0d1db2a71c6c9033238d4a6420625ecdbe3589f78b995650be68"
+        },
+        {
+          "path": "docs/review-packets/nyra-vale.md",
+          "sha256": "86ca92a7eeaa216db23f1324b2338a06de2e8cf7e10f28109080162979db45e4"
+        },
+        {
+          "path": "docs/review-packets/rowan-ashborn.md",
+          "sha256": "9a2d23689358fe704f749dc8b40b0a66e0d8009289fe36362b4f18d92a247ae1"
+        },
+        {
+          "path": "docs/review-packets/varek-thorn.md",
+          "sha256": "6c790d15632286acaebd4f860ff959912b7e9a979f8931516b581e953305ee28"
+        },
+        {
+          "path": "evals/review-packets.test.ts",
+          "sha256": "651e17d3525ff9e3e99647a73846c45d2511ffbd6f4dfec4d5786c4ac4dbdb06"
+        },
+        {
+          "path": "evals/review-packets.ts",
+          "sha256": "57581ae301bcc0b5007038257ad58270ed1f810a599afa309e4cd3177320dd0a"
+        },
+        {
+          "path": "evals/run-live.ts",
+          "sha256": "4cb0def5ff200d639fa3c1d8fe6d9683a49d94d8afa1ad4e3b432cfa9ca482d6"
+        },
+        {
+          "path": "shared/src/engine/narrative.test.ts",
+          "sha256": "5e8b03f6cb525a4d22809e7a4fcffd39c0823a3bb18230dac87eec5cff1b4894"
+        },
+        {
+          "path": "shared/src/engine/narrative.ts",
+          "sha256": "b847519266f802e69035c851c31baf9c41da970fe79a2eb4f7203fb2bd2ccf4e"
+        }
+      ],
+      "chapterCostCapUsd": 0.0424,
+      "id": "prompt-1-4-11-flex-human-review-rerun",
+      "priorSpendUsd": 2.811082175,
+      "promptVersion": "1.4.11",
+      "reportSha256": "fb9295d7c33ca154c7e407894b807d4a371b83d5ef066d78eee05ee42d4c49d2",
+      "reportVersion": 9,
+      "serviceTier": "flex",
+      "sourceGitSha": "ded7b00c54f6a6d70e073aad159e2d6e66b80fc2"
     }
   ],
   "version": 2

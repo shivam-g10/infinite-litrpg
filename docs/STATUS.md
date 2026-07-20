@@ -2,12 +2,12 @@
 
 - Updated: 2026-07-20
 - Layer: Release evaluation
-- Current phase: Phase 5 Flex resume authority gate
+- Current phase: Phase 5 human-review remediation checkpoint
 - Repository: initialized on `main`
 - Remote: public `https://github.com/shivam-g10/infinite-litrpg`; current local build not pushed
 - Initial commit: `39b19a2` (`chore: scaffold agent workflow`)
 - App: strict Next.js selection UI plus deterministic engine and SQLite store
-- Live API: prompt `1.4.11` sequential Rowan pair green; current-prompt native proof pending
+- Live API: prompt `1.4.11` sequential twelve-cycle automation green; human-corrected report and current-prompt native proof pending
 - Evals: offline suite green
 - Build Week deadline: 2026-07-22 05:30 IST
 
@@ -21,16 +21,16 @@
 
 ## Current Blockers
 
-- The first paid Flex matrix completed Rowan chapters 1 and 2, then failed Elara chapter 1. Drafts were 789, 850, and 768 words. A coherent 91-word continuation for the 850-word draft was rejected against the requested 50-to-75-word range.
-- Durable exposure is `$2.841054175`; headroom is `$0.158945825`. Nineteen known Flex attempts cost `$0.029972`. There is no run lock, active reservation, or uncertain Flex reservation.
-- ADR-015 has the nonpaid fix and named regression. Recovery now covers 750 to 899 words, keeps the model target at 900 to 925, accepts a deterministic overshoot only through 949, then reruns the unchanged absolute validator and full audit.
-- Runtime checkpoint `1c5d0c6` and release-artifact checkpoint `066f43e` pass the full local gate, zero-vulnerability audit, independent review, exact resume bridge, fresh-clone verification, and ledger preflight.
-- The twelve-cycle matrix, six-POV zero-leak proof, and review packets remain open.
-- Another paid resume requires explicit user authority. This is the current external blocker.
+- The authorized Flex resume completed all twelve chapters and every automated gate. Strict report SHA-256 is `fb9295d7c33ca154c7e407894b807d4a371b83d5ef066d78eee05ee42d4c49d2`; all 91 attempts cost `$0.1363645`.
+- Human review rejected Rowan chapter 2, Elara chapter 1, and Lucan chapter 1. Prose spent uncommitted mana, entered beyond the committed destination, reversed the route from the capital, and reassigned Lucan’s private coup plan to Varek.
+- ADR-016 has exact deterministic, service, and atomic-store regressions. Selective suffix recovery keeps seven accepted chapters, reruns five, and persists the rejected suffixes in report provenance.
+- Durable exposure is `$2.947446675`; headroom is `$0.052553325`. There is no run lock, active reservation, or uncertain reservation.
+- The five prior accepted results cost `$0.044674`, leaving `$0.007879325`; five full chapter ceilings exceed the global cap. The ledger will stop before overspend if retries consume that margin.
+- A corrected fail-closed paid resume attempt requires a clean registered checkpoint and new explicit user authority. Current-prompt native proof and user-owned release gates remain open.
 
 ## Next Action
 
-Get explicit user authority before resuming the registered report. Never rerun automatically.
+Finish non-live gates, register and commit the exact report bridge, then request authority for the selective five-chapter resume. Never rerun automatically.
 
 ## Evidence Log
 
@@ -154,5 +154,10 @@ Get explicit user authority before resuming the registered report. Never rerun a
 - 2026-07-20 release-artifact non-live gate: the first `npm run check` stopped only on Prettier drift in two files. After format, resume-bridge hardening, and independent-review fixes, `npm run check` exited 0 in 37.5 seconds: 226 tests across 17 files, all six offline gates, 1,000 simulations, chapter 351 blocked, production build, 17 E2E passes with one intentional desktop skip, secret scan across 187 working files plus ignored reports and Git history, client-bundle scan, and 526 package licenses passed. `npm audit --audit-level=low` and `git diff --check` exited 0 with zero vulnerabilities. The authenticated partial report matches 27 raw-byte bridge hashes; regressions cover the 30-file bridge ceiling, 35 changed paths, binary screenshots, and both call-level and attempt-level Flex evidence. Exact sanitized evidence is tracked at `docs/evidence/non-live-gates.md`. No generation ran.
 - 2026-07-20 release-artifact independent review: review found and closed marker-boundary injection, future-milestone exposure in the packet's POV-safe section, mutable manifest provenance, and synthetic demo chapter metadata. The strict packet path now cross-checks one exact marker pair and manifest headers, moves full arc milestones to the reviewer-only appendix, and rejects injection. Demo restore commits the exact authenticated chapter record; Reader now shows `Read the Ash Trail` and the report's choices. The obsolete automatic weak packet writer was removed. Strict typecheck and 38 focused packet, resume, and restore tests passed. Desktop and mobile screenshots were recaptured from exact evidence; mobile Reader and God Mode had zero horizontal overflow and browser logs had zero errors or warnings. No generation ran.
 - 2026-07-20 release-artifact clean checkpoint: commit `066f43e` (`chore(release): harden submission evidence`) contains the strict packet CLI, tracked trace, exact demo restore, responsive fixes, current screenshots, release research, and submission docs. Post-commit authentication proved source-SHA ancestry, 35 changed paths, 27 exact raw-byte bridge hashes, retained Rowan chapters 1 and 2, five pending POVs, and `$0.029972` retained attempt cost. `npm run verify:clean-clone` exited 0 in 54.1 seconds; its isolated fresh install reported zero vulnerabilities and passed 226 tests, all offline evals, production build, 17 E2E passes with one intentional skip, both security scans, and 526 licenses. No generation ran.
+
+- 2026-07-20 authorized complete Flex resume: `npm run evals:live:full -- --prior-spend-usd 2.811082175 --chapter-cap-usd 0.0424 --resume-report evals/reports/live-full-sequential-prompt-1.4.11-flex-1.json` exited 0 after 180.2 seconds. Strict report `evals/reports/live-full-sequential.json`, SHA-256 `fb9295d7c33ca154c7e407894b807d4a371b83d5ef066d78eee05ee42d4c49d2`, contains all 12 results, 91 attempts, `$0.1363645` attempt cost, exact replay, and every automated gate true. Durable exposure is `$2.947446675`; headroom is `$0.052553325`; the ledger has zero lock and zero active or uncertain reservation.
+- 2026-07-20 six-POV human review: all six authenticated packets were scored against prose and reviewer-only canon. Maelin, Varek, and Nyra passed. Rowan chapter 2 spent mana that canon kept full; Elara chapter 1 entered Aurelis Capital while canon stopped on Capital Road; Lucan chapter 1 reversed the capital route and assigned his private coup plan to Varek. Rowan, Elara, and Lucan were rejected. The manifest validates as `human-reviewed-rejected`.
+- 2026-07-20 ADR-016 remediation: exact regressions fail before the fix and now pass at the deterministic narrative boundary, StoryService before audit, and StoryStore atomic commit. Narrow checks cover explicit health and mana snapshots, strong arrival beyond the accepted destination, departed-location route reversal, and reassignment of POV-owned facts. Legal route prose such as `onto Capital Road toward Aurelis Capital` remains accepted. Authenticated `--rerun-from` recovery retains seven results, discards exactly five rejected suffix chapters, preserves all 91 attempts and `$0.1363645`, and persists rerun provenance. The three rejected suffixes are `rowan-ashborn:2`, `elara-voss:1`, and `lucan-aurelis:1`.
+- 2026-07-20 remediation non-live gate: `npm run check` exited 0 in 33.2 seconds. Format, lint, strict typecheck, 238 tests across 17 files, all six offline gates with 1,000 simulations and chapter 351 blocked, production build, 17 E2E passes with one intentional desktop skip, both security scans, and 526 licenses passed. `npm audit --audit-level=low`, `git diff --check`, exact report parsing, packet validation, and the no-network selective-resume probe exited 0. Five prior accepted result costs total `$0.044674`, only `$0.007879325` below headroom; five full chapter ceilings project `$3.159446675`, so a retrying paid run may stop safely before completion.
 
 Add exact command, date, exit code, cost, and report path after every future milestone gate.

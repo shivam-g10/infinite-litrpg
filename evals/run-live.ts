@@ -86,6 +86,12 @@ const RESUME_NON_RUNTIME_PATHS = new Set([
 
 const PovIdSchema = z.enum(CHARACTER_IDS);
 const AdapterModeSchema = z.enum(["native-multi-agent", "sequential"]);
+const RerunFromSchema = z
+  .object({
+    chapter: z.union([z.literal(1), z.literal(2)]),
+    povId: PovIdSchema,
+  })
+  .strict();
 const GitShaSchema = z.string().regex(/^[a-f0-9]{7,40}$/u);
 const Sha256Schema = z.string().regex(/^[a-f0-9]{64}$/u);
 const BridgeFileSchema = z
@@ -904,6 +910,7 @@ export const Version8LiveReportSchema = BaseLiveReportSchema.extend({
 
 const Version9ResumeSchema = Version8ResumeSchema.omit({ sourceReportVersion: true })
   .extend({
+    rerunFrom: z.array(RerunFromSchema).max(CHARACTER_IDS.length).default([]),
     sourceReportVersion: z.union([
       z.literal(LEGACY_REPORT_VERSION),
       z.literal(VERSION_6_REPORT_VERSION),
@@ -948,7 +955,11 @@ type DurableReportForRefinement = z.infer<typeof BaseLiveReportSchema> & {
   readonly resultChapterCaps: z.infer<typeof ResultChapterCapSchema>[];
   readonly pricingVersion?: string;
   readonly projectedFinalExposureUsd?: number | null;
-  readonly resume: z.infer<typeof Version9ResumeSchema> | null;
+  readonly resume:
+    | z.infer<typeof Version7ResumeSchema>
+    | z.infer<typeof Version8ResumeSchema>
+    | z.infer<typeof Version9ResumeSchema>
+    | null;
   readonly serviceTier?: RuntimeServiceTier;
   readonly sourceGitSha: string;
   readonly version:
@@ -975,6 +986,35 @@ function refineDurableReport(report: DurableReportForRefinement, context: z.Refi
     }
     if (new Set(report.resume.retainedPovIds).size !== report.resume.retainedPovIds.length) {
       context.addIssue({ code: "custom", message: "Resume repeats a retained POV" });
+    }
+    if (report.version === REPORT_VERSION && "rerunFrom" in report.resume) {
+      const rerunFrom = report.resume.rerunFrom;
+      if (new Set(rerunFrom.map(({ povId }) => povId)).size !== rerunFrom.length) {
+        context.addIssue({ code: "custom", message: "Resume repeats a rerun POV" });
+      }
+      const minimumDiscardedResultCount = sum(
+        rerunFrom.map(({ chapter }) => (chapter === 1 ? 2 : 1)),
+      );
+      if (report.resume.discardedResultCount < minimumDiscardedResultCount) {
+        context.addIssue({
+          code: "custom",
+          message: "Resume rerun suffix exceeds discarded results",
+        });
+      }
+      for (const [index, rerun] of rerunFrom.entries()) {
+        const retainedChapters = report.resume.retainedResults
+          .filter(({ povId }) => povId === rerun.povId)
+          .map(({ chapter }) => chapter)
+          .sort((left, right) => left - right);
+        const expectedRetainedChapters = rerun.chapter === 2 ? [1] : [];
+        if (!isDeepStrictEqual(retainedChapters, expectedRetainedChapters)) {
+          context.addIssue({
+            code: "custom",
+            message: `Resume rerun ${resultKey(rerun.povId, rerun.chapter)} has the wrong retained prefix`,
+            path: ["resume", "rerunFrom", index],
+          });
+        }
+      }
     }
   }
 
@@ -2149,6 +2189,8 @@ export interface ResumeRequirements {
   readonly sourceGitSha: string;
 }
 
+export type RerunFrom = z.infer<typeof RerunFromSchema>;
+
 export interface ResumePreparation {
   readonly attempts: LiveReport["attempts"];
   readonly auditRejections: LiveReport["auditRejections"];
@@ -2160,6 +2202,7 @@ export interface ResumePreparation {
   readonly runtimeEvidenceStartAttemptIndex: number;
   readonly runtimeAttemptEvidence: LiveReport["runtimeAttemptEvidence"];
   readonly pendingPovIds: CharacterId[];
+  readonly rerunFrom: RerunFrom[];
   readonly retainedPovIds: CharacterId[];
   readonly retainedResultCaps: ResultChapterCap[];
   readonly retainedResults: LiveResult[];
@@ -2172,9 +2215,13 @@ async function main(): Promise<void> {
   const adapterMode = nativeRequested ? "native-multi-agent" : "sequential";
   const povFilter = parsePov(args);
   const resumeReportArgument = parseOptionalFlag(args, "--resume-report");
+  const rerunFrom = parseRerunFrom(args);
   const recoverStaleRunId = parseOptionalFlag(args, "--recover-stale-run");
   if (resumeReportArgument !== null && suite !== "full") {
     throw new Error("--resume-report is only valid for the full live suite");
+  }
+  if (rerunFrom.length > 0 && resumeReportArgument === null) {
+    throw new Error("--rerun-from requires --resume-report");
   }
   const perChapterCapUsd = parseUsdFlag(
     args,
@@ -2213,14 +2260,18 @@ async function main(): Promise<void> {
   const resumePreparation =
     resumeReport === null
       ? null
-      : prepareResume(resumeReport, {
-          adapterMode,
-          chapterCostCapUsd: perChapterCapUsd,
-          priorSpendUsd,
-          promptVersion: PROMPT_VERSION,
-          serviceTier,
-          sourceGitSha: resumeReport.sourceGitSha,
-        });
+      : prepareResume(
+          resumeReport,
+          {
+            adapterMode,
+            chapterCostCapUsd: perChapterCapUsd,
+            priorSpendUsd,
+            promptVersion: PROMPT_VERSION,
+            serviceTier,
+            sourceGitSha: resumeReport.sourceGitSha,
+          },
+          rerunFrom,
+        );
   const plannedPovIds =
     suite === "smoke"
       ? [povFilter ?? "rowan-ashborn"]
@@ -2777,6 +2828,7 @@ function buildLiveReport(
             changedPaths: input.resumeVerification.changedPaths,
             discardedResultCount: input.resumePreparation.discardedResultCount,
             existingAttemptCostUsd: input.existingAttemptCostUsd,
+            rerunFrom: input.resumePreparation.rerunFrom,
             retainedPovIds: input.resumePreparation.retainedPovIds,
             retainedResults: input.resumePreparation.retainedResults.map((result) => {
               const sourceChapterCapUsd = input.resumePreparation?.retainedResultCaps.find(
@@ -3036,6 +3088,7 @@ function assertChapterResult(
 export function prepareResume(
   report: ResumableLiveReport,
   requirements: ResumeRequirements,
+  rerunFrom: readonly RerunFrom[] = [],
 ): ResumePreparation {
   if (report.suite !== "full") {
     throw new Error("Resume report must be a version 5 through 9 full-suite report");
@@ -3062,6 +3115,10 @@ export function prepareResume(
   if (report.sourceGitSha !== requirements.sourceGitSha) {
     throw new Error("Resume report Git SHA does not match current HEAD");
   }
+  if (new Set(rerunFrom.map(({ povId }) => povId)).size !== rerunFrom.length) {
+    throw new Error("Explicit rerun repeats a POV");
+  }
+  const rerunStartByPovId = new Map(rerunFrom.map(({ chapter, povId }) => [povId, chapter]));
 
   const retainedResults: LiveResult[] = [];
   const retainedResultCaps: ResultChapterCap[] = [];
@@ -3074,6 +3131,30 @@ export function prepareResume(
     const contiguousPrefix =
       (chapters.length === 1 && chapters[0]?.chapter === 1) ||
       (chapters.length === 2 && chapters[0]?.chapter === 1 && chapters[1]?.chapter === 2);
+    const rerunStart = rerunStartByPovId.get(povId);
+    if (rerunStart !== undefined) {
+      if (chapters.length !== 2 || chapters[0]?.chapter !== 1 || chapters[1]?.chapter !== 2) {
+        throw new Error(`Explicit rerun POV ${povId} lacks a complete chapter pair`);
+      }
+      for (const result of chapters) {
+        const sourceCap = sourceResultChapterCap(report, result.povId, result.chapter);
+        assertChapterResult(result, requirements.adapterMode === "native-multi-agent", sourceCap);
+        assertResultPayloadConsistency(result);
+      }
+      const retainedPrefix = chapters.filter(({ chapter }) => chapter < rerunStart);
+      for (const result of retainedPrefix) {
+        retainedResults.push(result);
+        retainedResultCaps.push({
+          capUsd: sourceResultChapterCap(report, result.povId, result.chapter),
+          chapter: result.chapter,
+          povId: result.povId,
+        });
+      }
+      if (retainedPrefix.length > 0) retainedPovIds.push(povId);
+      discardedResultCount += chapters.length - retainedPrefix.length;
+      pendingPovIds.push(povId);
+      continue;
+    }
     if (contiguousPrefix) {
       for (const result of chapters) {
         const sourceCap = sourceResultChapterCap(report, result.povId, result.chapter);
@@ -3109,6 +3190,7 @@ export function prepareResume(
       : report.attempts.length,
     runtimeAttemptEvidence: hasRuntimeEvidence ? [...report.runtimeAttemptEvidence] : [],
     pendingPovIds,
+    rerunFrom: [...rerunFrom],
     retainedPovIds,
     retainedResultCaps,
     retainedResults,
@@ -3310,6 +3392,32 @@ function parsePov(args: readonly string[]): CharacterId | null {
     throw new Error(`Unknown --pov value ${value ?? "missing"}`);
   }
   return value as CharacterId;
+}
+
+export function parseRerunFrom(args: readonly string[]): RerunFrom[] {
+  const values: RerunFrom[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    if (args[index] !== "--rerun-from") continue;
+    const value = args[index + 1];
+    if (value === undefined || value.startsWith("--")) {
+      throw new Error("--rerun-from requires a value");
+    }
+    const match = /^(.*):([12])$/u.exec(value);
+    if (match === null) {
+      throw new Error("--rerun-from requires <pov-id>:<chapter 1 or 2>");
+    }
+    const povId = match[1];
+    const chapter = Number(match[2]) as 1 | 2;
+    if (!CHARACTER_IDS.includes(povId as CharacterId)) {
+      throw new Error(`Unknown --rerun-from POV ${povId}`);
+    }
+    if (values.some((entry) => entry.povId === povId)) {
+      throw new Error(`--rerun-from repeats ${povId}`);
+    }
+    values.push({ chapter, povId: povId as CharacterId });
+    index += 1;
+  }
+  return values;
 }
 
 function parseOptionalFlag(args: readonly string[], name: string): string | null {

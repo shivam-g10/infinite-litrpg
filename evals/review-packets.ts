@@ -47,7 +47,11 @@ const ReviewPacketManifestSchema = z
     pricingVersion: z.string().min(1).max(240),
     promptVersion: z.string().min(1).max(240),
     reportSha256: z.string().regex(SHA256_PATTERN),
-    reviewStatus: z.literal("pending-human-review"),
+    reviewStatus: z.enum([
+      "pending-human-review",
+      "human-reviewed-rejected",
+      "human-reviewed-approved",
+    ]),
     schemaVersions: z.array(z.string().min(1).max(240)).min(1).max(12),
     serviceTier: z.enum(["flex", "standard"]),
     sourceGitSha: z.string().regex(/^[a-f0-9]{7,40}$/u),
@@ -164,6 +168,7 @@ export function assertPacketDirectory(
     throw new Error("Review packet manifest must list all six POVs");
   }
   const observedSchemaVersions = new Set<string>();
+  const humanVerdicts: Array<HumanReviewVerdict | null> = [];
   CHARACTER_IDS.forEach((povId, index) => {
     const filename = `${povId}.md`;
     const entry = manifest.packets[index];
@@ -191,6 +196,7 @@ export function assertPacketDirectory(
     if (entry.evidenceSha256 !== hashText(generatedEvidence(body))) {
       throw new Error(`Review packet ${filename} generated evidence hash does not match manifest`);
     }
+    humanVerdicts.push(humanReviewVerdict(body));
   });
   if (
     JSON.stringify([...observedSchemaVersions].sort()) !==
@@ -198,7 +204,51 @@ export function assertPacketDirectory(
   ) {
     throw new Error("Review packet schema versions do not match manifest");
   }
+  if (manifest.reviewStatus !== "pending-human-review") {
+    const completedVerdicts = humanVerdicts.flatMap((verdict) =>
+      verdict === null ? [] : [verdict],
+    );
+    if (completedVerdicts.length !== CHARACTER_IDS.length) {
+      throw new Error("Completed review manifest requires complete human verdicts");
+    }
+    if (
+      completedVerdicts.some(({ chapters, final }) => {
+        const hasRejectedChapter = chapters.includes("reject");
+        return (
+          (final === "pass" && hasRejectedChapter) || (final === "reject" && !hasRejectedChapter)
+        );
+      })
+    ) {
+      throw new Error("Packet final verdict does not match human chapter verdicts");
+    }
+    const hasRejection = completedVerdicts.some(({ final }) => final === "reject");
+    if (
+      (manifest.reviewStatus === "human-reviewed-approved" && hasRejection) ||
+      (manifest.reviewStatus === "human-reviewed-rejected" && !hasRejection)
+    ) {
+      throw new Error("Completed review manifest does not match human verdicts");
+    }
+  }
   return manifest;
+}
+
+interface HumanReviewVerdict {
+  readonly chapters: readonly ("pass" | "reject")[];
+  readonly final: "pass" | "reject";
+}
+
+function humanReviewVerdict(body: string): HumanReviewVerdict | null {
+  const start = body.indexOf(HUMAN_REVIEW_START);
+  const end = body.indexOf(HUMAN_REVIEW_END);
+  if (start < 0 || end <= start) return null;
+  const review = body.slice(start, end);
+  const finalVerdicts = [...review.matchAll(/^- Final verdict: (pass|reject)$/gmu)];
+  const chapterVerdicts = [...review.matchAll(/^- Human chapter verdict: (pass|reject)$/gmu)];
+  if (finalVerdicts.length !== 1 || chapterVerdicts.length !== 2) return null;
+  return {
+    chapters: chapterVerdicts.map((match) => (match[1] === "reject" ? "reject" : "pass")),
+    final: finalVerdicts[0]?.[1] === "reject" ? "reject" : "pass",
+  };
 }
 
 function assertPacketMetadata(body: string, manifest: ReviewPacketManifest, povId: string): void {
@@ -281,7 +331,7 @@ function renderReviewPacket(
   return [
     `# POV Review Packet: ${povId}`,
     "",
-    "Review status: pending human review.",
+    "Generated review status: pending human review.",
     "",
     `- Source report SHA-256: \`${reportSha256}\``,
     `- Source Git SHA: \`${report.sourceGitSha}\``,

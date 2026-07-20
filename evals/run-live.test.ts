@@ -37,6 +37,7 @@ import {
   hasExactFullMatrix,
   isAppendOnlyEvidence,
   parseLiveReport,
+  parseRerunFrom,
   prepareResume,
   projectedCumulativeCostUsd,
   readNarrativeEvidenceSidecar,
@@ -793,6 +794,75 @@ describe("live report version 9", () => {
     expect(prepared.pendingPovIds).toContain("rowan-ashborn");
   });
 
+  it("reruns only explicitly human-rejected chapter suffixes", () => {
+    const report = fakeReport([
+      fakeResult("rowan-ashborn", 1, 0.01),
+      fakeResult("rowan-ashborn", 2, 0.01),
+      fakeResult("elara-voss", 1, 0.01),
+      fakeResult("elara-voss", 2, 0.01),
+      fakeResult("maelin-rook", 1, 0.01),
+      fakeResult("maelin-rook", 2, 0.01),
+    ]);
+
+    const prepared = prepareResume(report, REQUIREMENTS, [
+      { chapter: 2, povId: "rowan-ashborn" },
+      { chapter: 1, povId: "elara-voss" },
+    ]);
+
+    expect(prepared.rerunFrom).toEqual([
+      { chapter: 2, povId: "rowan-ashborn" },
+      { chapter: 1, povId: "elara-voss" },
+    ]);
+    expect(prepared.retainedPovIds).toEqual(["rowan-ashborn", "maelin-rook"]);
+    expect(prepared.retainedResults.map(({ povId, chapter }) => [povId, chapter])).toEqual([
+      ["rowan-ashborn", 1],
+      ["maelin-rook", 1],
+      ["maelin-rook", 2],
+    ]);
+    expect(prepared.pendingPovIds).toEqual([
+      "rowan-ashborn",
+      "elara-voss",
+      "varek-thorn",
+      "lucan-aurelis",
+      "nyra-vale",
+    ]);
+    expect(prepared.discardedResultCount).toBe(3);
+    expect(prepared.existingAttemptCostUsd).toBeCloseTo(report.totalCostUsd, 10);
+  });
+
+  it("rejects duplicate or incomplete explicit chapter suffix reruns", () => {
+    const complete = fakeReport([
+      fakeResult("rowan-ashborn", 1, 0.01),
+      fakeResult("rowan-ashborn", 2, 0.01),
+    ]);
+    expect(() =>
+      prepareResume(complete, REQUIREMENTS, [
+        { chapter: 1, povId: "rowan-ashborn" },
+        { chapter: 2, povId: "rowan-ashborn" },
+      ]),
+    ).toThrow("repeats a POV");
+    expect(() =>
+      prepareResume(fakeReport([fakeResult("rowan-ashborn", 1, 0.01)]), REQUIREMENTS, [
+        { chapter: 2, povId: "rowan-ashborn" },
+      ]),
+    ).toThrow("complete chapter pair");
+  });
+
+  it("parses repeated explicit chapter suffix rerun flags strictly", () => {
+    expect(
+      parseRerunFrom(["--rerun-from", "rowan-ashborn:2", "--rerun-from", "elara-voss:1"]),
+    ).toEqual([
+      { chapter: 2, povId: "rowan-ashborn" },
+      { chapter: 1, povId: "elara-voss" },
+    ]);
+    expect(() => parseRerunFrom(["--rerun-from"])).toThrow("requires a value");
+    expect(() => parseRerunFrom(["--rerun-from", "unknown:1"])).toThrow("Unknown");
+    expect(() => parseRerunFrom(["--rerun-from", "rowan-ashborn:3"])).toThrow("chapter 1 or 2");
+    expect(() =>
+      parseRerunFrom(["--rerun-from", "rowan-ashborn:1", "--rerun-from", "rowan-ashborn:2"]),
+    ).toThrow("repeats");
+  });
+
   it("rejects checkpoint drift", () => {
     const report = fakeReport([]);
 
@@ -1126,7 +1196,7 @@ describe("live report version 9", () => {
     ];
     const results = [
       fakeResult("rowan-ashborn", 1, 0.01),
-      fakeResult("rowan-ashborn", 2, 0.01),
+      fakeResult("rowan-ashborn", 2, 0.01, [0.01], currentGitSha),
       fakeResult("elara-voss", 1, 0.01, [0.01], currentGitSha),
     ];
     const narrativeCandidates = results.map((result) => fakeNarrativeCandidate(result));
@@ -1147,7 +1217,7 @@ describe("live report version 9", () => {
       },
       completedChapters: results.length,
       cumulativeCostUsd: 2.03,
-      projectedMaximumCumulativeCostUsd: 2.62,
+      projectedMaximumCumulativeCostUsd: 2.68,
       narrativeCandidates,
       narrativeResponses: fakeNarrativeResponses(narrativeCandidates),
       gates: {
@@ -1165,18 +1235,13 @@ describe("live report version 9", () => {
       resume: {
         bridgeFiles,
         changedPaths,
-        discardedResultCount: 0,
+        discardedResultCount: 1,
         existingAttemptCostUsd: 0.02,
+        rerunFrom: [{ chapter: 2, povId: "rowan-ashborn" }],
         retainedPovIds: ["rowan-ashborn"],
         retainedResults: [
           {
             chapter: 1,
-            povId: "rowan-ashborn",
-            sourceChapterCapUsd: 0.06,
-            sourceGitSha: GIT_SHA,
-          },
-          {
-            chapter: 2,
             povId: "rowan-ashborn",
             sourceChapterCapUsd: 0.06,
             sourceGitSha: GIT_SHA,
@@ -1194,6 +1259,15 @@ describe("live report version 9", () => {
 
     expect(candidate.resume.changedPaths).toHaveLength(35);
     expect(LiveReportSchema.safeParse(candidate).success).toBe(true);
+    expect(
+      LiveReportSchema.safeParse({
+        ...candidate,
+        resume: {
+          ...candidate.resume,
+          rerunFrom: [{ chapter: 1, povId: "rowan-ashborn" }],
+        },
+      }).success,
+    ).toBe(false);
     expect(LiveReportSchema.safeParse({ ...candidate, narrativeCandidates: [] }).success).toBe(
       false,
     );

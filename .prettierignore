@@ -5,4 +5,5 @@ playwright-report
 test-results
 evals/reports
 docs/design/*.png
+docs/review-packets
 package-lock.json

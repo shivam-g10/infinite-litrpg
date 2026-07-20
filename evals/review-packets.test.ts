@@ -86,6 +86,47 @@ describe("review packets", () => {
     }
   });
 
+  it("binds a completed manifest status to all human verdicts", () => {
+    const parent = mkdtempSync(join(tmpdir(), "infinite-litrpg-review-verdicts-"));
+    const directory = join(parent, "packets");
+    try {
+      writeReviewPackets(fakeReport(), REPORT_SHA, directory);
+      for (const povId of CHARACTER_IDS) {
+        const path = join(directory, `${povId}.md`);
+        const verdict = povId === "rowan-ashborn" ? "reject" : "pass";
+        let body = readFileSync(path, "utf8")
+          .replace("- Final verdict: pending", `- Final verdict: ${verdict}`)
+          .replaceAll("- Human chapter verdict: pending", "- Human chapter verdict: pass");
+        if (povId === "rowan-ashborn") {
+          body = body.replace("- Human chapter verdict: pass", "- Human chapter verdict: reject");
+        }
+        writeFileSync(path, body, "utf8");
+      }
+      const manifestPath = join(directory, "manifest.json");
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Record<string, unknown>;
+      writeFileSync(
+        manifestPath,
+        `${JSON.stringify({ ...manifest, reviewStatus: "human-reviewed-rejected" }, null, 2)}\n`,
+        "utf8",
+      );
+      expect(() => assertPacketDirectory(directory)).not.toThrow();
+      const rowanPath = join(directory, "rowan-ashborn.md");
+      writeFileSync(
+        rowanPath,
+        readFileSync(rowanPath, "utf8").replace("- Final verdict: reject", "- Final verdict: pass"),
+        "utf8",
+      );
+      writeFileSync(
+        manifestPath,
+        `${JSON.stringify({ ...manifest, reviewStatus: "human-reviewed-approved" }, null, 2)}\n`,
+        "utf8",
+      );
+      expect(() => assertPacketDirectory(directory)).toThrow("chapter verdicts");
+    } finally {
+      rmSync(parent, { force: true, recursive: true });
+    }
+  });
+
   it("rejects marker injection and manifest metadata tampering", () => {
     const parent = mkdtempSync(join(tmpdir(), "infinite-litrpg-review-boundary-"));
     const injectedDirectory = join(parent, "injected");

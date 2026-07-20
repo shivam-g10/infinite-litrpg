@@ -166,6 +166,26 @@ describe("StoryStore atomic turn commit", () => {
     expect(store.loadChapter(initial.id, forgedState.chapter)).toBeNull();
   });
 
+  it.each([
+    "His mana settled at sixteen of eighteen.",
+    "He crossed into Ash Road and entered the old battlefield.",
+  ])("rejects approved prose that contradicts staged canon: %s", (claim) => {
+    const store = openStore();
+    const initial = seedState();
+    const turn = withProse(makeTurn(initial), words(claim, 900));
+
+    store.createWorld(initial);
+    expect(() => store.commitTurn(turn)).toThrowError(
+      expect.objectContaining({
+        message: expect.stringContaining("Chapter prose contradicts staged canon"),
+      }),
+    );
+    expect(store.loadWorldState(initial.id)).toEqual(initial);
+    expect(store.loadDelta(initial.id, turn.state.version)).toBeNull();
+    expect(store.loadChapter(initial.id, turn.chapter.chapter)).toBeNull();
+    expect(store.loadTrace(turn.trace.runId)).toBeNull();
+  });
+
   it.each(["pov", "usage", "cost"] as const)(
     "rejects cross-artifact %s mismatch without writing",
     (mismatch) => {
@@ -411,6 +431,19 @@ function zeroUsage() {
 function words(seed: string, count: number): string {
   const tokens = seed.split(/\s+/u);
   return Array.from({ length: count }, (_, index) => tokens[index % tokens.length]).join(" ");
+}
+
+function withProse(turn: CommitTurnInput, prose: string): CommitTurnInput {
+  const proseHash = createHash("sha256").update(prose).digest("hex");
+  return {
+    ...turn,
+    chapter: {
+      ...turn.chapter,
+      narrativeAudit: { ...turn.chapter.narrativeAudit, proseHash },
+      prose,
+      proseHash,
+    },
+  };
 }
 
 function hashJson(value: unknown): string {

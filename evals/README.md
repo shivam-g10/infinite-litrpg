@@ -9,7 +9,7 @@ Evals define completion. Implement runner before live prompt work.
 - `npm run evals:live:full`: release-only Flex suite with explicit cost confirmation.
 - `npm run evals:live:reconcile`: registered no-network reconciliation for an interrupted unknown request.
 
-Live runs accept `--prior-spend-usd`, `--chapter-cap-usd`, and `--service-tier`. Report version 9 retains all version 8 canon, response, candidate, turn, stream, cost, and resume evidence. It also requires explicit requested and returned service tier on every current attempt and model call, tier-specific pricing version, exact clean-path projection, and a recomputed `serviceTierEvidenceComplete` gate. A full version 9 report must use Flex. Missing, `auto`, mixed, mismatched, or retained poisoned tier evidence fails closed. Historical version 5 through 8 reports stay readable and default only their legacy tier provenance to Standard. An ignored atomic evidence sidecar survives interruption before chapter commit and carries the same tier and pricing bindings.
+Live runs accept `--prior-spend-usd`, `--chapter-cap-usd`, and `--service-tier`. Report version 9 retains all version 8 canon, response, candidate, turn, stream, cost, and resume evidence. It also requires explicit requested and returned service tier on every current attempt and model call, tier-specific pricing version, exact clean-path projection, and a recomputed `serviceTierEvidenceComplete` gate. Selective resumes persist the exact human-rejected `rerunFrom` suffixes; older version 9 reports default this field to an empty list. A full version 9 report must use Flex. Missing, `auto`, mixed, mismatched, or retained poisoned tier evidence fails closed. Historical version 5 through 8 reports stay readable and default only their legacy tier provenance to Standard. An ignored atomic evidence sidecar survives interruption before chapter commit and carries the same tier and pricing bindings.
 
 The static projection stays visible even when it exceeds `$3`; it is not the authority after a partial run. The durable SQLite ledger at ignored `evals/reports/live-spend-ledger.db` is authoritative. Ledger version 2 binds every reservation to Standard or Flex. Opening a version 1 ledger migrates historical rows to Standard in one transaction and verifies exact exposure is unchanged. Every generation request reserves tier-priced maximum exposure before provider transport and rejects a request that could take cumulative local exposure above `$3`. Returned usage settles at the returned tier before response validation. Missing or ambiguous provider tier keeps the conservative reservation and fails.
 
@@ -24,13 +24,15 @@ A full run requires a clean committed worktree. The npm full script selects Flex
 
 Current HEAD must equal the source checkpoint or differ only in committed non-runtime tests and release documentation. A legacy bridge additionally requires the exact audited hashes of every changed runtime file. Every source report must match a full-file SHA-256 and metadata entry in tracked `evals/resume-checkpoints.json`. Inspect and register each failed report before another resume. Never auto-resume an unregistered artifact.
 
-The first prompt `1.4.11` Flex matrix completed both Rowan chapters and failed on Elara chapter 1 after 19 known attempts costing `$0.029972`. Exact durable exposure is `$2.841054175`; headroom is `$0.158945825`. Its strict version 9 report has SHA-256 `447f860a0e918198d246fef37671f16db3664ef76887fba390eaaabc77f9eddd`. Even charging another full clean Flex projection of `$0.104494` would end at `$2.945548175`, leaving `$0.054451825`.
+The authorized prompt `1.4.11` Flex resume completed all twelve automated cycles. Its strict version 9 report has SHA-256 `fb9295d7c33ca154c7e407894b807d4a371b83d5ef066d78eee05ee42d4c49d2`, 91 attempts, `$0.1363645` total attempt cost, and all automated gates true. Exact durable exposure is `$2.947446675`; headroom is `$0.052553325`. There is no run lock and no active or uncertain reservation.
 
-That report established the recovery baseline: drafts of 789, 850, and 768 words; the 850-word draft received 91 continuation words and was rejected against a requested maximum of 75. Recovery now accepts sole-word-count failures from 750 to 899 words. The model request still targets a 900-to-925-word merge with the same byte and token caps. Deterministic acceptance may reach 949 words, then the unchanged 900-to-1,300 validator and full independent audit run. The failed report must be registered, all non-live gates and clean-clone verification must pass, and explicit user authority is required before this resume command:
+Human review rejected Rowan chapter 2, Elara chapter 1, and Lucan chapter 1. The prose spent uncommitted mana, crossed beyond the committed destination, reversed a route, and reassigned a POV-owned private plan. ADR-016 adds exact regressions plus narrow pre-audit and atomic-store validation. `--rerun-from <pov-id>:<chapter>` discards only that chapter suffix from a complete authenticated pair. It keeps seven accepted results and preserves all prior attempts and cost. The source report must be registered, all non-live gates and clean-clone verification must pass, and explicit user authority is required before this selective resume command:
 
 ```powershell
-npm run evals:live:full -- --prior-spend-usd 2.811082175 --chapter-cap-usd 0.0424 --resume-report evals/reports/live-full-sequential-prompt-1.4.11-flex-1.json
+npm run evals:live:full -- --prior-spend-usd 2.811082175 --chapter-cap-usd 0.0424 --resume-report evals/reports/live-full-sequential.json --rerun-from rowan-ashborn:2 --rerun-from elara-voss:1 --rerun-from lucan-aurelis:1
 ```
+
+This command is safe but not guaranteed to finish. The same five accepted results previously cost `$0.044674`, leaving `$0.007879325` against current headroom. Five full chapter ceilings instead project `$3.159446675`, above the `$3` cap by `$0.159446675`. The durable ledger reserves each request and stops before overspend. New retries can therefore end the run early; inspect and register any partial report before continuing.
 
 Never resume automatically.
 
@@ -86,6 +88,8 @@ npm run evals:review-packets -- evals/reports/<final-report>.json
 ```
 
 The command rejects partial reports, false gates, missing canonical evidence, and mixed tiers. It refuses to replace an existing packet directory unless `--force` is explicit. Generated-evidence hashes exclude the marked human-review block, so reviewers can fill scores and citations without breaking provenance. Use `--force` only before review or after preserving completed annotations.
+
+Fresh manifests start `pending-human-review`. After all six final and chapter verdicts are filled, set the manifest to `human-reviewed-approved` or `human-reviewed-rejected`. Packet validation rejects an approved manifest containing a rejection, a rejected manifest with no rejection, or any completed status with missing verdicts. Packet headers record the generated status, not the current verdict.
 
 ### 7. Regression
 

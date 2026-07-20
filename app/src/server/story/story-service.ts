@@ -31,6 +31,7 @@ import {
   resolveTurn,
   stageWorldDelta,
   validateChapterDraft,
+  validateNarrativeStateClaims,
   validateSuggestedChoices,
   validateWorldState,
 } from "@infinite-litrpg/shared";
@@ -471,6 +472,21 @@ export class StoryService {
       const narrationBrief = JSON.parse(
         buildNarrationPrompt(before, prospective, playerAction, resolved.data.delta),
       ) as unknown;
+      const validateDraft = (prose: string): ReturnType<typeof validateChapterDraft> => {
+        const structural = validateChapterDraft(prospective, {
+          choices: frameCall.data.choices,
+          contractVersion: CONTRACT_VERSION,
+          prose,
+          terminal: prospective.terminal,
+          title: frameCall.data.title,
+        });
+        const stateIssues = validateNarrativeStateClaims(before, prospective, prose);
+        if (stateIssues.length === 0) return structural;
+        return {
+          issues: [...(structural.ok ? [] : structural.issues), ...stateIssues],
+          ok: false,
+        };
+      };
       const candidateBase = {
         adapterMode,
         allowedFactIds: [...allowedFactIds].sort(),
@@ -541,13 +557,7 @@ export class StoryService {
           const rawWordCount = countWords(prose);
           let recoveryEvidence: NarrativeRecoveryEvidence | null = null;
           let auditedProse = prose;
-          let draft = validateChapterDraft(prospective, {
-            choices: frameCall.data.choices,
-            contractVersion: CONTRACT_VERSION,
-            prose: auditedProse,
-            terminal: prospective.terminal,
-            title: frameCall.data.title,
-          });
+          let draft = validateDraft(auditedProse);
           if (!draft.ok) {
             this.options.onNarrativeDraftRejected?.(draft.issues);
             if (canRecoverShortNarration(prose, draft.issues)) {
@@ -613,13 +623,7 @@ export class StoryService {
               } finally {
                 attemptPhase = "narration";
               }
-              draft = validateChapterDraft(prospective, {
-                choices: frameCall.data.choices,
-                contractVersion: CONTRACT_VERSION,
-                prose: auditedProse,
-                terminal: prospective.terminal,
-                title: frameCall.data.title,
-              });
+              draft = validateDraft(auditedProse);
               if (!draft.ok) this.options.onNarrativeDraftRejected?.(draft.issues);
             }
           }

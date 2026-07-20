@@ -349,6 +349,77 @@ export function validateChapterDraft(
   return issues.length > 0 ? { issues, ok: false } : { data: candidate.data, ok: true };
 }
 
+export function validateNarrativeStateClaims(
+  beforeState: WorldState,
+  prospectiveState: WorldState,
+  prose: string,
+): readonly ValidationIssue[] {
+  const povId = prospectiveState.lockedPovId;
+  if (povId === null || beforeState.lockedPovId !== povId) return [];
+  const beforePov = beforeState.characters.find(({ id }) => id === povId);
+  const afterPov = prospectiveState.characters.find(({ id }) => id === povId);
+  if (!beforePov || !afterPov) return [];
+
+  const issues: ValidationIssue[] = [];
+  for (const resource of ["health", "mana"] as const) {
+    const allowed = new Set([
+      `${beforePov[resource].current}/${beforePov[resource].maximum}`,
+      `${afterPov[resource].current}/${afterPov[resource].maximum}`,
+    ]);
+    for (const [current, maximum] of resourceSnapshotsInText(prose, resource)) {
+      if (allowed.has(`${current}/${maximum}`)) continue;
+      issues.push({
+        code: "INVALID_SCHEMA",
+        message: `Narration gives ${resource} as ${current}/${maximum}, but canon permits ${[...allowed].join(" or ")}`,
+        path: "prose",
+      });
+      break;
+    }
+  }
+
+  const locationNames = prospectiveState.locations.map(({ name }) => name);
+  for (const location of prospectiveState.locations) {
+    if (location.id === afterPov.locationId) continue;
+    if (
+      claimsArrivalAtLocation(
+        prose,
+        location.name,
+        locationNames.filter((name) => name !== location.name),
+      )
+    ) {
+      issues.push({
+        code: "INVALID_SCHEMA",
+        message: `Narration claims arrival at ${location.name}, but committed POV location is ${afterPov.locationId}`,
+        path: "prose",
+      });
+    } else if (
+      beforePov.locationId !== afterPov.locationId &&
+      location.id === beforePov.locationId &&
+      treatsDepartedLocationAsAhead(prose, location.name)
+    ) {
+      issues.push({
+        code: "INVALID_SCHEMA",
+        message: `Narration treats departed location ${location.name} as the destination ahead`,
+        path: "prose",
+      });
+    }
+  }
+
+  for (const fact of prospectiveState.facts.filter(
+    ({ ownerCharacterId }) => ownerCharacterId === povId,
+  )) {
+    const misattributedTo = misattributedPovFact(prose, fact.claim, beforePov, prospectiveState);
+    if (misattributedTo === null) continue;
+    issues.push({
+      code: "INVALID_SCHEMA",
+      message: `Narration attributes ${beforePov.name}'s canon to ${misattributedTo}`,
+      path: "prose",
+    });
+  }
+
+  return issues;
+}
+
 export function validateChapterFrameSafety(
   prospectiveState: WorldState,
   input: unknown,
@@ -406,6 +477,209 @@ function hiddenFactsInText(
       (normalized.includes(fact.id.toLocaleLowerCase("en-US")) ||
         normalized.includes(fact.claim.toLocaleLowerCase("en-US"))),
   );
+}
+
+const NUMBER_VALUES = new Map<string, number>([
+  ["zero", 0],
+  ["one", 1],
+  ["two", 2],
+  ["three", 3],
+  ["four", 4],
+  ["five", 5],
+  ["six", 6],
+  ["seven", 7],
+  ["eight", 8],
+  ["nine", 9],
+  ["ten", 10],
+  ["eleven", 11],
+  ["twelve", 12],
+  ["thirteen", 13],
+  ["fourteen", 14],
+  ["fifteen", 15],
+  ["sixteen", 16],
+  ["seventeen", 17],
+  ["eighteen", 18],
+  ["nineteen", 19],
+  ["twenty", 20],
+  ["thirty", 30],
+  ["forty", 40],
+  ["fifty", 50],
+  ["sixty", 60],
+  ["seventy", 70],
+  ["eighty", 80],
+  ["ninety", 90],
+]);
+const NUMBER_TOKEN = `(?:\\d{1,4}|${[...NUMBER_VALUES.keys()].join("|")}|hundred|thousand|and)`;
+const NUMBER_PHRASE = `${NUMBER_TOKEN}(?:[-\\s]+${NUMBER_TOKEN}){0,5}`;
+
+function resourceSnapshotsInText(
+  prose: string,
+  resource: "health" | "mana",
+): readonly (readonly [number, number])[] {
+  const results: Array<readonly [number, number]> = [];
+  const patterns = [
+    new RegExp(
+      `\\b${resource}\\b[^.!?\\n]{0,64}?\\b(${NUMBER_PHRASE})\\s*(?:out\\s+of|of|/)\\s*(${NUMBER_PHRASE})\\b`,
+      "giu",
+    ),
+    new RegExp(
+      `\\b(${NUMBER_PHRASE})\\s*(?:out\\s+of|of|/)\\s*(${NUMBER_PHRASE})\\s+${resource}\\b`,
+      "giu",
+    ),
+  ];
+  for (const pattern of patterns) {
+    for (const match of prose.matchAll(pattern)) {
+      const current = parseNarrativeInteger(match[1]);
+      const maximum = parseNarrativeInteger(match[2]);
+      if (current !== null && maximum !== null) results.push([current, maximum]);
+    }
+  }
+  return results;
+}
+
+function parseNarrativeInteger(value: string | undefined): number | null {
+  if (value === undefined) return null;
+  const normalized = value.toLocaleLowerCase("en-US").trim();
+  if (/^\d{1,4}$/u.test(normalized)) return Number(normalized);
+  const tokens = normalized.replaceAll("-", " ").split(/\s+/u);
+  let total = 0;
+  let current = 0;
+  let sawNumber = false;
+  for (const token of tokens) {
+    if (token === "and") continue;
+    if (token === "hundred") {
+      current = Math.max(1, current) * 100;
+      sawNumber = true;
+      continue;
+    }
+    if (token === "thousand") {
+      total += Math.max(1, current) * 1_000;
+      current = 0;
+      sawNumber = true;
+      continue;
+    }
+    const valueForToken = NUMBER_VALUES.get(token);
+    if (valueForToken === undefined) return null;
+    current += valueForToken;
+    sawNumber = true;
+  }
+  return sawNumber ? total + current : null;
+}
+
+function claimsArrivalAtLocation(
+  prose: string,
+  locationName: string,
+  otherLocationNames: readonly string[],
+): boolean {
+  const location = escapeRegExp(locationName);
+  const directArrival = new RegExp(
+    `\\b(?:arriv(?:ed|ing)(?:\\s+(?:at|in))?|enter(?:ed|ing)|reached)\\b(?<between>[^.!?\\n]{0,80}?)\\b${location}\\b`,
+    "giu",
+  );
+  const directionalArrival = new RegExp(
+    `\\b(?:cross(?:ed|es|ing)|step(?:ped|s|ping)|walk(?:ed|s|ing)|mov(?:ed|es|ing)|pass(?:ed|es|ing)|travel(?:ed|led|s|ing)|rode|riding)\\b[^.!?\\n]{0,64}?\\b(?:into|inside|within|onto)\\b(?<between>[^.!?\\n]{0,64}?)\\b${location}\\b`,
+    "giu",
+  );
+  return [directArrival, directionalArrival].some((pattern) =>
+    [...prose.matchAll(pattern)].some((match) =>
+      arrivalSegmentTargetsLocation(match.groups?.between ?? "", otherLocationNames),
+    ),
+  );
+}
+
+function arrivalSegmentTargetsLocation(
+  segment: string,
+  otherLocationNames: readonly string[],
+): boolean {
+  if (/\b(?:ahead|before|beyond|outside|toward|towards)\b/iu.test(segment)) return false;
+  return otherLocationNames.every(
+    (name) => !new RegExp(`\\b${escapeRegExp(name)}\\b`, "iu").test(segment),
+  );
+}
+
+function treatsDepartedLocationAsAhead(prose: string, locationName: string): boolean {
+  const location = escapeRegExp(locationName);
+  return [
+    new RegExp(`\\bahead\\s+(?:waited|stood|lay)\\s+(?:the\\s+)?${location}\\b`, "iu"),
+    new RegExp(`\\b${location}\\b[^.!?\\n]{0,24}?\\b(?:waited|stood|lay)\\s+ahead\\b`, "iu"),
+    new RegExp(`\\b${location}\\b\\s+drew\\s+nearer\\b`, "iu"),
+  ].some((pattern) => pattern.test(prose));
+}
+
+function misattributedPovFact(
+  prose: string,
+  claim: string,
+  pov: WorldState["characters"][number],
+  state: WorldState,
+): string | null {
+  const claimTokens = narrativeTokens(claim);
+  const povNameTokens = narrativeTokens(pov.name);
+  const povFirstName = povNameTokens[0];
+  const subjectLength = startsWithTokens(claimTokens, povNameTokens)
+    ? povNameTokens.length
+    : povFirstName !== undefined && claimTokens[0] === povFirstName
+      ? 1
+      : 0;
+  if (subjectLength === 0) return null;
+  const predicate = claimTokens.slice(subjectLength);
+  if (predicate.length < 3) return null;
+  const signature = predicate.slice(-Math.min(4, predicate.length));
+
+  for (const sentence of prose.split(/[.!?\n]+/u)) {
+    const tokens = narrativeTokens(sentence);
+    const signatureIndex = indexOfTokens(tokens, signature);
+    if (signatureIndex < 0) continue;
+    let nearest: {
+      readonly character: WorldState["characters"][number];
+      readonly index: number;
+    } | null = null;
+    for (const character of state.characters) {
+      const fullName = narrativeTokens(character.name);
+      const aliases = [fullName, fullName.slice(0, 1)].filter((alias) => alias.length > 0);
+      for (const alias of aliases) {
+        const index = lastIndexOfTokens(tokens, alias, signatureIndex);
+        if (index >= 0 && (nearest === null || index > nearest.index)) {
+          nearest = { character, index };
+        }
+      }
+    }
+    if (nearest !== null && nearest.character.id !== pov.id) return nearest.character.name;
+  }
+  return null;
+}
+
+function narrativeTokens(value: string): string[] {
+  return (value.toLocaleLowerCase("en-US").match(/[\p{L}\p{N}]+/gu) ?? []).map((token) => {
+    if (["planned", "planning", "plans"].includes(token)) return "plan";
+    if (["believed", "believes", "believing"].includes(token)) return "believe";
+    return token;
+  });
+}
+
+function startsWithTokens(value: readonly string[], prefix: readonly string[]): boolean {
+  return prefix.every((token, index) => value[index] === token);
+}
+
+function indexOfTokens(value: readonly string[], wanted: readonly string[]): number {
+  for (let index = 0; index <= value.length - wanted.length; index += 1) {
+    if (wanted.every((token, offset) => value[index + offset] === token)) return index;
+  }
+  return -1;
+}
+
+function lastIndexOfTokens(
+  value: readonly string[],
+  wanted: readonly string[],
+  beforeIndex: number,
+): number {
+  for (let index = beforeIndex - wanted.length; index >= 0; index -= 1) {
+    if (wanted.every((token, offset) => value[index + offset] === token)) return index;
+  }
+  return -1;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
 function failure<T>(
