@@ -17,6 +17,10 @@ import { estimateMaximumCountedRequestCostUsd, estimateMaximumRequestCostUsd } f
 
 export type StableOpenAIClient = Pick<OpenAI, "responses">;
 export const NO_PROMPT_CACHE_OPTIONS = Object.freeze({ mode: "explicit" as const });
+const IMPLICIT_PROMPT_CACHE_OPTIONS = Object.freeze({
+  mode: "implicit" as const,
+  ttl: "30m" as const,
+});
 
 export interface StructuredResponseRequest<T> {
   readonly agentId?: string | null;
@@ -27,6 +31,7 @@ export interface StructuredResponseRequest<T> {
   readonly onCandidate?: (candidate: T, context: StructuredResponseCandidateContext) => void;
   readonly onRawCandidate?: (context: StructuredResponseRawCandidateContext) => void;
   readonly policy: RuntimePolicy;
+  readonly promptCacheKey?: string;
   readonly reasoningEffort: RuntimeReasoningEffort;
   readonly schema: z.ZodType<T>;
   readonly schemaName: string;
@@ -56,6 +61,7 @@ export async function runStructuredResponse<T>(
   const reasoningEffort = ReasoningEffortSchema.parse(request.reasoningEffort);
   const serviceTier = parseRuntimeServiceTier(request.policy.serviceTier ?? "standard");
   validateGenerationSettings(request.schemaName, request.maxOutputTokens);
+  validatePromptCacheKey(request.promptCacheKey);
   const format = zodTextFormat(request.schema, request.schemaName);
   const maximumCostUsd = createStableMaximumCostResolver(client, {
     format,
@@ -64,6 +70,7 @@ export async function runStructuredResponse<T>(
     maxOutputTokens: request.maxOutputTokens,
     model,
     policy: request.policy,
+    promptCacheEnabled: request.promptCacheKey !== undefined,
     reasoningEffort,
     serviceTier,
   });
@@ -122,7 +129,7 @@ export async function runStructuredResponse<T>(
           instructions: request.instructions,
           max_output_tokens: request.maxOutputTokens,
           model,
-          prompt_cache_options: NO_PROMPT_CACHE_OPTIONS,
+          ...promptCacheRequestOptions(request.promptCacheKey),
           reasoning: { effort: reasoningEffort },
           service_tier: serviceTier === "flex" ? "flex" : "default",
           store: false,
@@ -186,6 +193,7 @@ export interface BufferedNarrationRequest {
   readonly model: RuntimeModel;
   readonly onRawCandidate?: (context: NarrationRawCandidateContext) => void;
   readonly policy: RuntimePolicy;
+  readonly promptCacheKey?: string;
   readonly reasoningEffort: RuntimeReasoningEffort;
 }
 
@@ -209,6 +217,7 @@ export async function createAuditedNarrationReplay(
   const reasoningEffort = ReasoningEffortSchema.parse(request.reasoningEffort);
   const serviceTier = parseRuntimeServiceTier(request.policy.serviceTier ?? "standard");
   validateGenerationSettings("narration", request.maxOutputTokens);
+  validatePromptCacheKey(request.promptCacheKey);
   const chunkCharacters = request.chunkCharacters ?? 512;
   if (!Number.isInteger(chunkCharacters) || chunkCharacters < 1 || chunkCharacters > 4_096) {
     throw new OpenAIRuntimeError(
@@ -230,6 +239,7 @@ export async function createAuditedNarrationReplay(
     maxOutputTokens: request.maxOutputTokens,
     model,
     policy: request.policy,
+    promptCacheEnabled: request.promptCacheKey !== undefined,
     reasoningEffort,
     serviceTier,
   });
@@ -285,7 +295,7 @@ export async function createAuditedNarrationReplay(
           instructions: request.instructions,
           max_output_tokens: request.maxOutputTokens,
           model,
-          prompt_cache_options: NO_PROMPT_CACHE_OPTIONS,
+          ...promptCacheRequestOptions(request.promptCacheKey),
           reasoning: { effort: reasoningEffort },
           service_tier: serviceTier === "flex" ? "flex" : "default",
           store: false,
@@ -378,6 +388,31 @@ function validateGenerationSettings(schemaName: string, maxOutputTokens: number)
   }
 }
 
+function validatePromptCacheKey(promptCacheKey: string | undefined): void {
+  if (promptCacheKey === undefined) return;
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/u.test(promptCacheKey)) {
+    throw new OpenAIRuntimeError(
+      "INVALID_POLICY",
+      "promptCacheKey must be 1 to 64 safe identifier characters",
+    );
+  }
+}
+
+function promptCacheRequestOptions(promptCacheKey: string | undefined):
+  | {
+      readonly prompt_cache_key: string;
+      readonly prompt_cache_options: typeof IMPLICIT_PROMPT_CACHE_OPTIONS;
+    }
+  | { readonly prompt_cache_options: typeof NO_PROMPT_CACHE_OPTIONS } {
+  if (promptCacheKey === undefined) {
+    return { prompt_cache_options: NO_PROMPT_CACHE_OPTIONS };
+  }
+  return {
+    prompt_cache_key: promptCacheKey,
+    prompt_cache_options: IMPLICIT_PROMPT_CACHE_OPTIONS,
+  };
+}
+
 function promptBytes(input: string, instructions: string, format?: unknown): number {
   return new TextEncoder().encode(serializePrompt(input, instructions, format)).byteLength;
 }
@@ -396,6 +431,7 @@ interface StableMaximumCostRequest {
   readonly maxOutputTokens: number;
   readonly model: RuntimeModel;
   readonly policy: RuntimePolicy;
+  readonly promptCacheEnabled: boolean;
   readonly reasoningEffort: RuntimeReasoningEffort;
   readonly serviceTier: "standard" | "flex";
 }
@@ -411,7 +447,10 @@ function createStableMaximumCostResolver(
       request.model,
       promptBytes(input, request.instructions, request.format),
       request.maxOutputTokens,
-      { inputBilling: "uncached", serviceTier: request.serviceTier },
+      {
+        inputBilling: request.promptCacheEnabled ? "cache-write" : "uncached",
+        serviceTier: request.serviceTier,
+      },
     );
     if (byteBound <= request.policy.budget.remainingUsd) return byteBound;
 
@@ -455,7 +494,10 @@ async function countMaximumRequestCost(
       request.model,
       counted.input_tokens,
       request.maxOutputTokens,
-      { inputBilling: "uncached", serviceTier: request.serviceTier },
+      {
+        inputBilling: request.promptCacheEnabled ? "cache-write" : "uncached",
+        serviceTier: request.serviceTier,
+      },
     );
   } catch {
     return byteBound;

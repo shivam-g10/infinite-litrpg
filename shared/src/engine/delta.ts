@@ -512,6 +512,7 @@ function validateMutationEntailment(
   issues: ValidationIssue[],
 ): void {
   const acceptedActors = new Set<string>();
+  const turnLevelMutations = resolveTurnLevelStateMutations(state, accepted);
   for (const intent of accepted) {
     if (acceptedActors.has(intent.actorId)) {
       issues.push(
@@ -636,11 +637,10 @@ function validateMutationEntailment(
       }
     }
     if (mutation.type === "grant_experience") {
-      const supported = accepted.some(
-        (intent) =>
-          intent.id.startsWith("intent-player-") &&
-          intent.actorId === mutation.characterId &&
-          mutation.amount === 10,
+      const supported = turnLevelMutations.some(
+        (expected) =>
+          expected.type === "grant_experience" &&
+          JSON.stringify(expected) === JSON.stringify(mutation),
       );
       if (!supported) {
         issues.push(
@@ -687,7 +687,7 @@ function validateMutationEntailment(
     (intent, index) =>
       resolveIntentOutcome(state, intent, delta.clock.toChapter, index, accepted).mutations,
   );
-  expectedStateMutations.push(...resolveTurnLevelStateMutations(state, accepted));
+  expectedStateMutations.push(...turnLevelMutations);
   if (JSON.stringify(delta.stateMutations) !== JSON.stringify(expectedStateMutations)) {
     issues.push(
       makeIssue(
@@ -731,22 +731,29 @@ function validateMutationEntailment(
         ),
       );
     }
-    if (
-      intent.id.startsWith("intent-player-") &&
-      delta.stateMutations.filter(
+    if (intent.id.startsWith("intent-player-")) {
+      const expectedExperience = turnLevelMutations.find(
         (mutation) =>
-          mutation.type === "grant_experience" &&
-          mutation.characterId === intent.actorId &&
-          mutation.amount === 10,
-      ).length !== 1
-    ) {
-      issues.push(
-        makeIssue(
-          "MUTATION_MISSING",
-          `Player intent ${intent.id} lacks its exact experience grant`,
-          "stateMutations",
-        ),
+          mutation.type === "grant_experience" && mutation.characterId === intent.actorId,
       );
+      const actualExperience = delta.stateMutations.filter(
+        (mutation) =>
+          mutation.type === "grant_experience" && mutation.characterId === intent.actorId,
+      );
+      const hasExactExperienceResult =
+        expectedExperience === undefined
+          ? actualExperience.length === 0
+          : actualExperience.length === 1 &&
+            JSON.stringify(actualExperience[0]) === JSON.stringify(expectedExperience);
+      if (!hasExactExperienceResult) {
+        issues.push(
+          makeIssue(
+            "MUTATION_MISSING",
+            `Player intent ${intent.id} lacks its exact experience result`,
+            "stateMutations",
+          ),
+        );
+      }
     }
   });
 }

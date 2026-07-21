@@ -16,6 +16,7 @@ import {
   canonicalizeChapterFrameCandidate,
   decodeChapterFrameModelCandidate,
   planRoutineContinuation,
+  prioritizeSceneMovementOptionIds,
   requiresPlayerDecision,
   validateChapterDraft,
   validateChapterFrameSafety,
@@ -176,6 +177,29 @@ describe("narrative gates", () => {
         expect(validateSuggestedChoices(state, frame.data.choices).ok).toBe(true);
       }
     }
+  });
+
+  it("prioritizes a legal move after three stationary chapters", () => {
+    const state = seedState();
+    const options = buildChapterChoiceOptions(state);
+    const movement = options.find(({ action }) => action.type === "move");
+    const stationary = options.filter(({ action }) => action.type !== "move").slice(0, 2);
+    expect(movement).toBeDefined();
+    expect(stationary).toHaveLength(2);
+    const requested = stationary.map(({ id }) => id);
+    const stationaryActions = [
+      { subjectId: "ash-road", type: "investigate" },
+      { targetId: "ash-road", type: "defend" },
+      { type: "wait" },
+    ] as const;
+
+    expect(prioritizeSceneMovementOptionIds(state, requested, stationaryActions)).toEqual([
+      movement?.id,
+      requested[0],
+    ]);
+    expect(prioritizeSceneMovementOptionIds(state, requested, stationaryActions.slice(1))).toEqual(
+      requested,
+    );
   });
 
   it("keeps app-owned choices legal with maximum-length source names", () => {

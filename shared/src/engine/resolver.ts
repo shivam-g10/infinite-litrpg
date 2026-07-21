@@ -36,6 +36,23 @@ export interface CanonicalIntentDisposition {
   readonly rejected: WorldDelta["rejectedIntents"];
 }
 
+const EXPERIENCE_BY_ACTION = {
+  defend: 15,
+  interact: 15,
+  move: 10,
+  rally: 15,
+  use_item: 5,
+  use_skill: 10,
+  wait: 0,
+} as const;
+
+const ASH_ROAD_INVESTIGATION_CLAIMS = [
+  "Boot prints on Ash Road split: raiders marched toward Black March while one barefoot trail returned to Cinder Village.",
+  "Blue glass grit in the Ash Road wagon ruts forms a broken System seal keyed to the Guild Outpost.",
+  "A snapped axle pin beside Ash Road bears a filed imperial crown mark beneath the soot.",
+  "A charred survey stake on Ash Road points to a concealed supply route entering Black March.",
+] as const;
+
 export function canonicalizeBackgroundIntentCandidate(
   candidateInput: unknown,
   actorId: string,
@@ -298,9 +315,15 @@ export function resolveTurnLevelStateMutations(
   );
   if (!playerIntent) return [];
 
-  const mutations: StateMutation[] = [
-    { amount: 10, characterId: playerIntent.actorId, type: "grant_experience" },
-  ];
+  const mutations: StateMutation[] = [];
+  const experience = resolvePlayerExperienceAward(state, playerIntent, accepted);
+  if (experience > 0) {
+    mutations.push({
+      amount: experience,
+      characterId: playerIntent.actorId,
+      type: "grant_experience",
+    });
+  }
   const milestone = state.arcClock.milestones.find(({ act }) => act === policy.currentAct);
   if (
     policy.choicesRequireMilestone &&
@@ -318,6 +341,21 @@ export function resolveTurnLevelStateMutations(
     });
   }
   return mutations;
+}
+
+export function resolvePlayerExperienceAward(
+  state: WorldState,
+  playerIntent: WorldIntent,
+  accepted: readonly WorldIntent[],
+): number {
+  if (playerIntent.action.type === "investigate") {
+    const nextChapter = getClockPolicy(state.chapter).nextChapter;
+    const ordinal = accepted.findIndex(({ id }) => id === playerIntent.id);
+    if (nextChapter === null || ordinal < 0) return 0;
+    const outcome = resolveIntentOutcome(state, playerIntent, nextChapter, ordinal, accepted);
+    return outcome.knowledgeMutations.some(({ type }) => type === "discover_fact") ? 15 : 0;
+  }
+  return EXPERIENCE_BY_ACTION[playerIntent.action.type];
 }
 
 export function actionAdvancesMilestone(
@@ -444,8 +482,10 @@ export function resolveIntentOutcome(
     const hasLedgerCapacity = ledger !== undefined && ledger.entries.length < 500;
     if (hasFactCapacity && hasLedgerCapacity) {
       const fact = investigationFact(state, actor, intent.action.subjectId, chapter, ordinal);
-      knowledgeMutations.push({ characterId: actor.id, fact, type: "discover_fact" });
-      surfacedClueFactIds.push(fact.id);
+      if (fact) {
+        knowledgeMutations.push({ characterId: actor.id, fact, type: "discover_fact" });
+        surfacedClueFactIds.push(fact.id);
+      }
     }
   } else if (intent.action.type === "interact" || intent.action.type === "defend") {
     const targetId = intent.action.targetId;
@@ -503,22 +543,49 @@ function investigationFact(
   subjectId: string,
   chapter: number,
   ordinal: number,
-): WorldState["facts"][number] {
+): WorldState["facts"][number] | null {
   const location = state.locations.find(({ id }) => id === subjectId);
   const event = state.activeEvents.find(({ id }) => id === subjectId);
   const fact = state.facts.find(({ id }) => id === subjectId);
   const milestone = state.arcClock.milestones.find(({ id }) => id === subjectId);
   const subject =
     location?.name ?? event?.summary ?? fact?.claim ?? milestone?.description ?? subjectId;
+  const source = shortText(`Investigation of ${subjectId}`);
+  const clueIndex = state.facts.filter(
+    (candidate) => candidate.ownerCharacterId === actor.id && candidate.source === source,
+  ).length;
+  const claim = investigationClaim(state, actor, subjectId, subject, clueIndex);
+  if (claim === null) return null;
   return {
     certainty: "likely",
-    claim: shortText(`${actor.name} found corroborating traces tied to ${subject}`),
+    claim: shortText(claim),
     discoveredChapter: chapter,
     id: `clue-${chapter}-${ordinal}-${actor.id}`,
     ownerCharacterId: actor.id,
-    source: shortText(`Investigation of ${subjectId}`),
+    source,
     visibility: "observed",
   };
+}
+
+function investigationClaim(
+  state: WorldState,
+  actor: WorldState["characters"][number],
+  subjectId: string,
+  subject: string,
+  clueIndex: number,
+): string | null {
+  if (subjectId === "ash-road") return ASH_ROAD_INVESTIGATION_CLAIMS[clueIndex] ?? null;
+  const location = state.locations.find(({ id }) => id === subjectId);
+  const leadId =
+    location?.adjacentLocationIds[clueIndex % (location.adjacentLocationIds.length || 1)];
+  const lead = state.locations.find(({ id }) => id === leadId)?.name ?? actor.locationId;
+  const claims = [
+    `${actor.name} found corroborating traces tied to ${subject}`,
+    `A System appraisal at ${subject} marked altered mana residue beneath the obvious trail.`,
+    `Tool marks at ${subject} showed organized preparation by someone who expected pursuit.`,
+    `The final recoverable trail from ${subject} pointed toward ${lead}.`,
+  ] as const;
+  return claims[clueIndex] ?? null;
 }
 
 function shortText(value: string): string {

@@ -1,4 +1,7 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
 import {
@@ -17,21 +20,37 @@ import {
   type ChapterRecord,
   type TraceEnvelope,
 } from "@infinite-litrpg/shared";
+import Database from "better-sqlite3";
 import { z } from "zod";
 
 import { FLEX_PRICING_VERSION, estimateResponseCostUsd } from "../app/src/server/openai/usage";
-import { initialChoices, loadSeedWorld } from "../app/src/server/story/story-service";
+import {
+  REVIEW_STORY_MODELS,
+  initialChoices,
+  loadSeedWorld,
+} from "../app/src/server/story/story-service";
+import {
+  STORY_QUALITY_EVAL_VERSION,
+  evaluateStoryQuality,
+  loadStoryQualityStoryFromDatabase,
+  type StoryQualityEvaluation,
+} from "./story-quality";
 
-export const STORY_REVIEW_SCHEMA_VERSION = "1.2.0-story-review" as const;
+export const STORY_REVIEW_SCHEMA_VERSION = "1.3.0-story-review" as const;
 export const STORY_REVIEW_BRANCH_POLICY = "least-used-action-type" as const;
 export const STORY_REVIEW_CHAPTERS_PER_STORY = 10 as const;
 export const STORY_REVIEW_CHAPTER_CAP_USD = 0.0848 as const;
 export const STORY_REVIEW_TOTAL_CAP_USD = 5.088 as const;
 export const STORY_REVIEW_TOTAL_CHAPTERS = CHARACTER_IDS.length * STORY_REVIEW_CHAPTERS_PER_STORY;
+export const STORY_REVIEW_REQUIRED_QUALITY_GATE_COUNT = 26 as const;
 export const STORY_REVIEW_VARIANT_CONFIG = {
   branchPolicy: STORY_REVIEW_BRANCH_POLICY,
+  enforceNarrativeQuality: true,
+  modelRouting: REVIEW_STORY_MODELS,
   promptVersion: PROMPT_VERSION,
   schemaVersion: STORY_REVIEW_SCHEMA_VERSION,
+  storyQualityEvalVersion: STORY_QUALITY_EVAL_VERSION,
+  storyQualityGateCount: STORY_REVIEW_REQUIRED_QUALITY_GATE_COUNT,
 } as const;
 export const STORY_REVIEW_VARIANT_CONFIG_SHA256 = sha256(
   JSON.stringify(STORY_REVIEW_VARIANT_CONFIG),
@@ -57,7 +76,7 @@ const CurrentVariantHashSchema = Sha256Schema.refine(
   "Story-review variant config hash does not match current code",
 );
 
-export const StoryReviewVariantArchiveReferenceSchema = z
+const StoryReviewVariantArchiveReferenceV1Schema = z
   .object({
     archiveDirectory: z.string().regex(/^[a-f0-9]{40}-to-[a-f0-9]{40}$/u),
     carriedExposureUsd: z.number().nonnegative().max(STORY_REVIEW_TOTAL_CAP_USD),
@@ -68,6 +87,26 @@ export const StoryReviewVariantArchiveReferenceSchema = z
     variantConfigSha256: CurrentVariantHashSchema,
   })
   .strict();
+
+const StoryReviewVariantArchiveReferenceV2Schema = z
+  .object({
+    archiveDirectory: z.string().regex(/^[a-f0-9]{40}-to-[a-f0-9]{40}$/u),
+    carriedExposureUsd: z.number().nonnegative().max(STORY_REVIEW_TOTAL_CAP_USD),
+    fromSourceGitSha: GitShaSchema,
+    lineageDepth: z.number().int().min(2).max(32),
+    manifestSha256: Sha256Schema,
+    parentManifestSha256: Sha256Schema,
+    parentMarkerSha256: Sha256Schema,
+    reason: z.literal("human-rejected-progression-and-canon-quality"),
+    toSourceGitSha: GitShaSchema,
+    variantConfigSha256: CurrentVariantHashSchema,
+  })
+  .strict();
+
+export const StoryReviewVariantArchiveReferenceSchema = z.union([
+  StoryReviewVariantArchiveReferenceV1Schema,
+  StoryReviewVariantArchiveReferenceV2Schema,
+]);
 
 const StoryReviewChapterSchema = z
   .object({
@@ -328,9 +367,12 @@ export interface StoryReviewPreflight {
   readonly byCharacter: Readonly<Record<CharacterId, number>>;
   readonly completedChapters: number;
   readonly durableExposureUsd: number;
+  readonly effectiveChapterCapUsd: number;
+  readonly fullPlanFitsAuthorizedCap: boolean;
   readonly maximumAdditionalExposureUsd: number;
   readonly projectedMaximumExposureUsd: number;
   readonly remainingChapters: number;
+  readonly requestedPlanMaximumExposureUsd: number;
 }
 
 export function buildStoryReviewPreflight(
@@ -354,24 +396,39 @@ export function buildStoryReviewPreflight(
   if (
     !Number.isFinite(durableExposureUsd) ||
     durableExposureUsd < 0 ||
-    durableExposureUsd > STORY_REVIEW_TOTAL_CAP_USD + MONEY_EPSILON_USD
+    durableExposureUsd > STORY_REVIEW_TOTAL_CAP_USD
   ) {
     throw new Error("Story review durable exposure exceeds its hard cap");
   }
   const remainingChapters = STORY_REVIEW_TOTAL_CHAPTERS - completedChapters;
-  const maximumAdditionalExposureUsd = roundMoney(
-    Math.min(
-      STORY_REVIEW_TOTAL_CAP_USD - durableExposureUsd,
-      remainingChapters * STORY_REVIEW_CHAPTER_CAP_USD,
-    ),
-  );
+  const moneyScale = 1_000_000_000;
+  const totalCapNano = Math.round(STORY_REVIEW_TOTAL_CAP_USD * moneyScale);
+  const durableExposureNano = Math.ceil(durableExposureUsd * moneyScale);
+  const headroomNano = Math.max(0, totalCapNano - durableExposureNano);
+  const requestedChapterCapNano = Math.round(STORY_REVIEW_CHAPTER_CAP_USD * moneyScale);
+  const effectiveChapterCapNano =
+    remainingChapters === 0
+      ? 0
+      : Math.min(requestedChapterCapNano, Math.floor(headroomNano / remainingChapters));
+  const maximumAdditionalExposureNano = effectiveChapterCapNano * remainingChapters;
+  const projectedMaximumExposureNano = durableExposureNano + maximumAdditionalExposureNano;
+  const effectiveChapterCapUsd = effectiveChapterCapNano / moneyScale;
+  const maximumAdditionalExposureUsd = maximumAdditionalExposureNano / moneyScale;
+  const projectedMaximumExposureUsd = projectedMaximumExposureNano / moneyScale;
+  const requestedPlanMaximumExposureUsd =
+    (durableExposureNano + remainingChapters * requestedChapterCapNano) / moneyScale;
   return {
     byCharacter,
     completedChapters,
     durableExposureUsd: roundMoney(durableExposureUsd),
+    effectiveChapterCapUsd,
+    fullPlanFitsAuthorizedCap:
+      (remainingChapters === 0 || effectiveChapterCapNano > 0) &&
+      projectedMaximumExposureNano <= totalCapNano,
     maximumAdditionalExposureUsd,
-    projectedMaximumExposureUsd: roundMoney(durableExposureUsd + maximumAdditionalExposureUsd),
+    projectedMaximumExposureUsd,
     remainingChapters,
+    requestedPlanMaximumExposureUsd,
   };
 }
 
@@ -511,6 +568,7 @@ export function buildStoryReviewChapter(
 
 export function buildStoryReviewEvidence(candidate: unknown): StoryReviewEvidence {
   const source = StoryReviewSourceEvidenceSchema.parse(candidate);
+  for (const story of source.stories) assertStoryReviewSourceQuality(story);
   validateStoryReviewSourceIdentities(source.stories);
   const stories = source.stories.map(({ characterId, chapters, finalState }) => {
     validateStoryReviewPrefix(
@@ -538,6 +596,81 @@ export function buildStoryReviewEvidence(candidate: unknown): StoryReviewEvidenc
     committedChapterCostUsd,
     stories,
   });
+}
+
+export function assertStoryReviewDatabaseQuality(
+  characterId: CharacterId,
+  databasePath: string,
+): StoryQualityEvaluation {
+  let evaluation: StoryQualityEvaluation;
+  try {
+    const loaded = loadStoryQualityStoryFromDatabase(databasePath, {
+      firstChapter: 1,
+      lastChapter: STORY_REVIEW_CHAPTERS_PER_STORY,
+    });
+    evaluation = evaluateStoryQuality(loaded.chapters);
+  } catch (error) {
+    throw new Error(
+      `${characterId} story-quality database evaluation failed: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
+  }
+  if (evaluation.gates.length !== STORY_REVIEW_REQUIRED_QUALITY_GATE_COUNT) {
+    throw new Error(
+      `${characterId} story-quality evaluation returned ${evaluation.gates.length} gates; expected ${STORY_REVIEW_REQUIRED_QUALITY_GATE_COUNT}`,
+    );
+  }
+  const failures = evaluation.gates.filter(({ passed }) => !passed);
+  if (!evaluation.passed || failures.length > 0) {
+    const diagnostics = failures
+      .map(
+        ({ actual, comparator, id, threshold }) =>
+          `${id} actual=${actual} required${comparator}${threshold}`,
+      )
+      .join("; ");
+    throw new Error(`${characterId} story-quality gates failed: ${diagnostics}`);
+  }
+  return evaluation;
+}
+
+function assertStoryReviewSourceQuality(story: StoryReviewSourceStory): void {
+  const path = resolve(tmpdir(), `infinite-litrpg-story-review-${randomUUID()}.db`);
+  let database: Database.Database | null = new Database(path);
+  try {
+    database.exec(`
+      CREATE TABLE chapters (
+        world_id TEXT NOT NULL,
+        chapter INTEGER NOT NULL,
+        record_json TEXT NOT NULL
+      );
+      CREATE TABLE world_deltas (
+        world_id TEXT NOT NULL,
+        chapter INTEGER NOT NULL,
+        delta_json TEXT NOT NULL
+      );
+    `);
+    const insertChapter = database.prepare(
+      "INSERT INTO chapters (world_id, chapter, record_json) VALUES (?, ?, ?)",
+    );
+    const insertDelta = database.prepare(
+      "INSERT INTO world_deltas (world_id, chapter, delta_json) VALUES (?, ?, ?)",
+    );
+    const write = database.transaction(() => {
+      for (const { chapterRecord, worldDelta } of story.chapters) {
+        insertChapter.run("ashen-crown-v1", chapterRecord.chapter, JSON.stringify(chapterRecord));
+        insertDelta.run("ashen-crown-v1", chapterRecord.chapter, JSON.stringify(worldDelta));
+      }
+    });
+    write.immediate();
+    database.close();
+    database = null;
+    assertStoryReviewDatabaseQuality(story.characterId, path);
+  } finally {
+    database?.close();
+    rmSync(path, { force: true });
+    rmSync(`${path}-shm`, { force: true });
+    rmSync(`${path}-wal`, { force: true });
+  }
 }
 
 export function validateStoryReviewSourceIdentities(

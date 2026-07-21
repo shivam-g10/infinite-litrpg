@@ -25,7 +25,7 @@ export function getServerEnvironment(): ServerEnvironment {
     maxBackgroundAgents: parseBoundedNumber(process.env.OPENAI_MAX_BACKGROUND_AGENTS, 3, 0, 3),
     maxCostUsdPerChapter: parseBoundedNumber(
       process.env.OPENAI_MAX_COST_USD_PER_CHAPTER,
-      0.1,
+      0.2,
       0.01,
       3,
     ),

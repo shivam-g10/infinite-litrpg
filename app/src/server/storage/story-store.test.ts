@@ -17,9 +17,11 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   InvalidCommitError,
+  StaleChapterNarrationError,
   StaleWorldVersionError,
   StoryStore,
   type CommitTurnInput,
+  type ReplaceLatestChapterNarrationInput,
   type StoryStoreOptions,
 } from "./story-store";
 
@@ -220,6 +222,268 @@ describe("StoryStore atomic turn commit", () => {
   );
 });
 
+describe("StoryStore atomic latest-chapter reroll", () => {
+  it("archives old evidence and replaces narration without changing canon", () => {
+    const store = openStore();
+    const initial = seedState();
+    const turn = makeTurn(initial);
+    const replacement = makeNarrationReplacement(turn, "first");
+    store.createWorld(initial);
+    store.commitTurn(turn);
+    const worldBefore = store.loadWorldState(initial.id);
+    const deltaBefore = store.loadDelta(initial.id, turn.state.version);
+    const knowledgeBefore = store.loadKnowledgeChanges(initial.id, turn.state.version);
+
+    expect(store.replaceLatestChapterNarration(rerollInput(turn, replacement))).toEqual(
+      replacement.chapter,
+    );
+
+    expect(store.loadWorldState(initial.id)).toEqual(worldBefore);
+    expect(store.loadDelta(initial.id, turn.state.version)).toEqual(deltaBefore);
+    expect(store.loadKnowledgeChanges(initial.id, turn.state.version)).toEqual(knowledgeBefore);
+    expect(store.loadChapter(initial.id, turn.chapter.chapter)).toEqual(replacement.chapter);
+    expect(store.loadTrace(turn.trace.runId)).toBeNull();
+    expect(store.loadTrace(replacement.trace.runId)).toEqual(replacement.trace);
+    expect(store.loadUsage(initial.id, turn.chapter.chapter)).toEqual({
+      chapterUsage: replacement.chapter.usage,
+      totalEstimatedCostUsd: replacement.trace.totalEstimatedCostUsd,
+      totalLatencyMs: replacement.trace.totalLatencyMs,
+      traceUsage: replacement.trace.totalUsage,
+    });
+    expect(store.loadChapterRevisions(initial.id, turn.chapter.chapter)).toEqual([
+      {
+        archivedByTraceId: replacement.trace.runId,
+        chapter: turn.chapter,
+        revision: 1,
+        trace: turn.trace,
+        usage: {
+          chapterUsage: turn.chapter.usage,
+          totalEstimatedCostUsd: turn.trace.totalEstimatedCostUsd,
+          totalLatencyMs: turn.trace.totalLatencyMs,
+          traceUsage: turn.trace.totalUsage,
+        },
+      },
+    ]);
+    expect(store.loadChapterByRequestId(initial.id, turn.chapter.requestId ?? "missing")).toEqual(
+      replacement.chapter,
+    );
+    expect(
+      store.loadChapterByRequestId(initial.id, replacement.chapter.requestId ?? "missing"),
+    ).toEqual(replacement.chapter);
+  });
+
+  it("rejects stale world and prior narration guards without changing evidence", () => {
+    const store = openStore();
+    const initial = seedState();
+    const turn = makeTurn(initial);
+    const replacement = makeNarrationReplacement(turn, "stale");
+    store.createWorld(initial);
+    store.commitTurn(turn);
+
+    expect(() =>
+      store.replaceLatestChapterNarration({
+        ...rerollInput(turn, replacement),
+        expectedWorldVersion: turn.state.version + 1,
+      }),
+    ).toThrow(StaleWorldVersionError);
+    expect(() =>
+      store.replaceLatestChapterNarration({
+        ...rerollInput(turn, replacement),
+        expectedPriorTraceId: randomUUID(),
+      }),
+    ).toThrow(StaleChapterNarrationError);
+    expect(() =>
+      store.replaceLatestChapterNarration({
+        ...rerollInput(turn, replacement),
+        expectedPriorProseHash: "b".repeat(64),
+      }),
+    ).toThrow(StaleChapterNarrationError);
+
+    expect(store.loadWorldState(initial.id)).toEqual(turn.state);
+    expect(store.loadChapter(initial.id, turn.chapter.chapter)).toEqual(turn.chapter);
+    expect(store.loadTrace(turn.trace.runId)).toEqual(turn.trace);
+    expect(store.loadTrace(replacement.trace.runId)).toBeNull();
+    expect(store.loadChapterRevisions(initial.id, turn.chapter.chapter)).toEqual([]);
+  });
+
+  it("rejects rerolling an older chapter after canon advances", () => {
+    const store = openStore();
+    const initial = seedState();
+    const firstTurn = makeTurn(initial);
+    const secondTurn = makeTurn(firstTurn.state);
+    const replacement = makeNarrationReplacement(firstTurn, "not-latest");
+    store.createWorld(initial);
+    store.commitTurn(firstTurn);
+    store.commitTurn(secondTurn);
+
+    expect(() =>
+      store.replaceLatestChapterNarration({
+        ...rerollInput(firstTurn, replacement),
+        expectedWorldVersion: secondTurn.state.version,
+      }),
+    ).toThrowError(
+      expect.objectContaining({ message: "Only the latest committed chapter can be rerolled" }),
+    );
+    expect(store.loadWorldState(initial.id)).toEqual(secondTurn.state);
+    expect(store.loadChapter(initial.id, firstTurn.chapter.chapter)).toEqual(firstTurn.chapter);
+    expect(store.loadChapter(initial.id, secondTurn.chapter.chapter)).toEqual(secondTurn.chapter);
+    expect(store.loadChapterRevisions(initial.id, firstTurn.chapter.chapter)).toEqual([]);
+  });
+
+  it.each([
+    [
+      "player action",
+      (chapter: ChapterRecord) => {
+        chapter.playerAction.description = "Forge a different canonical action.";
+      },
+    ],
+    [
+      "choices",
+      (chapter: ChapterRecord) => {
+        chapter.choices.reverse();
+      },
+    ],
+    [
+      "title",
+      (chapter: ChapterRecord) => {
+        chapter.title = "A Different Canonical Title";
+      },
+    ],
+    [
+      "world versions",
+      (chapter: ChapterRecord) => {
+        chapter.stateBeforeVersion += 1;
+      },
+    ],
+    [
+      "safe context",
+      (chapter: ChapterRecord) => {
+        chapter.safeContextHash = "b".repeat(64);
+      },
+    ],
+  ] as const)("rejects replacement chapter tampering: %s", (_label, mutate) => {
+    const store = openStore();
+    const initial = seedState();
+    const turn = makeTurn(initial);
+    const replacement = makeNarrationReplacement(turn, "chapter-tamper");
+    mutate(replacement.chapter);
+    store.createWorld(initial);
+    store.commitTurn(turn);
+
+    expect(() => store.replaceLatestChapterNarration(rerollInput(turn, replacement))).toThrow(
+      InvalidCommitError,
+    );
+    expectUnchangedAfterRejectedReroll(store, initial.id, turn, replacement.trace.runId);
+  });
+
+  it.each([
+    [
+      "delta",
+      (trace: TraceEnvelope) => {
+        trace.acceptedDelta.clock.transitionRequired =
+          !trace.acceptedDelta.clock.transitionRequired;
+      },
+    ],
+    [
+      "intents",
+      (trace: TraceEnvelope) => {
+        const playerIntent = trace.intents.find(({ id }) => id.startsWith("intent-player-"));
+        if (!playerIntent) throw new Error("Missing player intent");
+        playerIntent.expectedEffect = `${playerIntent.expectedEffect} altered`;
+      },
+    ],
+    [
+      "state hashes",
+      (trace: TraceEnvelope) => {
+        trace.stateBeforeHash = "b".repeat(64);
+      },
+    ],
+    [
+      "schema version",
+      (trace: TraceEnvelope) => {
+        trace.schemaVersion = "reroll-forgery";
+      },
+    ],
+  ] as const)("rejects replacement trace tampering: %s", (_label, mutate) => {
+    const store = openStore();
+    const initial = seedState();
+    const turn = makeTurn(initial);
+    const replacement = makeNarrationReplacement(turn, "trace-tamper");
+    mutate(replacement.trace);
+    store.createWorld(initial);
+    store.commitTurn(turn);
+
+    expect(() => store.replaceLatestChapterNarration(rerollInput(turn, replacement))).toThrow(
+      InvalidCommitError,
+    );
+    expectUnchangedAfterRejectedReroll(store, initial.id, turn, replacement.trace.runId);
+  });
+
+  it.each([
+    "after-reroll-archive",
+    "after-reroll-chapter-update",
+    "after-reroll-trace-insert",
+    "after-reroll-usage-insert",
+  ] as const)("rolls back every reroll row after failure at %s", (failurePoint) => {
+    const injectedError = new Error(`injected ${failurePoint}`);
+    const store = openStore({
+      failureInjector: (point) => {
+        if (point === failurePoint) throw injectedError;
+      },
+    });
+    const initial = seedState();
+    const turn = makeTurn(initial);
+    const replacement = makeNarrationReplacement(turn, failurePoint);
+    store.createWorld(initial);
+    store.commitTurn(turn);
+
+    expect(() => store.replaceLatestChapterNarration(rerollInput(turn, replacement))).toThrow(
+      injectedError,
+    );
+    expectUnchangedAfterRejectedReroll(store, initial.id, turn, replacement.trace.runId);
+  });
+
+  it("preserves every revision and resolves every old request to the current chapter", () => {
+    const store = openStore();
+    const initial = seedState();
+    const turn = makeTurn(initial);
+    const first = makeNarrationReplacement(turn, "first-repeat");
+    const second = makeNarrationReplacement(first, "second-repeat");
+    store.createWorld(initial);
+    store.commitTurn(turn);
+
+    store.replaceLatestChapterNarration(rerollInput(turn, first));
+    store.replaceLatestChapterNarration({
+      chapter: second.chapter,
+      expectedPriorProseHash: first.chapter.proseHash,
+      expectedPriorTraceId: first.trace.runId,
+      expectedWorldVersion: turn.state.version,
+      trace: second.trace,
+      worldId: initial.id,
+    });
+
+    const revisions = store.loadChapterRevisions(initial.id, turn.chapter.chapter);
+    expect(revisions.map(({ chapter, revision }) => [revision, chapter.traceId])).toEqual([
+      [1, turn.trace.runId],
+      [2, first.trace.runId],
+    ]);
+    expect(store.loadChapter(initial.id, turn.chapter.chapter)).toEqual(second.chapter);
+    for (const requestId of [
+      turn.chapter.requestId,
+      first.chapter.requestId,
+      second.chapter.requestId,
+    ]) {
+      expect(store.loadChapterByRequestId(initial.id, requestId ?? "missing")).toEqual(
+        second.chapter,
+      );
+    }
+    expect(store.loadTrace(turn.trace.runId)).toBeNull();
+    expect(store.loadTrace(first.trace.runId)).toBeNull();
+    expect(store.loadTrace(second.trace.runId)).toEqual(second.trace);
+    expect(store.loadWorldState(initial.id)).toEqual(turn.state);
+  });
+});
+
 function openStore(options?: StoryStoreOptions): StoryStore {
   const store = new StoryStore(":memory:", options);
   stores.push(store);
@@ -415,6 +679,121 @@ function makeTurn(before: WorldState): CommitTurnInput {
   };
 
   return { chapter, delta, state: staged.data.state, trace };
+}
+
+function makeNarrationReplacement(
+  prior: Pick<CommitTurnInput, "chapter" | "trace">,
+  label: string,
+): Pick<CommitTurnInput, "chapter" | "trace"> {
+  const traceId = randomUUID();
+  const prose = words(
+    `Rowan answered the villagers and chose a sharper path through ${label}`,
+    900,
+  );
+  const proseHash = createHash("sha256").update(prose).digest("hex");
+  const usage = {
+    cacheWriteTokens: 0,
+    cachedInputTokens: 12,
+    inputTokens: 120,
+    outputTokens: 60,
+    reasoningTokens: 8,
+    totalTokens: 200,
+  };
+  const chapter: ChapterRecord = {
+    ...structuredClone(prior.chapter),
+    estimatedCostUsd: 0.02,
+    latencyMs: 175,
+    narrativeAudit: {
+      ...structuredClone(prior.chapter.narrativeAudit),
+      evidence: prior.chapter.narrativeAudit.evidence.map((item) => ({
+        ...item,
+        detail: `Reroll ${label} passed the same canon checks.`,
+      })),
+      proseHash,
+    },
+    prose,
+    proseHash,
+    requestId: randomUUID(),
+    traceId,
+    usage,
+  };
+  const trace: TraceEnvelope = {
+    ...structuredClone(prior.trace),
+    attempts: [
+      {
+        agentId: null,
+        attempt: 0,
+        costUsd: 0.02,
+        errorCode: null,
+        latencyMs: 175,
+        model: "gpt-5.6-sol",
+        phase: "narration",
+        requestedServiceTier: "standard",
+        responseId: `resp_reroll_${slug(label)}`,
+        serviceTier: "standard",
+        usage,
+      },
+    ],
+    calls: prior.trace.calls.map((call) => ({
+      ...call,
+      ...(call.phase === "narration"
+        ? {
+            estimatedCostUsd: 0.02,
+            latencyMs: 175,
+            model: "gpt-5.6-sol" as const,
+            responseId: `resp_reroll_${slug(label)}_narration`,
+            usage,
+          }
+        : {
+            responseId: `resp_reroll_${slug(label)}_${call.phase}`,
+          }),
+    })),
+    multiAgentOutputItems: [{ reroll: label }],
+    runId: traceId,
+    totalEstimatedCostUsd: 0.02,
+    totalLatencyMs: 175,
+    totalUsage: usage,
+    validationFailures: [],
+  };
+  return { chapter, trace };
+}
+
+function rerollInput(
+  turn: CommitTurnInput,
+  replacement: Pick<CommitTurnInput, "chapter" | "trace">,
+): ReplaceLatestChapterNarrationInput {
+  return {
+    chapter: replacement.chapter,
+    expectedPriorProseHash: turn.chapter.proseHash,
+    expectedPriorTraceId: turn.trace.runId,
+    expectedWorldVersion: turn.state.version,
+    trace: replacement.trace,
+    worldId: turn.state.id,
+  };
+}
+
+function expectUnchangedAfterRejectedReroll(
+  store: StoryStore,
+  worldId: string,
+  turn: CommitTurnInput,
+  rejectedTraceId: string,
+): void {
+  expect(store.loadWorldState(worldId)).toEqual(turn.state);
+  expect(store.loadDelta(worldId, turn.state.version)).toEqual(turn.delta);
+  expect(store.loadChapter(worldId, turn.chapter.chapter)).toEqual(turn.chapter);
+  expect(store.loadTrace(turn.trace.runId)).toEqual(turn.trace);
+  expect(store.loadTrace(rejectedTraceId)).toBeNull();
+  expect(store.loadUsage(worldId, turn.chapter.chapter)).toEqual({
+    chapterUsage: turn.chapter.usage,
+    totalEstimatedCostUsd: turn.trace.totalEstimatedCostUsd,
+    totalLatencyMs: turn.trace.totalLatencyMs,
+    traceUsage: turn.trace.totalUsage,
+  });
+  expect(store.loadChapterRevisions(worldId, turn.chapter.chapter)).toEqual([]);
+}
+
+function slug(value: string): string {
+  return value.replace(/[^A-Za-z0-9_-]/gu, "_");
 }
 
 function zeroUsage() {

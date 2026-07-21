@@ -107,9 +107,27 @@ export function buildCustomActionPrompt(state: WorldState, description: string):
   });
 }
 
-export function buildChapterFramePrompt(state: WorldState): string {
+export interface StoryHistoryEntry {
+  readonly action: PlayerAction["action"];
+  readonly actionDescription: string;
+  readonly chapter: number;
+  readonly prose: string;
+  readonly title: string;
+}
+
+export function buildChapterFramePrompt(
+  state: WorldState,
+  history: readonly StoryHistoryEntry[] = [],
+): string {
   if (state.lockedPovId === null) throw new Error("POV must be locked");
   return JSON.stringify({
+    ...(history.length > 0
+      ? {
+          storyHistory: compactStoryHistory(history),
+          titleRules:
+            "Return a concrete title unlike every prior title. Do not reuse a recent title's main verb, object, or template.",
+        }
+      : {}),
     optionsByIdAsDescription: Object.fromEntries(
       buildChapterChoiceOptions(state).map(({ description, id }) => [id, description]),
     ),
@@ -124,6 +142,7 @@ export function buildNarrationPrompt(
   prospective: WorldState,
   playerAction: PlayerAction,
   delta: WorldDelta,
+  history: readonly StoryHistoryEntry[] = [],
 ): string {
   if (prospective.lockedPovId === null) throw new Error("POV must be locked");
   const povId = prospective.lockedPovId;
@@ -132,6 +151,7 @@ export function buildNarrationPrompt(
     ? "afterCanon, visibleEvents, currentEffects, movement, and world"
     : "afterCanon, visibleEvents, currentEffects, and world";
   return JSON.stringify({
+    ...(history.length > 0 ? { storyHistory: compactStoryHistory(history) } : {}),
     afterCanon: compactPovContext(prospective, povId, currentEventIds(delta)),
     beforeValues: beforeTurnEffectValues(before, delta, povId),
     currentEffects: canonicalEffectsForPov(delta, povId),
@@ -147,7 +167,7 @@ export function buildNarrationPrompt(
           ]
         : []),
     ],
-    instruction: `Write only complete close-third chapter prose, 900 to 925 words. Never stop before 900; stop before 950. Valid range is 900 to 1300. Dramatize exactly playerAction and currentEffects. currentEffects and visibleEvents happen now; afterCanon includes their results; beforeValues are prior and must be compared for a new change. Show only supplied LitRPG changes. ${exhaustiveWhitelist} are the exhaustive whitelist. Every world field is public canon and may be restated or paraphrased. POV-private afterCanon may appear internally in close third; reader access is not an in-world disclosure, but never reveal it to another character without an allowed currentEffects knowledge mutation or visibleEvent. Avoid character-sheet recap or repeated identity exposition; mention allowed identity, stats, skills, and inventory only when scene-relevant. Any relationship between people, threats, places, events, or history requires one exact whitelist field. Never infer causes, mechanisms, relationships, consequences, or remembered history from identities, plans, beliefs, goals, shared terms, or facts. Build depth only with immediate sensory texture, supplied beliefs, goals, and facts at face value. Append no choices or notes.`,
+    instruction: `Write only complete close-third chapter prose, 900 to 925 words. Never stop before 900; stop before 950. Valid range is 900 to 1300. Dramatize exactly playerAction and currentEffects. currentEffects and visibleEvents happen now; afterCanon includes their results; beforeValues are prior and must be compared for a new change. Show every supplied LitRPG change as a concise in-world System notice. Treat world.systemQuest as the named current System quest, but never complete it unless currentEffects says so. ${exhaustiveWhitelist} are the exhaustive whitelist. Every world field is public canon and may be restated or paraphrased. POV-private afterCanon may appear internally in close third; reader access is not an in-world disclosure, but never reveal it to another character without an allowed currentEffects knowledge mutation or visibleEvent. Use storyHistory as exact continuity: advance rather than recap it, preserve established voices, and never repeat a prior opening, title pattern, scene structure, or paragraph. Include a consequential spoken exchange when another character is present; after two quiet chapters, use meaningful speech, memory, or a System exchange even in a solo scene. Give the viewpoint a dramatized choice, vulnerability, changed belief, promise, or relationship movement. End with a concrete consequence that changes the next scene. Avoid character-sheet recap or repeated identity exposition; mention allowed identity, stats, skills, and inventory only when scene-relevant. Any relationship between people, threats, places, events, or history requires one exact whitelist field. Never infer causes, mechanisms, relationships, consequences, or remembered history from identities, plans, beliefs, goals, shared terms, or facts. Build depth only with immediate sensory texture, supplied beliefs, goals, facts, and exact storyHistory at face value. Append no choices or notes.`,
     playerAction: compactPlayerAction(playerAction),
     visibleEvents: visibleEventsForPov(delta, povId),
     world: localWorldContext(before, prospective, povId, delta),
@@ -264,11 +284,13 @@ export function buildAuditPrompt(
     readonly title: string;
   },
   prose: string,
+  history: readonly StoryHistoryEntry[] = [],
 ): string {
   if (prospective.lockedPovId === null) throw new Error("POV must be locked");
   const povId = prospective.lockedPovId;
   const allowedFactIds = new Set(buildPovContext(prospective, povId).factIds);
   return JSON.stringify({
+    ...(history.length > 0 ? { storyHistory: compactStoryHistory(history) } : {}),
     afterCanon: compactPovContext(prospective, povId, currentEventIds(delta)),
     beforeValues: beforeTurnEffectValues(before, delta, povId),
     currentEffects: canonicalEffectsForPov(delta, povId),
@@ -280,7 +302,7 @@ export function buildAuditPrompt(
     forbiddenRemote: compactForbiddenRemoteEffects(delta, povId),
     frame: { terminal: chapterFrame.terminal, title: chapterFrame.title },
     instruction:
-      "Audit frame, nextChoices, prose; do not alter canon. nextChoices tuples=[action,description,milestoneId]. scores/evidence order: choiceFulfillment, characterAutonomy, povSafety, litrpgMechanics, continuity, arcProgress, prose. Scores 0-2. For each score 0, copy an exact prose substring into matching evidence. Set every positive evidence string to pass. Any 0 or leak rejects. choiceFulfillment judges only playerAction; nextChoices are future and may be absent. currentEffects/visibleEvents happen now; afterCanon is the result; beforeValues are prior; a listed effect is not pre-existing. Allowed canon is exactly afterCanon, visibleEvents, currentEffects, world. afterCanon is selected POV knowledge, including private facts, identity, role, beliefs, goals, and plan; internal close-third reader access is not a leak. Another character learning it requires allowed currentEffects or visibleEvents; forbiddenRemote never licenses narration. Allowed fields take precedence: never score povSafety 0 for an exact restatement or faithful paraphrase of one allowed field. World fields may be restated or paraphrased despite forbiddenFacts overlap; reject only exclusive details. Never combine fields to invent cause, mechanism, relationship, motive, thought, or history. A plan or goal permits intent only; participants/observers witness only. Listed mutations may be System notices. forbiddenFacts and forbiddenRemote are detection-only. For content exclusive to forbiddenFacts, set povSafety to 0 and add leakEvidence with its factId and an exact proseQuote. Every leakEvidence factId must come from forbiddenFacts. Score unsupported synthesis under continuity. continuity 0 only for contradiction or unsupported durable canon, not sensory texture.",
+      "Audit frame, nextChoices, prose, and storyHistory; do not alter canon. nextChoices tuples=[action,description,milestoneId]. scores/evidence order: choiceFulfillment, characterAutonomy, povSafety, litrpgMechanics, continuity, arcProgress, prose. Scores 0-2. For each score 0, copy an exact prose substring into matching evidence. Set every positive evidence string to pass. Any 0 or leak rejects. choiceFulfillment judges only playerAction; nextChoices are future and may be absent. characterAutonomy is 0 when the viewpoint has no dramatized choice, vulnerability, changed belief, promise, or relationship movement. litrpgMechanics is 0 when a supplied mechanical change lacks an explicit in-world System notice. arcProgress is 0 when the chapter does not move a concrete objective, thread, relationship, knowledge state, threat, location, resource, or capability beyond storyHistory. prose is 0 for an empty consequential dialogue beat when one is possible, a repeated opening or title pattern, recap, scene-loop, or copied language from storyHistory. currentEffects/visibleEvents happen now; afterCanon is the result; beforeValues are prior; a listed effect is not pre-existing. Allowed canon is exactly afterCanon, visibleEvents, currentEffects, world, and storyHistory. afterCanon is selected POV knowledge, including private facts, identity, role, beliefs, goals, and plan; internal close-third reader access is not a leak. Another character learning it requires allowed currentEffects or visibleEvents; forbiddenRemote never licenses narration. Allowed fields take precedence: never score povSafety 0 for an exact restatement or faithful paraphrase of one allowed field. World fields may be restated or paraphrased despite forbiddenFacts overlap; reject only exclusive details. Never combine fields to invent cause, mechanism, relationship, motive, thought, or history. A plan or goal permits intent only; participants/observers witness only. Listed mutations may be System notices. forbiddenFacts and forbiddenRemote are detection-only. For content exclusive to forbiddenFacts, set povSafety to 0 and add leakEvidence with its factId and an exact proseQuote. Every leakEvidence factId must come from forbiddenFacts. Score unsupported synthesis under continuity. continuity 0 only for contradiction or unsupported durable canon, not sensory texture.",
     playerAction: compactPlayerAction(playerAction),
     prose,
     schemaVersion: RUNTIME_SCHEMA_VERSION,
@@ -292,6 +314,16 @@ export function buildAuditPrompt(
     visibleEvents: visibleEventsForPov(delta, povId),
     world: localWorldContext(before, prospective, povId, delta),
   });
+}
+
+function compactStoryHistory(history: readonly StoryHistoryEntry[]) {
+  return history.map(({ action, actionDescription, chapter, prose, title }) => ({
+    action,
+    actionDescription,
+    chapter,
+    prose,
+    title,
+  }));
 }
 
 function legalActionTargets(state: WorldState, actorId: string) {
@@ -704,6 +736,7 @@ function localWorldContext(
     ...visibleEventsForPov(delta, povId).map(({ locationId }) => locationId),
   ]);
   locationIds.delete(undefined);
+  const milestone = prospective.arcClock.milestones.find(({ act }) => act === prospective.act);
   return {
     calendarAsDayLabel: [prospective.calendar.day, prospective.calendar.label],
     factionsByIdAsNameGoal: Object.fromEntries(
@@ -719,6 +752,15 @@ function localWorldContext(
           [name, publicDescription, adjacentLocationIds],
         ]),
     ),
+    systemQuest: milestone
+      ? {
+          act: milestone.act,
+          completed: milestone.completed,
+          id: milestone.id,
+          objective: milestone.description,
+          requiredByChapter: milestone.requiredByChapter,
+        }
+      : null,
     threat: prospective.threat,
   };
 }

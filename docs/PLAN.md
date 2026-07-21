@@ -68,14 +68,26 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 - [x] Character selection and permanent viewpoint lock.
 - [x] World, character, chapter, progression, and clock views.
 - [x] Reader mode hides private state.
-- [x] God Mode shows intents, resolution, delta, usage, cost, and latency.
-- [x] Export POV-safe Reader state, Markdown, and explicit full God Mode JSON.
+- [x] Secondary Developer details shows intents, resolution, delta, usage, cost, and latency.
+- [x] Export POV-safe Reader state, Markdown, and explicit full Developer JSON.
 - [x] Replace routine chapter prompts with deterministic continuation to meaningful decisions.
 - [x] Stop the demo run after chapter 100 without changing the chapter-350 engine.
 - [x] Keep committed prose visible with truthful progress, stop, retry, and cost-bound copy.
 - [x] Review every committed chapter in Reader with Previous, Next, and chapter picker controls without a model call.
 - [x] Label local saved evidence separately from live OpenAI generation and show key readiness without exposing the key.
 - [x] Make one live chapter the primary action and keep multi-chapter continuation behind exact-cost progressive disclosure.
+
+### Phase 6B: Human Review Recovery
+
+- [x] Freeze provider-free quality baselines for the current 18-chapter Rowan story before changing prompts or models.
+- [x] Give planning, framing, narration, and audit the full prior chapter history needed to preserve progression and avoid repeated openings and titles.
+- [x] Make the LitRPG System explicit in canon, prose requirements, progression, and Reader presentation.
+- [x] Require measurable dialogue, character movement, scene progression, pacing, title novelty, and opening novelty without weakening POV or canon gates.
+- [x] Store each story under ignored `stories/<story-id>/`, with one Markdown file per chapter and canonical local data beside it.
+- [x] Keep the Reader pinned while several chapters generate in the background; show simple progress without cost noise.
+- [x] Let the reader reroll the latest chapter prose without mutating its accepted world delta.
+- [x] Let the reader preserve, reject, reopen, and restart story candidates through a simple story library.
+- [ ] Produce six authentic ten-chapter Markdown stories and pass deterministic checks plus human progression review.
 
 ### Phase 7: Hardening
 

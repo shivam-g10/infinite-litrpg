@@ -84,6 +84,33 @@ export interface ReaderChapterView {
   readonly title: string;
 }
 
+export interface StorySummary {
+  readonly chapterCount: number;
+  readonly createdAt: string;
+  readonly id: string;
+  readonly povCharacterId: string;
+  readonly status: "active" | "rejected";
+  readonly title: string;
+  readonly updatedAt: string;
+}
+
+export interface StoryLibraryView {
+  readonly activeStoryId: string | null;
+  readonly stories: readonly StorySummary[];
+}
+
+export interface StoryWarningView {
+  readonly code: string;
+  readonly message: string;
+  readonly storyId: string;
+}
+
+export interface StoryEnvelope {
+  readonly library: StoryLibraryView;
+  readonly story: StoryView | null;
+  readonly warnings: readonly StoryWarningView[];
+}
+
 export interface VisibleEventView {
   readonly id: string;
   readonly summary: string;
@@ -342,6 +369,95 @@ function normalizeGodMode(source: Record<string, unknown>): GodModeView {
 function unwrapStory(value: unknown): unknown {
   if (!isRecord(value)) return value;
   return Object.prototype.hasOwnProperty.call(value, "story") ? value.story : value;
+}
+
+function normalizeStorySummary(value: unknown): StorySummary {
+  if (!isRecord(value)) throw new Error("Story library contains an invalid story.");
+  const chapterCount = numberAt(value, "chapterCount");
+  const createdAt = stringAt(value, "createdAt");
+  const id = stringAt(value, "id");
+  const povCharacterId = stringAt(value, "povCharacterId");
+  const status = stringAt(value, "status");
+  const title = stringAt(value, "title");
+  const updatedAt = stringAt(value, "updatedAt");
+  if (
+    !/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/u.test(id) ||
+    !povCharacterId ||
+    (status !== "active" && status !== "rejected") ||
+    !title.trim() ||
+    title !== title.trim() ||
+    !Number.isSafeInteger(chapterCount) ||
+    chapterCount < 0 ||
+    chapterCount > 350 ||
+    !createdAt ||
+    !updatedAt ||
+    !Number.isFinite(Date.parse(createdAt)) ||
+    !Number.isFinite(Date.parse(updatedAt)) ||
+    Date.parse(updatedAt) < Date.parse(createdAt)
+  ) {
+    throw new Error("Story library contains an invalid story.");
+  }
+  return {
+    chapterCount,
+    createdAt,
+    id,
+    povCharacterId,
+    status,
+    title,
+    updatedAt,
+  };
+}
+
+function normalizeStoryLibrary(value: unknown): StoryLibraryView {
+  if (!isRecord(value) || !Array.isArray(value.stories)) {
+    throw new Error("Story response is missing its library.");
+  }
+  const stories = value.stories.map(normalizeStorySummary);
+  if (new Set(stories.map(({ id }) => id)).size !== stories.length) {
+    throw new Error("Story library contains duplicate stories.");
+  }
+  const activeStoryId = value.activeStoryId;
+  if (activeStoryId !== null && typeof activeStoryId !== "string") {
+    throw new Error("Story library has an invalid active story.");
+  }
+  if (
+    typeof activeStoryId === "string" &&
+    !stories.some(({ id, status }) => id === activeStoryId && status === "active")
+  ) {
+    throw new Error("Story library has an invalid active story.");
+  }
+  return { activeStoryId, stories };
+}
+
+function normalizeStoryWarnings(value: unknown): readonly StoryWarningView[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error("Story response has invalid warnings.");
+  return value.map((warning) => {
+    if (!isRecord(warning)) throw new Error("Story response has invalid warnings.");
+    const message = stringAt(warning, "message");
+    if (!message) throw new Error("Story response has invalid warnings.");
+    return {
+      code: stringAt(warning, "code"),
+      message,
+      storyId: stringAt(warning, "storyId"),
+    };
+  });
+}
+
+export function normalizeStoryEnvelope(payload: unknown): StoryEnvelope {
+  if (!isRecord(payload) || !Object.hasOwn(payload, "story")) {
+    throw new Error("Story response was not an envelope.");
+  }
+  const library = normalizeStoryLibrary(payload.library);
+  const story = normalizeStoryPayload(payload);
+  if ((story === null) !== (library.activeStoryId === null)) {
+    throw new Error("Story response does not match its active library story.");
+  }
+  return {
+    library,
+    story,
+    warnings: normalizeStoryWarnings(payload.warnings),
+  };
 }
 
 export function normalizeStoryPayload(payload: unknown): StoryView | null {

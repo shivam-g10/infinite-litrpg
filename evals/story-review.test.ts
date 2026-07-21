@@ -1,19 +1,35 @@
-import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 
 import { CHARACTER_IDS, PROMPT_VERSION } from "@infinite-litrpg/shared";
+import Database from "better-sqlite3";
 import { describe, expect, it } from "vitest";
 
-import { createStoryReviewClient, requireStoryReviewLedgerState } from "./run-story-review";
+import { REVIEW_STORY_MODELS } from "../app/src/server/story/story-service";
+import {
+  buildStoryReviewServiceOptions,
+  buildStoryReviewWorkspaceOptions,
+  createStoryReviewWorkspace,
+  createStoryReviewClient,
+  readStoryReviewProgress,
+  requireStoryReviewLedgerState,
+  storyReviewDatabasePath,
+  storyReviewPromptCacheKey,
+  storyReviewStoryId,
+  storyReviewTitle,
+} from "./run-story-review";
 
 import {
   STORY_REVIEW_CHAPTERS_PER_STORY,
   STORY_REVIEW_BRANCH_POLICY,
+  STORY_REVIEW_SCHEMA_VERSION,
   STORY_REVIEW_TOTAL_CAP_USD,
   STORY_REVIEW_VARIANT_CONFIG_SHA256,
   StoryReviewEvidenceSchema,
   StoryReviewSourceEvidenceSchema,
+  assertStoryReviewDatabaseQuality,
   buildStoryReviewChapter,
   buildStoryReviewEvidence,
   buildStoryReviewMarkdown,
@@ -32,6 +48,105 @@ import {
 describe("ten-chapter story review evidence", () => {
   it("disables invisible SDK retries so every provider attempt is reserved", () => {
     expect(createStoryReviewClient("test-key").maxRetries).toBe(0);
+  });
+
+  it("binds the quality variant to exact models, quality gates, and stable POV cache keys", () => {
+    const costHooks = {
+      markUncertain: () => undefined,
+      reserve: () => undefined,
+      settle: () => undefined,
+    };
+
+    expect(buildStoryReviewServiceOptions("rowan-ashborn", costHooks, 0.0848)).toEqual({
+      costHooks,
+      enforceNarrativeQuality: true,
+      maxBackgroundAgents: 3,
+      maxCostUsdPerChapter: 0.0848,
+      modelConfig: REVIEW_STORY_MODELS,
+      nativeMultiAgent: false,
+      promptCacheKey: storyReviewPromptCacheKey("rowan-ashborn"),
+      serviceTier: "flex",
+    });
+    expect(REVIEW_STORY_MODELS).toEqual({
+      audit: { model: "gpt-5.6-terra", reasoningEffort: "low" },
+      frame: { model: "gpt-5.6-sol", reasoningEffort: "low" },
+      narration: { model: "gpt-5.6-sol", reasoningEffort: "low" },
+    });
+    expect(storyReviewPromptCacheKey("rowan-ashborn")).toBe(
+      storyReviewPromptCacheKey("rowan-ashborn"),
+    );
+    expect(storyReviewPromptCacheKey("rowan-ashborn")).not.toBe(
+      storyReviewPromptCacheKey("elara-voss"),
+    );
+  });
+
+  it("uses canonical review story directories without replacing unrelated stories", async () => {
+    const rootDirectory = mkdtempSync(resolve(tmpdir(), "story-review-workspace-"));
+    const client = createStoryReviewClient("test-key");
+    const costHooks = {
+      markUncertain: () => undefined,
+      reserve: () => undefined,
+      settle: () => undefined,
+    };
+    const options = buildStoryReviewWorkspaceOptions(client, costHooks, 0.0848, rootDirectory);
+    const workspace = createStoryReviewWorkspace(client, costHooks, 0.0848, rootDirectory);
+
+    try {
+      expect(options.rootDirectory).toBe(resolve(rootDirectory));
+      expect(typeof options.serviceOptions).toBe("function");
+      await workspace.createStory({
+        id: "imported-ashen-crown",
+        povCharacterId: "rowan-ashborn",
+        title: "Imported Ashen Crown",
+      });
+      const created = await workspace.createStory({
+        id: storyReviewStoryId("rowan-ashborn"),
+        povCharacterId: "rowan-ashborn",
+        title: storyReviewTitle("rowan-ashborn"),
+      });
+      await workspace.close();
+
+      expect(created.metadata.id).toBe("review-rowan-ashborn");
+      expect(created.metadata.title).toBe("Ashen Crown — Rowan Ashborn");
+      expect(storyReviewDatabasePath("rowan-ashborn", rootDirectory)).toBe(
+        resolve(rootDirectory, "review-rowan-ashborn", "story.db"),
+      );
+      expect(existsSync(storyReviewDatabasePath("rowan-ashborn", rootDirectory))).toBe(true);
+      expect(existsSync(resolve(rootDirectory, "imported-ashen-crown", "story.db"))).toBe(true);
+      expect(
+        JSON.parse(readFileSync(resolve(rootDirectory, "library.json"), "utf8")),
+      ).toMatchObject({
+        stories: expect.arrayContaining([
+          expect.objectContaining({ id: "imported-ashen-crown" }),
+          expect.objectContaining({
+            chapterCount: 0,
+            id: "review-rowan-ashborn",
+            povCharacterId: "rowan-ashborn",
+          }),
+        ]),
+      });
+      expect(readStoryReviewProgress("a".repeat(40), rootDirectory)).toEqual({
+        byCharacter: Object.fromEntries(CHARACTER_IDS.map((id) => [id, 0])),
+        completedChapters: 0,
+      });
+    } finally {
+      await workspace.close();
+      rmSync(rootDirectory, { force: true, recursive: true });
+    }
+  });
+
+  it("blocks a provenance-valid pack when one POV fails provider-free quality gates", () => {
+    const databasePath = resolve(tmpdir(), `story-review-quality-${randomUUID()}.db`);
+    writeLoopingStoryDatabase(databasePath);
+    try {
+      expect(() => assertStoryReviewDatabaseQuality("rowan-ashborn", databasePath)).toThrow(
+        /rowan-ashborn.*dialogue-presence.*scene-movement-streak/iu,
+      );
+    } finally {
+      rmSync(databasePath, { force: true });
+      rmSync(`${databasePath}-shm`, { force: true });
+      rmSync(`${databasePath}-wal`, { force: true });
+    }
   });
 
   it("prints recovery first, blocks orphaned active work, and permits charged uncertainty", () => {
@@ -588,17 +703,34 @@ describe("ten-chapter story review evidence", () => {
       byCharacter: emptyProgress,
       completedChapters: 0,
       durableExposureUsd: 0,
+      effectiveChapterCapUsd: 0.0848,
+      fullPlanFitsAuthorizedCap: true,
       maximumAdditionalExposureUsd: 5.088,
       projectedMaximumExposureUsd: 5.088,
       remainingChapters: 60,
+      requestedPlanMaximumExposureUsd: 5.088,
     });
     expect(buildStoryReviewPreflight(partialProgress, 0.2)).toEqual({
       byCharacter: partialProgress,
       completedChapters: 12,
       durableExposureUsd: 0.2,
+      effectiveChapterCapUsd: 0.0848,
+      fullPlanFitsAuthorizedCap: true,
       maximumAdditionalExposureUsd: 4.0704,
       projectedMaximumExposureUsd: 4.2704,
       remainingChapters: 48,
+      requestedPlanMaximumExposureUsd: 4.2704,
+    });
+    expect(buildStoryReviewPreflight(emptyProgress, 0.86713)).toEqual({
+      byCharacter: emptyProgress,
+      completedChapters: 0,
+      durableExposureUsd: 0.86713,
+      effectiveChapterCapUsd: 0.070347833,
+      fullPlanFitsAuthorizedCap: true,
+      maximumAdditionalExposureUsd: 4.22086998,
+      projectedMaximumExposureUsd: 5.08799998,
+      remainingChapters: 60,
+      requestedPlanMaximumExposureUsd: 5.95513,
     });
     expect(() =>
       buildStoryReviewPreflight({ ...emptyProgress, [CHARACTER_IDS[0]]: 11 }, 0),
@@ -657,7 +789,7 @@ function fixtureEvidence() {
       toSourceGitSha: "a".repeat(40),
       variantConfigSha256: STORY_REVIEW_VARIANT_CONFIG_SHA256,
     },
-    schemaVersion: "1.2.0-story-review",
+    schemaVersion: STORY_REVIEW_SCHEMA_VERSION,
     serviceTier: "flex",
     sourceGitSha: "a".repeat(40),
     stories,
@@ -693,4 +825,64 @@ function readCurrentDemo(): {
 
 function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
+}
+
+function writeLoopingStoryDatabase(path: string): void {
+  const database = new Database(path);
+  try {
+    database.exec(`
+      CREATE TABLE chapters (
+        world_id TEXT NOT NULL,
+        chapter INTEGER NOT NULL,
+        record_json TEXT NOT NULL
+      );
+      CREATE TABLE world_deltas (
+        world_id TEXT NOT NULL,
+        chapter INTEGER NOT NULL,
+        delta_json TEXT NOT NULL
+      );
+    `);
+    const insertChapter = database.prepare(
+      "INSERT INTO chapters (world_id, chapter, record_json) VALUES (?, ?, ?)",
+    );
+    const insertDelta = database.prepare(
+      "INSERT INTO world_deltas (world_id, chapter, delta_json) VALUES (?, ?, ?)",
+    );
+    for (let chapter = 1; chapter <= 10; chapter += 1) {
+      insertChapter.run(
+        "ashen-crown-v1",
+        chapter,
+        JSON.stringify({
+          chapter,
+          playerAction: { action: { locationId: "ash-road", type: "investigate" } },
+          povCharacterId: "rowan-ashborn",
+          prose:
+            "Ash Road lay gray beneath the morning while Rowan inspected the same cold trail. He found no answer and returned to the same stone without changing his plan.",
+          title: chapter % 2 === 0 ? "Read the Ash Road" : "Read the Ash Trail",
+        }),
+      );
+      insertDelta.run(
+        "ashen-crown-v1",
+        chapter,
+        JSON.stringify({
+          events: [
+            {
+              locationId: "ash-road",
+              participantIds: ["rowan-ashborn"],
+            },
+          ],
+          knowledgeMutations: [],
+          stateMutations: [
+            {
+              amount: 10,
+              characterId: "rowan-ashborn",
+              type: "gain_xp",
+            },
+          ],
+        }),
+      );
+    }
+  } finally {
+    database.close();
+  }
 }

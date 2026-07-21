@@ -24,6 +24,7 @@ import { FLEX_PRICING_VERSION, PRICING_VERSION } from "../openai/usage";
 import { StoryStore } from "../storage/story-store";
 import {
   canonicalizeNarrativeAuditOutput,
+  REVIEW_STORY_MODELS,
   type NarrativeCandidateEvidence,
   type NarrativeResponseEvidence,
   type NarrativeTurnIdentity,
@@ -55,6 +56,94 @@ describe("StoryService", () => {
 
     expect(() => service.selectPov("elara-voss")).toThrowError(StoryServiceError);
     expect(service.getStory()?.pov.id).toBe("rowan-ashborn");
+    store.close();
+  });
+
+  it("routes review generation through Sol and Terra with complete prior chapter history", async () => {
+    const store = new StoryStore();
+    const firstProse = exactWordCount(
+      'Cold rain crossed the road. "Tell me every mark you saw beside the old well before the raiders crossed our fire line," Rowan said. "I saw blue glass buried under ash, and I refuse to hide that trail from you again," Nyra answered. [System: Experience gained] Rowan chose to trust her warning.',
+      900,
+      "ember",
+    );
+    const secondProse = exactWordCount(
+      'Beyond the gate, smoke gathered. "The trail turns east toward the broken watchtower, where three fresh boot prints leave the road," Nyra said. "Then we follow before dawn, but I promise we turn back if the ash starts moving," Rowan answered. [System: Experience gained] Rowan decided the risk was his.',
+      900,
+      "cinder",
+    );
+    const frames = [
+      { choices: [], terminal: false, title: "Rain Over Cinder" },
+      { choices: [], terminal: false, title: "Smoke Beyond the Gate" },
+    ] as const;
+    const audits = [firstProse, secondProse].map((prose) => approvedAudit(prose));
+    const create = vi
+      .fn()
+      .mockResolvedValueOnce(parsedResponse(frames[0], "resp_review_frame_1"))
+      .mockResolvedValueOnce(parsedResponse(audits[0], "resp_review_audit_1"))
+      .mockResolvedValueOnce(parsedResponse(frames[1], "resp_review_frame_2"))
+      .mockResolvedValueOnce(parsedResponse(audits[1], "resp_review_audit_2"));
+    const stream = vi
+      .fn()
+      .mockReturnValueOnce(fakeStream(firstProse, "resp_review_narration_1"))
+      .mockReturnValueOnce(fakeStream(secondProse, "resp_review_narration_2"));
+    const service = new StoryService(
+      store,
+      { responses: { create, stream } } as unknown as OpenAI,
+      {
+        ...options(),
+        enforceNarrativeQuality: true,
+        modelConfig: REVIEW_STORY_MODELS,
+        promptCacheKey: "story:test-review",
+      },
+    );
+    let view = service.selectPov("rowan-ashborn");
+
+    for (let chapter = 1; chapter <= 2; chapter += 1) {
+      const choice = view.chapter.choices[0];
+      if (!choice) throw new Error("Review model-routing test lacks a choice");
+      view = await service.takeTurn({
+        choiceId: choice.id,
+        expectedWorldVersion: chapter,
+        requestId: `00000000-0000-4000-8000-${String(400 + chapter).padStart(12, "0")}`,
+        type: "take_action",
+      });
+    }
+
+    expect(create.mock.calls.map(([body]) => (body as { model: string }).model)).toEqual([
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+    ]);
+    expect(stream.mock.calls.map(([body]) => (body as { model: string }).model)).toEqual([
+      "gpt-5.6-sol",
+      "gpt-5.6-sol",
+    ]);
+    expect(
+      stream.mock.calls.map(
+        ([body]) => (body as { reasoning: { effort: string } }).reasoning.effort,
+      ),
+    ).toEqual(["low", "low"]);
+    expect(create.mock.calls[2]?.[0]).toMatchObject({
+      prompt_cache_key: "story:test-review",
+      prompt_cache_options: { mode: "implicit", ttl: "30m" },
+    });
+    const secondNarrationInput = JSON.parse(
+      (stream.mock.calls[1]?.[0] as { input: string }).input,
+    ) as { chapterBrief: { storyHistory: Array<{ prose: string; title: string }> } };
+    for (const input of [
+      JSON.parse((create.mock.calls[2]?.[0] as { input: string }).input) as {
+        storyHistory: Array<{ prose: string; title: string }>;
+      },
+      secondNarrationInput.chapterBrief,
+      JSON.parse((create.mock.calls[3]?.[0] as { input: string }).input) as {
+        storyHistory: Array<{ prose: string; title: string }>;
+      },
+    ]) {
+      expect(input.storyHistory[0]?.prose).toBe(firstProse);
+      expect(input.storyHistory[0]?.title).toBe("Rain Over Cinder");
+    }
+    expect(view.chapter.title).toBe("Smoke Beyond the Gate");
     store.close();
   });
 
@@ -168,6 +257,97 @@ describe("StoryService", () => {
     ).rejects.toThrow("milestone");
     expect(create).toHaveBeenCalledTimes(1);
     expect(stream).toHaveBeenCalledTimes(1);
+    store.close();
+  });
+
+  it("rewrites only the latest prose, commits before replay, and reuses the request ID", async () => {
+    const store = new StoryStore();
+    const originalProse = exactWordCount(
+      "Rowan crossed the quiet road and chose caution.",
+      900,
+      "ash",
+    );
+    const originalFrame = {
+      choices: [],
+      terminal: false,
+      title: "First Cinder Crossing",
+    } as const;
+    const originalCreate = vi
+      .fn()
+      .mockResolvedValueOnce(parsedResponse(originalFrame, "resp_original_frame"))
+      .mockResolvedValueOnce(parsedResponse(approvedAudit(originalProse), "resp_original_audit"));
+    const originalStream = vi
+      .fn()
+      .mockReturnValueOnce(fakeStream(originalProse, "resp_original_narration"));
+    const originalService = new StoryService(
+      store,
+      { responses: { create: originalCreate, stream: originalStream } } as unknown as OpenAI,
+      options(),
+    );
+    const selected = originalService.selectPov("rowan-ashborn");
+    const openingChoice = selected.chapter.choices[0];
+    if (!openingChoice) throw new Error("Opening choice missing");
+    await originalService.takeTurn({
+      choiceId: openingChoice.id,
+      expectedWorldVersion: 1,
+      requestId: "00000000-0000-4000-8000-000000000451",
+      type: "take_action",
+    });
+    const worldBefore = store.loadWorldState("ashen-crown-v1");
+    const chapterBefore = store.loadChapter("ashen-crown-v1", 1);
+    if (!worldBefore || !chapterBefore) throw new Error("Original chapter missing");
+
+    const replacementProse = exactWordCount(
+      'Rain sharpened the empty road. "I will carry the danger," Rowan said. "Then I will remember that promise," the System answered. [System: Experience gained] Rowan chose restraint over the old hunger for command.',
+      900,
+      "ember",
+    );
+    const rerollCreate = vi
+      .fn()
+      .mockResolvedValueOnce(parsedResponse(approvedAudit(replacementProse), "resp_reroll_audit"));
+    const rerollStream = vi
+      .fn()
+      .mockReturnValueOnce(fakeStream(replacementProse, "resp_reroll_narration"));
+    const rerollService = new StoryService(
+      store,
+      { responses: { create: rerollCreate, stream: rerollStream } } as unknown as OpenAI,
+      {
+        ...options(),
+        enforceNarrativeQuality: true,
+        modelConfig: REVIEW_STORY_MODELS,
+      },
+    );
+    const replayed: string[] = [];
+    const rerollRequest = {
+      expectedWorldVersion: worldBefore.version,
+      requestId: "00000000-0000-4000-8000-000000000452",
+    } as const;
+
+    const rewritten = await rerollService.rerollLatest(rerollRequest, (chunk) => {
+      expect(store.loadChapter("ashen-crown-v1", 1)?.prose).toBe(replacementProse);
+      replayed.push(chunk);
+    });
+    const chapterAfter = store.loadChapter("ashen-crown-v1", 1);
+    if (!chapterAfter) throw new Error("Rewritten chapter missing");
+
+    expect(store.loadWorldState("ashen-crown-v1")).toEqual(worldBefore);
+    expect(chapterAfter).toMatchObject({
+      choices: chapterBefore.choices,
+      playerAction: chapterBefore.playerAction,
+      prose: replacementProse,
+      title: chapterBefore.title,
+    });
+    expect(chapterAfter.traceId).not.toBe(chapterBefore.traceId);
+    expect(store.loadChapterRevisions("ashen-crown-v1", 1)).toHaveLength(1);
+    expect(replayed.join("")).toBe(replacementProse);
+    expect(rewritten.chapter.prose).toBe(replacementProse);
+    expect(rerollStream.mock.calls[0]?.[0]).toMatchObject({ model: "gpt-5.6-sol" });
+    expect(rerollCreate.mock.calls[0]?.[0]).toMatchObject({ model: "gpt-5.6-terra" });
+
+    const idempotent = await rerollService.rerollLatest(rerollRequest);
+    expect(idempotent.chapter.prose).toBe(replacementProse);
+    expect(rerollStream).toHaveBeenCalledTimes(1);
+    expect(rerollCreate).toHaveBeenCalledTimes(1);
     store.close();
   });
 
@@ -2003,6 +2183,28 @@ function options() {
     maxCostUsdPerChapter: 1,
     nativeMultiAgent: false,
   } as const;
+}
+
+function approvedAudit(prose: string): NarrativeAudit {
+  return {
+    approved: true,
+    evidence: NARRATIVE_AUDIT_DIMENSIONS.map((dimension) => ({
+      detail: "pass",
+      dimension,
+      issueCode: "pass",
+    })),
+    leakedFactIds: [],
+    proseHash: createHash("sha256").update(prose).digest("hex"),
+    scores: {
+      arcProgress: 2,
+      characterAutonomy: 2,
+      choiceFulfillment: 2,
+      continuity: 2,
+      litrpgMechanics: 2,
+      povSafety: 2,
+      prose: 2,
+    },
+  };
 }
 
 function exactWordCount(seed: string, count: number, filler: string): string {

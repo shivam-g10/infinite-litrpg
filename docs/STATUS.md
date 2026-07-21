@@ -1,37 +1,28 @@
 # Status
 
-- Updated: 2026-07-21
-- Layer: Product UX hardening
-- Current phase: Local application ready for human testing; story-quality evals deferred by user
-- Repository: initialized on `main`
-- Remote: public `https://github.com/shivam-g10/infinite-litrpg`; current local build not pushed
-- Initial commit: `39b19a2` (`chore: scaffold agent workflow`)
-- App: strict Next.js Reader with saved-chapter history, one-chapter live generation, optional continuation through chapter 100, deterministic engine, and SQLite store
-- Live API: the root key is configured. The visible Rowan chapter is restored evidence, so page load makes zero OpenAI calls. Creating the next chapter is the first live request in a fresh browser session.
-- Evals: offline suite green; new paid story-quality runs deferred by user
-- Build Week deadline: 2026-07-22 05:30 IST
+## 2026-07-21 Human Review Recovery
 
-## Verified
+- Current phase: code-complete candidate with every non-live code gate green, then one already-authorized capped six-by-ten generation run.
+- The rejected baseline is frozen at `evals/baselines/story-quality-chapters-1-18.json`: sparse dialogue, no meaningful character movement, no explicit System, repeated openings and titles, one-location loops, and weak progression.
+- Prompt `1.5.0` gives the frame, narrator, and audit every prior chapter. Sol low reasoning frames and narrates; Terra low reasoning audits; up to three Luna agents emit POV-safe background intent. Runtime validation blocks repeated titles and opening templates across the full history.
+- The 26-gate story check covers dialogue, character development, explicit LitRPG System presence, title and opening novelty, action and progression diversity, scene movement, and prose novelty. Human review remains final authority for interest and pacing.
+- Reader UX now stays pinned during background generation, hides cost and token noise, rewrites the latest prose without changing canon, and keeps Developer details secondary. The story library can start, switch, reject, reopen, and restart drafts, including recovery after rejecting the only draft.
+- Every story is stored under ignored `stories/<story-id>/` with canonical `story.db` and one `chapter-###.md` projection per committed chapter. The old `data/ashen-crown.db` is copied once through SQLite backup and preserved.
+- The canceled settings and API-key UI is gone. The key remains server-side in root `.env`.
+- Authorized hard aggregate exposure remains `$5.088`, including `$0.86713` carried spend. Fair-share ceiling is `$0.070347833` for each of 60 remaining chapters: `$5.08799998` maximum cumulative exposure. No new provider request has run in this recovery slice yet.
+- Current local build is not pushed.
 
-- Repository root is `code/infinite-litrpg`, not parent `code` directory.
-- Codex reads canonical `AGENTS.md`.
-- Subagent cap and one-level nesting configured.
-- `.env` ignored and `.env.example` safe.
-- Runtime model roles limited to GPT-5.6 family.
+## Current Blocker
 
-## Current Blockers
-
-- No application blocker remains for local human testing.
-- `docs/SAMPLE_STORIES.md` and `docs/story-review-evidence.json` contain six authenticated ten-chapter stories. Automated provenance passes. Human review marked every story `revise`, so this is rejected baseline evidence, not demo copy.
-- Human review passed only Rowan chapters 1–2, Elara chapter 1, Maelin chapters 1–3, Varek chapters 1–3 and 6, Lucan chapter 1, and Nyra chapters 1–2. Failures include stalled arcs, repeated no-result actions, uncommitted skill and mana claims, wrong inventory and mana snapshots, route reversals, invented knowledge, and Varek learning Nyra's private class.
-- Current-prompt native Multi-agent proof, a human-approved corrected six-POV report, the six ten-chapter progression verdicts, real-click video approval, feedback session ID, push, and submission remain release gates. The Reader UI can still be tested locally; narrative progression review cannot start.
+- The tracked six-by-ten packet is the human-rejected prompt `1.4.12` baseline. Human review is not ready until prompt `1.5.0` regenerates all 60 chapters, all automated gates pass, and the six stories are read again.
 
 ## Next Action
 
-Human-test the Reader at `http://localhost:3000`. Click **Create chapter 2** to prove the configured key with one live request. Review saved chapters with Previous, Next, or the chapter picker. Open **Create several chapters** only when testing automatic continuation. Resume story-quality eval work later.
+Create the clean checkpoint. Run the provider-free lineage migration and preflight. Then run the already-authorized paid command exactly once. Stop after the corrected packet, browser demo artifacts, and human review are ready.
 
 ## Evidence Log
 
+- 2026-07-21 prompt `1.5.0` non-live gate: format, lint, strict typecheck, production build, `git diff --check`, both security scans, license inventory, and dependency audit exited 0. Vitest passed 513 tests across 26 files. Offline eval passed 14 invariant cases, 35 clock transitions, 12 POV checks, 1,000 simulations, and the chapter-350 terminal with chapter 351 blocked. Playwright passed 39 tests with one intentional desktop-only skip across Chromium and Pixel 7. The only expected red command is `review:stories:check`, because it correctly rejects the old prompt `1.4.12` packet before paid replacement. No provider request ran.
 - 2026-07-21 application UX: proved the visible Rowan chapter is seeded SQLite evidence and page load makes no provider request. Added explicit local-save versus live-OpenAI status, API-key readiness, lazy saved-chapter review, one-chapter primary generation, and secondary exact-cost continuation through chapter 100. Historical chapter reads expose only chapter number, title, and POV-safe prose; actions remain on the latest chapter.
 - 2026-07-21 application verification: `npm run format:check`, `npm run typecheck`, `npm run lint`, `npm run test`, and `npm run build` exited 0. Vitest passed 317 tests. The final `npm run test:e2e` passed 27 tests with one intentional desktop skip across desktop and mobile. Browser inspection verified Reader, saved-chapter status, one-chapter control, optional 46-chapter disclosure, and God Mode. Secret and client-bundle scans passed. No paid request ran in this UX slice.
 - 2026-07-19: Git root resolved to `D:/Work/Consulting/KodingKorp/code/infinite-litrpg`.

@@ -34,7 +34,7 @@ const ROWAN_IDENTITY_PROSE = `Rowan knew he was Malachar reincarnated. ${"Ash ".
 
 describe("background actor selection", () => {
   it("versions and losslessly compacts every live agent and frame prompt", () => {
-    expect(PROMPT_VERSION).toBe("1.4.12");
+    expect(PROMPT_VERSION).toBe("1.5.0");
     const backgroundFormat = zodTextFormat(BackgroundIntentCandidateSchema, "background_intent");
     const frameFormat = zodTextFormat(ChapterFrameModelCandidateSchema, "chapter_frame_candidate");
     expect(JSON.stringify(frameFormat)).not.toMatch(/"items":\[/u);
@@ -320,6 +320,8 @@ describe("background actor selection", () => {
       "world.threat",
       "The seal beneath the old Demon Throne is weakening.",
     );
+    expect(prompt).toHaveProperty("world.systemQuest.id", "act-one-survival");
+    expect(narration.instruction).toContain("named current System quest");
   });
 
   it("keeps Rowan private canon forbidden outside Rowan POV", () => {
@@ -651,6 +653,62 @@ describe("background actor selection", () => {
       expect(prompt).not.toContain("malachar-contained-the-void");
       expect(prompt).not.toContain("Reveal why Malachar");
     }
+  });
+
+  it("sends every prior POV chapter to frame, narrator, and audit but never background actors", () => {
+    const state = seed();
+    state.lockedPovId = "rowan-ashborn";
+    const history = [
+      {
+        action: { destinationId: "ash-road", type: "move" } as const,
+        actionDescription: "Leave Cinder Village for Ash Road.",
+        chapter: 1,
+        prose: "First exact prior chapter prose with Nyra's warning.",
+        title: "The Road Out",
+      },
+      {
+        action: { subjectId: "ash-road", type: "investigate" } as const,
+        actionDescription: "Study the blue glass in the ruts.",
+        chapter: 2,
+        prose: "Second exact prior chapter prose with the first System answer.",
+        title: "Blue Glass",
+      },
+    ];
+    const firstHistory = history[0];
+    const secondHistory = history[1];
+    if (!firstHistory || !secondHistory) throw new Error("History fixture is incomplete");
+    const action = {
+      action: { type: "wait" } as const,
+      actorId: "rowan-ashborn",
+      description: "Wait and watch.",
+      milestoneId: null,
+      source: "suggested" as const,
+      stateVersion: state.version,
+    };
+    const delta = emptyDelta(state);
+    const frame = {
+      choices: buildChapterChoiceOptions(state).slice(0, 2),
+      terminal: false,
+      title: "A Different Opening",
+    };
+
+    const prompts = [
+      buildChapterFramePrompt(state, history),
+      buildNarrationPrompt(state, state, action, delta, history),
+      buildAuditPrompt(state, state, action, delta, frame, "Current candidate prose.", history),
+    ];
+    for (const prompt of prompts) {
+      const payload = JSON.parse(prompt) as Record<string, unknown>;
+      expect(payload.storyHistory).toHaveLength(2);
+      expect(prompt).toContain(firstHistory.prose);
+      expect(prompt).toContain(secondHistory.prose);
+      expect(prompt).toContain(firstHistory.title);
+      expect(prompt).toContain(secondHistory.title);
+    }
+
+    const background = buildLunaAgentInputs(state, selectBackgroundActors(state));
+    expect(JSON.stringify(background)).not.toContain(firstHistory.prose);
+    expect(JSON.stringify(background)).not.toContain(secondHistory.prose);
   });
 
   it("bounds a tail-only 750-word narration recovery request", () => {

@@ -1,32 +1,35 @@
 import { getStoryRuntime } from "@/server/story/runtime";
+import { storyErrorResponse } from "@/server/story/story-http";
 import { StoryServiceError } from "@/server/story/story-service";
 
 export const dynamic = "force-dynamic";
 
-export function GET(request: Request) {
+export async function GET(request: Request) {
   try {
-    const format = new URL(request.url).searchParams.get("format");
-    const scope = new URL(request.url).searchParams.get("scope") === "god" ? "god" : "reader";
+    const parameters = new URL(request.url).searchParams;
+    const format = parameters.get("format");
+    const scope = parameters.get("scope") === "god" ? "god" : "reader";
+    const runtime = await getStoryRuntime();
+    const storyId = parameters.get("storyId") ?? runtime.workspace.getActiveStoryMetadata()?.id;
+    if (storyId === undefined) throw new StoryServiceError("No active story exists", 404);
+    const filename = storyId.replace(/[^a-z0-9-]/gu, "-");
     if (format === "json") {
       return download(
-        getStoryRuntime().service.exportJson(scope),
+        await runtime.workspace.exportJson(storyId, scope),
         "application/json",
-        scope === "god" ? "ashencrown-god-mode.json" : "ashencrown-reader.json",
+        scope === "god" ? `${filename}-developer.json` : `${filename}-reader.json`,
       );
     }
     if (format === "markdown") {
       return download(
-        getStoryRuntime().service.exportMarkdown(),
+        await runtime.workspace.exportMarkdown(storyId),
         "text/markdown; charset=utf-8",
-        "ashencrown.md",
+        `${filename}.md`,
       );
     }
     return Response.json({ error: "Format must be markdown or json" }, { status: 400 });
   } catch (error) {
-    if (error instanceof StoryServiceError) {
-      return Response.json({ error: error.message }, { status: error.status });
-    }
-    return Response.json({ error: "Export failed safely" }, { status: 500 });
+    return storyErrorResponse(error);
   }
 }
 

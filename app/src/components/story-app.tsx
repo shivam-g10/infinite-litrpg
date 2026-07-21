@@ -12,8 +12,9 @@ import { StoryShell, type StoryCommand } from "./story-shell";
 import {
   errorMessageFromPayload,
   normalizeReaderChapterPayload,
-  normalizeStoryPayload,
+  normalizeStoryEnvelope,
   type ReaderChapterView,
+  type StoryLibraryView,
   type StoryView,
 } from "./story-types";
 
@@ -24,7 +25,15 @@ interface StoryAppProps {
 
 type RequestDescriptor =
   | { readonly kind: "load" }
-  | { readonly characterId: CharacterId; readonly kind: "lock" }
+  | { readonly characterId: CharacterId; readonly kind: "create" }
+  | {
+      readonly command: {
+        readonly storyId: string;
+        readonly type: "activate" | "reject" | "reopen" | "restart";
+      };
+      readonly kind: "library";
+      readonly openPickerAfter?: boolean;
+    }
   | {
       readonly command: StoryCommand & {
         readonly expectedWorldVersion: number;
@@ -33,8 +42,9 @@ type RequestDescriptor =
       readonly kind: "command";
     };
 
-type BusyState = "loading" | "locking" | "turn" | null;
+type BusyState = "library" | "loading" | "locking" | "turn" | null;
 const MAX_STREAM_BYTES = 1_000_000;
+const EMPTY_LIBRARY: StoryLibraryView = { activeStoryId: null, stories: [] };
 
 async function readPayload(
   response: Response,
@@ -81,7 +91,7 @@ async function readStoryStream(
       return;
     }
     if (event.type === "story") {
-      result = { story: event.story };
+      result = { library: event.library, story: event.story, warnings: event.warnings };
       sawStory = true;
       return;
     }
@@ -115,6 +125,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export function StoryApp({ apiKeyConfigured, characters }: StoryAppProps) {
   const [story, setStory] = useState<StoryView | null>(null);
+  const [library, setLibrary] = useState<StoryLibraryView>(EMPTY_LIBRARY);
+  const [libraryWarnings, setLibraryWarnings] = useState<readonly string[]>([]);
+  const [showStoryPicker, setShowStoryPicker] = useState(false);
   const [receivedProse, setReceivedProse] = useState(false);
   const [busy, setBusy] = useState<BusyState>("loading");
   const [error, setError] = useState<string | null>(null);
@@ -124,6 +137,7 @@ export function StoryApp({ apiKeyConfigured, characters }: StoryAppProps) {
   const [reviewError, setReviewError] = useState<string | null>(null);
   const [automaticRun, setAutomaticRun] = useState(false);
   const [generationChapter, setGenerationChapter] = useState<number | null>(null);
+  const [generationMode, setGenerationMode] = useState<"generate" | "rewrite">("generate");
   const [runMessage, setRunMessage] = useState<string | null>(null);
   const [stopRequested, setStopRequested] = useState(false);
   const [failedRequestKind, setFailedRequestKind] = useState<RequestDescriptor["kind"] | null>(
@@ -134,12 +148,16 @@ export function StoryApp({ apiKeyConfigured, characters }: StoryAppProps) {
   const stopRequestedRef = useRef(false);
   const chapterCache = useRef(new Map<number, ReaderChapterView>());
   const chapterReviewController = useRef<AbortController | null>(null);
+  const activeStoryId = useRef<string | null>(null);
 
   const performRequest = useCallback(async (request: RequestDescriptor, signal?: AbortSignal) => {
     lastRequest.current = request;
-    chapterReviewController.current?.abort();
-    chapterReviewController.current = null;
-    setReviewBusy(false);
+    const keepReaderPosition = request.kind === "command" && automaticRunActive.current;
+    if (!keepReaderPosition) {
+      chapterReviewController.current?.abort();
+      chapterReviewController.current = null;
+      setReviewBusy(false);
+    }
     setError(null);
     setFailedRequestKind(null);
     if (request.kind === "command") setReceivedProse(false);
@@ -149,8 +167,8 @@ export function StoryApp({ apiKeyConfigured, characters }: StoryAppProps) {
         ? { cache: "no-store", method: "GET", ...(signal ? { signal } : {}) }
         : {
             body: JSON.stringify(
-              request.kind === "lock"
-                ? { povCharacterId: request.characterId, type: "select_pov" }
+              request.kind === "create"
+                ? { povCharacterId: request.characterId, type: "create" }
                 : request.command,
             ),
             headers: {
@@ -162,7 +180,9 @@ export function StoryApp({ apiKeyConfigured, characters }: StoryAppProps) {
           };
 
     try {
-      const response = await fetch("/api/story", init);
+      const endpoint =
+        request.kind === "create" || request.kind === "library" ? "/api/stories" : "/api/story";
+      const response = await fetch(endpoint, init);
       const payload = await readPayload(
         response,
         request.kind === "command" ? () => setReceivedProse(true) : undefined,
@@ -173,14 +193,36 @@ export function StoryApp({ apiKeyConfigured, characters }: StoryAppProps) {
         );
       }
 
-      const nextStory = normalizeStoryPayload(payload);
-      if (request.kind !== "load" && !nextStory) {
-        throw new Error("Story server did not return the locked world.");
+      const envelope = normalizeStoryEnvelope(payload);
+      const nextStory = envelope.story;
+      if (
+        (request.kind === "create" ||
+          (request.kind === "library" && request.command.type !== "reject")) &&
+        !nextStory
+      ) {
+        throw new Error("Story server did not return the active story.");
+      }
+      const storyChanged = activeStoryId.current !== envelope.library.activeStoryId;
+      activeStoryId.current = envelope.library.activeStoryId;
+      if (storyChanged) {
+        chapterReviewController.current?.abort();
+        chapterReviewController.current = null;
+        chapterCache.current.clear();
+        setReviewedChapter(null);
+        setReviewBusy(false);
+        setReviewError(null);
+        setRunMessage(null);
       }
       setStory(nextStory);
+      setLibrary(envelope.library);
+      setLibraryWarnings(envelope.warnings.map(({ message }) => message));
       setReceivedProse(false);
-      setReviewedChapter(null);
-      setReviewError(null);
+      if (!keepReaderPosition && !storyChanged) {
+        setReviewedChapter(null);
+        setReviewError(null);
+      }
+      if (request.kind === "create") setShowStoryPicker(false);
+      if (request.kind === "library") setShowStoryPicker(Boolean(request.openPickerAfter));
       setChapterSource(request.kind === "command" ? "live" : "local");
       if (nextStory?.chapter && nextStory.world.chapter > 0) {
         chapterCache.current.set(nextStory.world.chapter, {
@@ -189,7 +231,7 @@ export function StoryApp({ apiKeyConfigured, characters }: StoryAppProps) {
           title: nextStory.chapter.title,
         });
       }
-      return { ok: true as const, story: nextStory };
+      return { library: envelope.library, ok: true as const, story: nextStory };
     } catch (requestError) {
       if (requestError instanceof DOMException && requestError.name === "AbortError") {
         return { aborted: true as const, ok: false as const };
@@ -203,7 +245,15 @@ export function StoryApp({ apiKeyConfigured, characters }: StoryAppProps) {
 
   const runRequest = useCallback(
     async (request: RequestDescriptor, signal?: AbortSignal) => {
-      setBusy(request.kind === "load" ? "loading" : request.kind === "lock" ? "locking" : "turn");
+      setBusy(
+        request.kind === "load"
+          ? "loading"
+          : request.kind === "create"
+            ? "locking"
+            : request.kind === "library"
+              ? "library"
+              : "turn",
+      );
       if (request.kind === "command") setRunMessage(null);
       try {
         return await performRequest(request, signal);
@@ -224,8 +274,35 @@ export function StoryApp({ apiKeyConfigured, characters }: StoryAppProps) {
   }, [runRequest]);
 
   const retry = useCallback(() => {
-    void runRequest(lastRequest.current);
-  }, [runRequest]);
+    const request = lastRequest.current;
+    if (request.kind === "command" && story) {
+      const rewriting = request.command.type === "reroll_latest";
+      setGenerationMode(rewriting ? "rewrite" : "generate");
+      setGenerationChapter(rewriting ? story.world.chapter : story.world.chapter + 1);
+    }
+    void runRequest(request);
+  }, [runRequest, story]);
+
+  const startNewStory = useCallback(() => {
+    setError(null);
+    setFailedRequestKind(null);
+    setShowStoryPicker(true);
+  }, []);
+
+  const runLibraryCommand = useCallback(
+    (
+      type: "activate" | "reject" | "reopen" | "restart",
+      storyId: string,
+      openPickerAfter = false,
+    ) => {
+      void runRequest({
+        command: { storyId, type },
+        kind: "library",
+        ...(openPickerAfter ? { openPickerAfter: true } : {}),
+      });
+    },
+    [runRequest],
+  );
 
   const continueToDecision = useCallback(async () => {
     if (
@@ -238,6 +315,16 @@ export function StoryApp({ apiKeyConfigured, characters }: StoryAppProps) {
     }
     automaticRunActive.current = true;
     stopRequestedRef.current = false;
+    setGenerationMode("generate");
+    if (story.chapter) {
+      const pinnedChapter = {
+        chapter: story.world.chapter,
+        prose: story.chapter.prose,
+        title: story.chapter.title,
+      };
+      chapterCache.current.set(pinnedChapter.chapter, pinnedChapter);
+      setReviewedChapter(pinnedChapter);
+    }
     setAutomaticRun(true);
     setStopRequested(false);
     setRunMessage(null);
@@ -322,16 +409,25 @@ export function StoryApp({ apiKeyConfigured, characters }: StoryAppProps) {
         setReviewBusy(false);
         return;
       }
+      const storyId = library.activeStoryId;
+      if (!storyId) {
+        setReviewError("No active story is available.");
+        setReviewBusy(false);
+        return;
+      }
       const controller = new AbortController();
       chapterReviewController.current = controller;
       setReviewBusy(true);
       setReviewError(null);
       try {
-        const response = await fetch(`/api/story?chapter=${chapterNumber}`, {
-          cache: "no-store",
-          method: "GET",
-          signal: controller.signal,
-        });
+        const response = await fetch(
+          `/api/story?chapter=${chapterNumber}&storyId=${encodeURIComponent(storyId)}`,
+          {
+            cache: "no-store",
+            method: "GET",
+            signal: controller.signal,
+          },
+        );
         const payload = await readPayload(response);
         if (!response.ok) {
           throw new Error(
@@ -358,8 +454,12 @@ export function StoryApp({ apiKeyConfigured, characters }: StoryAppProps) {
         }
       }
     },
-    [story],
+    [library.activeStoryId, story],
   );
+
+  const latestRejectedStory = library.stories
+    .filter(({ status }) => status === "rejected")
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
 
   if (busy === "loading" && !story && !error) {
     return (
@@ -387,29 +487,60 @@ export function StoryApp({ apiKeyConfigured, characters }: StoryAppProps) {
     );
   }
 
-  if (!story) {
+  if (!story || showStoryPicker) {
     return (
       <CharacterSelection
         apiKeyConfigured={apiKeyConfigured}
         busy={busy === "locking"}
+        {...(!story && latestRejectedStory
+          ? {
+              cancelLabel: "Reopen previous draft",
+              onCancel: () => runLibraryCommand("reopen", latestRejectedStory.id),
+            }
+          : {})}
         characters={characters}
         error={error}
-        onLock={(characterId) => void runRequest({ characterId, kind: "lock" })}
+        {...(story && showStoryPicker ? { onCancel: () => setShowStoryPicker(false) } : {})}
+        onLock={(characterId) => void runRequest({ characterId, kind: "create" })}
         onRetry={retry}
       />
     );
   }
 
+  const activeStory = library.stories.find(({ id }) => id === library.activeStoryId);
+  if (!activeStory) {
+    return (
+      <main className="error-screen">
+        <span aria-hidden="true" className="error-mark">
+          !
+        </span>
+        <h1>Story library is out of sync.</h1>
+        <button onClick={() => void runRequest({ kind: "load" })} type="button">
+          Reload library
+        </button>
+      </main>
+    );
+  }
+
   return (
     <StoryShell
+      activeStory={activeStory}
       apiKeyConfigured={apiKeyConfigured}
       automaticRun={automaticRun}
       busy={busy === "turn"}
       chapterSource={chapterSource}
-      error={error}
+      error={failedRequestKind === "command" ? error : null}
       generationChapter={generationChapter}
+      generationMode={generationMode}
+      key={activeStory.id}
+      libraryBusy={busy !== null}
+      libraryError={failedRequestKind === "library" ? error : null}
+      libraryWarnings={libraryWarnings}
+      onActivateStory={(storyId) => runLibraryCommand("activate", storyId)}
       onCommand={(command) => {
-        setGenerationChapter(story.world.chapter + 1);
+        const rewriting = command.type === "reroll_latest";
+        setGenerationMode(rewriting ? "rewrite" : "generate");
+        setGenerationChapter(rewriting ? story.world.chapter : story.world.chapter + 1);
         void runRequest({
           command: {
             ...command,
@@ -420,14 +551,19 @@ export function StoryApp({ apiKeyConfigured, characters }: StoryAppProps) {
         });
       }}
       onContinue={() => void continueToDecision()}
+      onNewStory={startNewStory}
+      onReopenStory={(storyId) => runLibraryCommand("reopen", storyId)}
       onReviewChapter={(chapter) => void reviewChapter(chapter)}
+      onRestartStory={(storyId) => runLibraryCommand("restart", storyId)}
       onRetry={retry}
       onStop={stopAfterCurrentChapter}
+      onTryAnother={(storyId) => runLibraryCommand("reject", storyId, true)}
       receivedProse={receivedProse}
       reviewBusy={reviewBusy}
       reviewError={reviewError}
       reviewedChapter={reviewedChapter}
       runMessage={runMessage}
+      stories={library.stories}
       story={story}
       stopRequested={stopRequested}
     />

@@ -10,7 +10,7 @@ AI generates chapter prose and background-character intents. Deterministic appli
 
 - Node.js 24 or newer
 - npm 11 or newer
-- An OpenAI API key with GPT-5.6 Terra and Luna access
+- An OpenAI API key with GPT-5.6 Sol, Terra, and Luna access
 
 ## Run locally
 
@@ -25,7 +25,7 @@ Put the key in root `.env`:
 
 ```dotenv
 OPENAI_API_KEY=
-OPENAI_MAX_COST_USD_PER_CHAPTER=0.10
+OPENAI_MAX_COST_USD_PER_CHAPTER=0.20
 OPENAI_MAX_BACKGROUND_AGENTS=3
 OPENAI_NATIVE_MULTI_AGENT=false
 ```
@@ -38,9 +38,11 @@ Start the app:
 npm run dev
 ```
 
-Open `http://127.0.0.1:3000`. Choose one of six characters. The viewpoint locks for that local world. After the opening action, the reader can create routine chapters one at a time until the next meaningful act decision. The demo flow pauses after chapters 47 and 97 and stops at chapter 100. Runtime state stays in ignored `data/ashen-crown.db`.
+Open `http://127.0.0.1:3000`. Choose one of six characters. The viewpoint locks for that story. Continue one chapter or let routine chapters build in the background until the next meaningful decision. The Reader stays on the chapter you are reading. The demo flow pauses after chapters 47 and 97 and stops at chapter 100.
 
-For a no-cost seeded UI review, the exact chapter-100 behavior proof, and the live cost boundary, use the [human review guide](docs/HUMAN_REVIEW.md). The current [sample file](docs/SAMPLE_STORIES.md) contains one reviewed excerpt per POV and is not sufficient for progression signoff. The required provenance-checked six-by-ten pack is pending its separately capped live run.
+Each local story lives under ignored `stories/<story-id>/`: canonical state in `story.db`, plus one readable `chapter-###.md` file per committed chapter. The story library can start, switch, reject, reopen, or restart drafts. Rewriting the latest chapter changes prose only; accepted canon stays fixed.
+
+For the no-cost UI review, exact chapter-100 behavior proof, and capped live review command, use the [human review guide](docs/HUMAN_REVIEW.md). The [sample file](docs/SAMPLE_STORIES.md) is the six-story progression packet. Its status is recorded in [current status](docs/STATUS.md).
 
 Set `OPENAI_NATIVE_MULTI_AGENT=true` to use the native Multi-agent beta. The default sequential Luna adapter preserves the same intent schema and deterministic resolver.
 
@@ -54,16 +56,16 @@ flowchart LR
     L["Up to 3 Luna intent agents"] --> R["Single world resolver"]
     V --> R
     R --> S["Prospective state"]
-    S --> O["Luna title and option ranking"]
+    S --> O["Sol story frame and option ranking"]
     O --> F["App-owned legal choices"]
-    S --> T["Luna POV chapter"]
+    S --> T["Sol POV chapter"]
     K["POV-safe knowledge"] --> T
-    T --> X["Bounded Luna length recovery when needed"]
+    T --> X["Bounded Sol recovery when needed"]
     X --> A
-    T --> A["Luna narrative audit"]
+    T --> A["Terra narrative audit"]
     F --> A
     A --> C["Atomic SQLite commit"]
-    C --> P["Reader and God Mode"]
+    C --> P["Reader and secondary Developer details"]
 ```
 
 Models emit intent or prose. They never mutate canonical state. Accepted `WorldDelta` is the only source of new canon. Narration sees only the selected character's knowledge. Rejected prose never reaches the reader because generation is buffered, audited, then replayed as NDJSON.
@@ -76,16 +78,17 @@ Codex supported the project from source research through release evidence. It cr
 
 AI behavior changed only after a recorded baseline. Every escaped live defect became a named regression. Independent Codex agents handled bounded research, evaluation, and review while the root build task kept implementation ownership and final decisions.
 
-Key product decisions stayed human-readable in `decisions/`: one canonical state writer, accepted `WorldDelta` as the sole source of new canon, permanent POV knowledge boundaries, hard chapter-351 rejection, local bring-your-own-key operation, and no hosted service. GPT-5.6 Terra and Luna have bounded roles; deterministic application code retains authority.
+Key product decisions stayed human-readable in `decisions/`: one canonical state writer, accepted `WorldDelta` as the sole source of new canon, permanent POV knowledge boundaries, hard chapter-351 rejection, local bring-your-own-key operation, and no hosted service. GPT-5.6 Sol, Terra, and Luna have bounded roles; deterministic application code retains authority.
 
 See the [living plan](docs/PLAN.md), [decision records](decisions/), [verified status](docs/STATUS.md), and [submission packet](docs/SUBMISSION.md).
 
 ## Model roles
 
-| Work                                                           | Model           |
-| -------------------------------------------------------------- | --------------- |
-| Custom-action translation                                      | `gpt-5.6-terra` |
-| Background intents, option ranking, narration, recovery, audit | `gpt-5.6-luna`  |
+| Work                                      | Model           |
+| ----------------------------------------- | --------------- |
+| Custom-action translation and story audit | `gpt-5.6-terra` |
+| Background character intents              | `gpt-5.6-luna`  |
+| Story frame, narration, and recovery      | `gpt-5.6-sol`   |
 
 Only the OpenAI Responses API is used.
 
@@ -111,9 +114,9 @@ The smoke command defaults to Standard. The full npm script requires explicit co
 
 - The API key stays server-side and is never written to traces or exports.
 - Reader JSON excludes hidden world facts and other characters' private ledgers.
-- God Mode JSON is an explicit full-canon export.
+- Developer JSON is an explicit full-canon export.
 - Every request carries a UUID and expected world version for replay safety.
-- Multi-chapter continuation shows exact chapter count and worst-case cost, requires confirmation, and carries a server-validated stop chapter. Automatic continuation cannot cross a meaningful decision or chapter 100.
+- Multi-chapter continuation shows its exact chapter target, runs in the background, and carries a server-validated stop chapter. Automatic continuation cannot cross a meaningful decision or chapter 100.
 - Per-chapter cost, retries, timeout, and background concurrency are bounded. Generation uses a tier-priced byte worst case first. When that bound would falsely block, the official input-token counter supplies an exact count plus a 512-token margin at the same tier. Counter failure keeps the byte bound. Returned tier mismatch fails, unknown response cost keeps its reservation, and failed exposure carries into later chapter retries.
 
 ## Build Week

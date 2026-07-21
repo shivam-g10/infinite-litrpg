@@ -13,14 +13,14 @@ flowchart LR
     D --> V["Deterministic validator"]
     V -->|valid| T["Prospective turn"]
     V -->|invalid| R["Bounded repair or reject"]
-    T --> F["Luna title and option ranking"]
+    T --> F["Sol story frame and option ranking"]
     F --> G["App-owned legal chapter frame"]
-    T --> N["Luna POV narrator"]
+    T --> N["Sol POV narrator"]
     K["POV KnowledgeLedger"] --> N
-    N -->|750 to 899 words only| L["Bounded Luna continuation"]
-    L --> Q["Narrative contract audit"]
+    N -->|bounded short draft only| L["Bounded Sol continuation"]
+    L --> Q["Terra narrative contract audit"]
     G --> Q
-    N --> Q["Narrative contract audit"]
+    N --> Q["Terra narrative contract audit"]
     Q --> C["Atomic commit vN+1"]
     C --> H["Chapter and safe player state"]
 ```
@@ -34,26 +34,28 @@ flowchart LR
 5. Parse strict schema. Refusal or incomplete output causes no mutation.
 6. Recompute canonical intent disposition and require events, state mutations, and knowledge mutations to exactly equal deterministic resolver output.
 7. Stage prospective state in memory. Canon remains at current version.
-8. Give Luna only POV-safe option descriptions. Luna returns a title and ranks option IDs. Application code owns terminal state, actions, choice IDs, descriptions, and milestone targets, then reruns deterministic safety and legality checks.
-9. Give Luna only POV-safe context and prospective visible events.
-10. Target 900 to 925 words and reject outside the absolute 900 to 1,300 word range. When an otherwise-valid draft is 750 to 899 words, Luna may add one bounded, tail-only continuation. The request still targets a merge through 925 words; deterministic acceptance permits a small overshoot through 949. The merged prose reruns every deterministic gate and the full audit.
-11. Run the independent Luna narrative contract audit over the final prose.
+8. Give Sol the complete prior chapter history plus POV-safe prospective canon. Sol proposes the title and ranks legal option IDs. Application code owns terminal state, actions, choice IDs, descriptions, and milestone targets, then reruns deterministic safety and legality checks.
+9. Give Sol the same full history and only the selected viewpoint's allowed canon. Background Luna actors never receive hidden full prose; they receive their own POV-safe state.
+10. Target 900 to 925 words and reject outside the absolute 900 to 1,300 word range. One bounded tail-only recovery may repair an otherwise-valid short draft. The merged prose reruns every deterministic quality, canon, POV, and novelty gate.
+11. Run the independent Terra narrative contract audit over the final prose and full history.
 12. Atomically commit delta, knowledge, chapter, trace metadata, usage, cost, and next version.
 
 Narration failure leaves canon unchanged. Accepted `WorldDelta` is sole source of new canon. Audit can reject prose but cannot add state mutations.
 
 From chapter 48 through 50 of each act, choices stay milestone-compatible. An incomplete milestone requires a direct typed target. The locked POV can target the milestone through `investigate.subjectId` or a supported `targetId`; background agents cannot claim that abstract target.
 
-Reader input follows that same deterministic milestone policy. The opening and an incomplete milestone require a player choice. Otherwise `continue_story` may use only the persisted application-owned `choice-1`. The server computes the next decision or chapter-100 stop, exposes exact chapter count and worst-case per-chapter-cap total, and requires every request to carry that approved stop chapter. A stale, broader, milestone-crossing, or post-100 automatic request fails before provider work. The browser runs one atomic request at a time and can stop only after the active chapter settles. Chapter 100 is a demo horizon; chapter 350 remains the canonical terminal.
+Reader input follows that same deterministic milestone policy. The opening and an incomplete milestone require a player choice. Otherwise `continue_story` may use only the persisted application-owned `choice-1`. The server computes the next decision or chapter-100 stop and requires every request to carry that approved stop chapter. A stale, broader, milestone-crossing, or post-100 automatic request fails before provider work. The browser runs one atomic request at a time, keeps the open chapter pinned, and can stop only after the active chapter settles. Chapter 100 is a demo horizon; chapter 350 remains the canonical terminal.
 
 ## Model Routing
 
-| Work                                                              | Model           | Baseline effort |
-| ----------------------------------------------------------------- | --------------- | --------------- |
-| Custom-action translation                                         | `gpt-5.6-terra` | none            |
-| Character intents, option ranking, narration, recovery, and audit | `gpt-5.6-luna`  | none or low     |
+| Work                                       | Model           | Baseline effort |
+| ------------------------------------------ | --------------- | --------------- |
+| Custom-action translation                  | `gpt-5.6-terra` | none            |
+| Character intents                          | `gpt-5.6-luna`  | none            |
+| Story frame, narration, and recovery       | `gpt-5.6-sol`   | low             |
+| Independent narrative and continuity audit | `gpt-5.6-terra` | low             |
 
-The seven-act world blueprint is a versioned local fixture. Chapter 350 uses the same validated Luna narration path and deterministic terminal guard as every other chapter.
+The seven-act world blueprint is a versioned local fixture. Chapter 350 uses the same validated narration path and deterministic terminal guard as every other chapter.
 
 Use Responses API. Use strict structured outputs for state-changing calls. Measure before changing effort.
 
@@ -70,7 +72,7 @@ Product requests explicitly send the Standard provider tier. The release-only fu
 
 ## Storage
 
-Initial target: local SQLite.
+Each story owns `stories/<story-id>/story.db`. SQLite is canonical. `chapter-###.md` files beside it are reader-safe, crash-recoverable projections. `stories/library.json` selects the active draft and retains rejected drafts without deletion.
 
 Required transaction:
 
@@ -107,11 +109,11 @@ These long-horizon estimates use Standard product pricing. Release-eval Flex pri
 - Estimated full chapter before retries: about `$0.075`.
 - Estimated full chapter with 20 percent retry allowance: about `$0.09`.
 - Estimated 350 chapters: about `$31.50`, plus genesis and user regenerations.
-- POC live-eval budget: maximum `$3`.
+- Current six-story review budget: maximum `$5.088`, including carried exposure.
 - World tick p50 target: at most 15 seconds.
 - Streamed full chapter p95 target: at most 60 seconds.
 
-These are planning estimates. Runtime usage fields are token source of truth. OpenAI responses do not return cost, so UI must show actual tokens, latency, and estimated cost from a versioned pricing table after each call.
+These are planning estimates. Runtime usage fields are token source of truth. OpenAI responses do not return cost. The clean Reader hides telemetry; secondary Developer details shows tokens, latency, and locally estimated cost from a versioned pricing table.
 
 Each generation request reserves its maximum estimated exposure before transport. The local byte bound is first. If that bound would block, stable Responses may call the official input-token counter with the exact input, instructions, model, reasoning, and schema. Counted reservations price the returned input plus 512 safety tokens at the request's explicit service tier and cache policy, then add maximum output. Invalid, failed, or timed-out counting falls back to the byte bound and blocks safely. Native Multi-agent keeps the byte bound because its counter schema does not include the multi-agent configuration.
 
@@ -135,6 +137,6 @@ If one exact request remains active after process death, a separate tracked inte
 
 Version 7 reports retain authenticated contiguous chapter prefixes. Version 8 adds complete raw narrative and canonical transition evidence. Version 9 adds strict service-tier and projection provenance. Full version 9 reports require Flex and recompute a tier-evidence gate across current attempts, calls, traces, and sidecars. Historical reports remain readable as Standard evidence. Restoring chapter 1 restages the accepted `WorldDelta` from the seed fixture and verifies both state hashes. Retained results keep their source cap and Git SHA. New results use the current cap and Git SHA.
 
-Human-rejected prose can use the version 9 canon-preserving re-narration path. It authenticates and exactly restages the retained before state, action, intents, delta, after state, frame, fact partitions, and trace identity before provider access. It runs only Luna narration, bounded continuation when required, and the full audit; it never runs agents, resolves new canon, or writes the story store. A replacement gets new prose, audit, usage, request, turn, and stream evidence but must keep the exact canonical-source hash. Source and replacement identities live in report provenance. The sidecar checkpoints a complete validated replacement before its atomic report update so stale recovery cannot replay paid work.
+Human-rejected prose can use the canon-preserving re-narration path. It authenticates and exactly restages the retained before state, action, intents, delta, after state, frame, fact partitions, and trace identity before provider access. It runs only the configured narrator, bounded continuation when required, and full audit; it never reruns agents or resolves new canon. A replacement gets new prose, audit, usage, request, turn, and stream evidence but keeps the exact canonical-source hash. The app archives the prior narration revision and atomically replaces only the latest prose.
 
 This ledger covers locally estimated Responses generation exposure. It does not claim provider-invoice equality because the project key cannot read organization usage and the input-token counting endpoint exposes no cost.

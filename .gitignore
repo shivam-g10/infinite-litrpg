@@ -19,6 +19,7 @@ test-results/
 data/
 exports/
 logs/
+/stories/
 evals/reports/
 
 # Editors and OS

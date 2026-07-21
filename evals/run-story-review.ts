@@ -1,20 +1,32 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 
 import {
   CHARACTER_IDS,
   PROMPT_VERSION,
+  PUBLIC_CHARACTERS,
   WorldStateSchema,
   type CharacterId,
+  type WorldState,
 } from "@infinite-litrpg/shared";
 import Database from "better-sqlite3";
 import { config } from "dotenv";
 import OpenAI from "openai";
 
-import { StoryService } from "../app/src/server/story/story-service";
+import {
+  REVIEW_STORY_MODELS,
+  type StoryServiceOptions,
+} from "../app/src/server/story/story-service";
+import {
+  StoryWorkspace,
+  type StoryWorkspaceOptions,
+  type StoryWorkspaceWarning,
+} from "../app/src/server/story/story-workspace";
+import { parseStoryChapterMarkdown } from "../app/src/server/storage/story-files";
+import { StoryLibrary, type StoryMetadata } from "../app/src/server/storage/story-library";
 import { StoryStore } from "../app/src/server/storage/story-store";
 import {
   LiveSpendLedger,
@@ -30,6 +42,7 @@ import {
   STORY_REVIEW_TOTAL_CHAPTERS,
   STORY_REVIEW_VARIANT_CONFIG_SHA256,
   StoryReviewSourceEvidenceSchema,
+  assertStoryReviewDatabaseQuality,
   buildStoryReviewChapter,
   buildStoryReviewEvidence,
   buildStoryReviewMarkdown,
@@ -51,7 +64,7 @@ import {
 const ROOT = process.cwd();
 const WORLD_ID = "ashen-crown-v1";
 const REPORT_DIRECTORY = resolve(ROOT, "evals", "reports");
-const STORY_DATA_DIRECTORY = resolve(REPORT_DIRECTORY, "story-review");
+export const STORY_REVIEW_STORIES_DIRECTORY = resolve(ROOT, "stories");
 const STORY_ARCHIVE_DIRECTORY = resolve(REPORT_DIRECTORY, "story-review-archives");
 const LEDGER_PATH = resolve(REPORT_DIRECTORY, "story-review-spend.db");
 const VARIANT_MARKER_PATH = resolve(REPORT_DIRECTORY, "story-review-variant.json");
@@ -124,6 +137,9 @@ async function main(): Promise<void> {
   if (progress.completedChapters === STORY_REVIEW_TOTAL_CHAPTERS) {
     throw new Error("All sixty chapters are committed; run npm run review:stories:finalize");
   }
+  if (preflight.effectiveChapterCapUsd <= 0 || !preflight.fullPlanFitsAuthorizedCap) {
+    throw new Error("Authorized story-review headroom cannot fund the remaining fair-share plan");
+  }
 
   if (!worktreeClean) {
     throw new Error("Paid story-review generation requires a clean committed worktree");
@@ -133,20 +149,23 @@ async function main(): Promise<void> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("OPENAI_API_KEY is not configured");
 
-  mkdirSync(STORY_DATA_DIRECTORY, { recursive: true });
   const runId = STORY_REVIEW_RUN_ID;
   const ledger = new LiveSpendLedger(LEDGER_PATH, STORY_REVIEW_TOTAL_CAP_USD);
+  let workspace: StoryWorkspace | null = null;
   let ownsRun = false;
   try {
     ledger.acquireRun(runId);
     ownsRun = true;
     const costHooks = ledger.createCostHooks(runId);
     const client = createStoryReviewClient(apiKey);
+    workspace = createStoryReviewWorkspace(client, costHooks, preflight.effectiveChapterCapUsd);
     process.env.GIT_SHA = sourceGitSha;
 
     for (const characterId of CHARACTER_IDS) {
-      await generateStory(characterId, client, costHooks, args.chapterCapUsd);
+      await generateStory(characterId, workspace);
     }
+    await workspace.close();
+    workspace = null;
 
     const snapshot = ledger.snapshot();
     if (snapshot.activeReservationCount !== 0) {
@@ -167,54 +186,54 @@ async function main(): Promise<void> {
     }
     throw error;
   } finally {
+    await workspace?.close();
     ledger.close();
   }
 }
 
-async function generateStory(
-  characterId: CharacterId,
-  client: OpenAI,
-  costHooks: ReturnType<LiveSpendLedger["createCostHooks"]>,
-  chapterCapUsd: number,
-): Promise<void> {
-  const store = new StoryStore(storyDatabasePath(characterId));
-  try {
-    const service = new StoryService(store, client, {
-      costHooks,
-      maxBackgroundAgents: 3,
-      maxCostUsdPerChapter: chapterCapUsd,
-      nativeMultiAgent: false,
-      serviceTier: "flex",
+async function generateStory(characterId: CharacterId, workspace: StoryWorkspace): Promise<void> {
+  const storyId = storyReviewStoryId(characterId);
+  let result = await workspace.getStory(storyId);
+  if (result === null) {
+    result = await workspace.createStory({
+      id: storyId,
+      povCharacterId: characterId,
+      title: storyReviewTitle(characterId),
     });
-    let view = service.selectPov(characterId);
-    let state = store.loadWorldState(WORLD_ID);
-    if (!state || state.lockedPovId !== characterId) {
-      throw new Error(`Story database does not lock ${characterId}`);
+  }
+  assertReviewStoryIdentity(characterId, result.metadata);
+  assertProjectionSucceeded(characterId, result.warnings);
+
+  let view = result.story;
+  let snapshot = readReviewStorySnapshot(characterId, workspace.rootDirectory);
+  if (snapshot.state.lockedPovId !== characterId) {
+    throw new Error(`Story database does not lock ${characterId}`);
+  }
+  if (snapshot.state.chapter > STORY_REVIEW_CHAPTERS_PER_STORY) {
+    throw new Error(`${characterId} already exceeds the ten-chapter review horizon`);
+  }
+  while (snapshot.state.chapter < STORY_REVIEW_CHAPTERS_PER_STORY) {
+    const choice = selectStoryReviewChoice(snapshot.priorActions, view.chapter.choices);
+    if (!choice) {
+      throw new Error(`${characterId} chapter ${snapshot.state.chapter} lacks a choice`);
     }
-    if (state.chapter > STORY_REVIEW_CHAPTERS_PER_STORY) {
-      throw new Error(`${characterId} already exceeds the ten-chapter review horizon`);
+    const beforeChapter = snapshot.state.chapter;
+    result = await workspace.takeTurn(storyId, {
+      choiceId: choice.id,
+      expectedWorldVersion: snapshot.state.version,
+      requestId: randomUUID(),
+      type: "take_action",
+    });
+    assertReviewStoryIdentity(characterId, result.metadata);
+    assertProjectionSucceeded(characterId, result.warnings);
+    view = result.story;
+    snapshot = readReviewStorySnapshot(characterId, workspace.rootDirectory);
+    if (snapshot.state.chapter !== beforeChapter + 1) {
+      throw new Error(`${characterId} did not commit exactly one chapter`);
     }
-    while (state.chapter < STORY_REVIEW_CHAPTERS_PER_STORY) {
-      const priorActions = store.loadChapters(WORLD_ID).map(({ playerAction }) => playerAction);
-      const choice = selectStoryReviewChoice(priorActions, view.chapter.choices);
-      if (!choice) throw new Error(`${characterId} chapter ${state.chapter} lacks a choice`);
-      const beforeChapter = state.chapter;
-      view = await service.takeTurn({
-        choiceId: choice.id,
-        expectedWorldVersion: state.version,
-        requestId: randomUUID(),
-        type: "take_action",
-      });
-      state = store.loadWorldState(WORLD_ID);
-      if (!state || state.chapter !== beforeChapter + 1) {
-        throw new Error(`${characterId} did not commit exactly one chapter`);
-      }
-      console.log(
-        `${characterId} chapter ${state.chapter}/${STORY_REVIEW_CHAPTERS_PER_STORY} committed; $${view.estimatedCostUsd.toFixed(6)}`,
-      );
-    }
-  } finally {
-    store.close();
+    console.log(
+      `${characterId} chapter ${snapshot.state.chapter}/${STORY_REVIEW_CHAPTERS_PER_STORY} committed; $${view.estimatedCostUsd.toFixed(6)}`,
+    );
   }
 }
 
@@ -224,7 +243,9 @@ function collectSourceEvidence(
   variantMarker: StoryReviewVariantMarker,
 ): StoryReviewSourceEvidence {
   const stories = CHARACTER_IDS.map((characterId) => {
-    const store = new StoryStore(storyDatabasePath(characterId));
+    const databasePath = storyReviewDatabasePath(characterId);
+    assertStoryReviewDatabaseQuality(characterId, databasePath);
+    const store = new StoryStore(databasePath);
     try {
       const state = store.loadWorldState(WORLD_ID);
       if (
@@ -234,7 +255,8 @@ function collectSourceEvidence(
       ) {
         throw new Error(`${characterId} is not a complete ten-chapter story`);
       }
-      const chapters = store.loadChapters(WORLD_ID).map((chapterRecord) => {
+      const canonicalChapters = store.loadChapters(WORLD_ID);
+      const chapters = canonicalChapters.map((chapterRecord) => {
         const worldDelta = store.loadDelta(WORLD_ID, chapterRecord.stateAfterVersion);
         if (!worldDelta) throw new Error(`Missing delta for ${chapterRecord.id}`);
         const trace = store.loadTrace(chapterRecord.traceId);
@@ -245,6 +267,7 @@ function collectSourceEvidence(
         buildStoryReviewChapter(characterId, chapterRecord, trace);
         return { chapterRecord, trace, worldDelta };
       });
+      assertCanonicalReviewProjection(characterId, state, canonicalChapters);
       return { chapters, characterId, finalState: state };
     } finally {
       store.close();
@@ -277,11 +300,14 @@ function writeReviewArtifacts(source: StoryReviewSourceEvidence) {
   return evidence;
 }
 
-export function readStoryReviewProgress(sourceGitSha: string): StoryReviewProgress {
+export function readStoryReviewProgress(
+  sourceGitSha: string,
+  rootDirectory = STORY_REVIEW_STORIES_DIRECTORY,
+): StoryReviewProgress {
   const byCharacter = Object.fromEntries(
     CHARACTER_IDS.map((characterId) => [
       characterId,
-      readStoryChapterCount(characterId, sourceGitSha),
+      readStoryChapterCount(characterId, sourceGitSha, rootDirectory),
     ]),
   ) as Record<CharacterId, number>;
   return {
@@ -294,9 +320,75 @@ export function createStoryReviewClient(apiKey: string): OpenAI {
   return new OpenAI({ apiKey, maxRetries: 0 });
 }
 
-function readStoryChapterCount(characterId: CharacterId, sourceGitSha: string): number {
-  const path = storyDatabasePath(characterId);
-  if (!existsSync(path)) return 0;
+export function buildStoryReviewServiceOptions(
+  characterId: CharacterId,
+  costHooks: NonNullable<StoryServiceOptions["costHooks"]>,
+  chapterCapUsd: number,
+): StoryServiceOptions {
+  return {
+    costHooks,
+    enforceNarrativeQuality: true,
+    maxBackgroundAgents: 3,
+    maxCostUsdPerChapter: chapterCapUsd,
+    modelConfig: REVIEW_STORY_MODELS,
+    nativeMultiAgent: false,
+    promptCacheKey: storyReviewPromptCacheKey(characterId),
+    serviceTier: "flex",
+  };
+}
+
+export function buildStoryReviewWorkspaceOptions(
+  client: OpenAI,
+  costHooks: NonNullable<StoryServiceOptions["costHooks"]>,
+  chapterCapUsd: number,
+  rootDirectory = STORY_REVIEW_STORIES_DIRECTORY,
+): StoryWorkspaceOptions {
+  return {
+    client,
+    rootDirectory: resolve(rootDirectory),
+    serviceOptions: ({ povCharacterId }) =>
+      buildStoryReviewServiceOptions(
+        requireReviewCharacterId(povCharacterId),
+        costHooks,
+        chapterCapUsd,
+      ),
+  };
+}
+
+export function createStoryReviewWorkspace(
+  client: OpenAI,
+  costHooks: NonNullable<StoryServiceOptions["costHooks"]>,
+  chapterCapUsd: number,
+  rootDirectory = STORY_REVIEW_STORIES_DIRECTORY,
+): StoryWorkspace {
+  return new StoryWorkspace(
+    buildStoryReviewWorkspaceOptions(client, costHooks, chapterCapUsd, rootDirectory),
+  );
+}
+
+export function storyReviewPromptCacheKey(characterId: CharacterId): string {
+  const digest = createHash("sha256").update(characterId).digest("hex").slice(0, 24);
+  return `story-review:${digest}`;
+}
+
+function readStoryChapterCount(
+  characterId: CharacterId,
+  sourceGitSha: string,
+  rootDirectory = STORY_REVIEW_STORIES_DIRECTORY,
+): number {
+  const library = new StoryLibrary({ rootDirectory });
+  const metadata = library.getStory(storyReviewStoryId(characterId));
+  const path = storyReviewDatabasePath(characterId, rootDirectory);
+  if (!existsSync(path)) {
+    if (metadata !== null) {
+      throw new Error(`${characterId} review library entry lacks its canonical database`);
+    }
+    return 0;
+  }
+  if (metadata === null) {
+    throw new Error(`${characterId} canonical review database lacks library metadata`);
+  }
+  assertReviewStoryIdentity(characterId, metadata);
   const database = new Database(path, { fileMustExist: true, readonly: true });
   try {
     const row = database
@@ -384,8 +476,103 @@ export function requireStoryReviewLedgerState(
   return state.snapshot;
 }
 
-function storyDatabasePath(characterId: CharacterId): string {
-  return resolve(STORY_DATA_DIRECTORY, `${characterId}.db`);
+export function storyReviewStoryId(characterId: CharacterId): string {
+  return `review-${characterId}`;
+}
+
+export function storyReviewDatabasePath(
+  characterId: CharacterId,
+  rootDirectory = STORY_REVIEW_STORIES_DIRECTORY,
+): string {
+  return resolve(rootDirectory, storyReviewStoryId(characterId), "story.db");
+}
+
+export function storyReviewTitle(characterId: CharacterId): string {
+  const character = PUBLIC_CHARACTERS.find(({ id }) => id === characterId);
+  if (character === undefined) throw new Error(`Unknown review character ${characterId}`);
+  return `Ashen Crown — ${character.name}`;
+}
+
+function requireReviewCharacterId(value: string): CharacterId {
+  const characterId = CHARACTER_IDS.find((candidate) => candidate === value);
+  if (characterId === undefined) throw new Error(`Unknown review character ${value}`);
+  return characterId;
+}
+
+function assertReviewStoryIdentity(characterId: CharacterId, metadata: StoryMetadata): void {
+  if (
+    metadata.id !== storyReviewStoryId(characterId) ||
+    metadata.povCharacterId !== characterId ||
+    metadata.status !== "active" ||
+    metadata.title !== storyReviewTitle(characterId)
+  ) {
+    throw new Error(`${characterId} canonical review story metadata does not match its identity`);
+  }
+}
+
+function assertProjectionSucceeded(
+  characterId: CharacterId,
+  warnings: readonly StoryWorkspaceWarning[],
+): void {
+  if (warnings.length === 0) return;
+  throw new Error(
+    `${characterId} canonical Markdown projection failed: ${warnings
+      .map(({ code }) => code)
+      .join(", ")}`,
+  );
+}
+
+function readReviewStorySnapshot(
+  characterId: CharacterId,
+  rootDirectory = STORY_REVIEW_STORIES_DIRECTORY,
+) {
+  const store = new StoryStore(storyReviewDatabasePath(characterId, rootDirectory));
+  try {
+    const state = store.loadWorldState(WORLD_ID);
+    if (state === null) throw new Error(`${characterId} canonical review database lacks its world`);
+    const priorActions = store.loadChapters(WORLD_ID).map(({ playerAction }) => playerAction);
+    return { priorActions, state };
+  } finally {
+    store.close();
+  }
+}
+
+function assertCanonicalReviewProjection(
+  characterId: CharacterId,
+  state: WorldState,
+  chapters: ReturnType<StoryStore["loadChapters"]>,
+  rootDirectory = STORY_REVIEW_STORIES_DIRECTORY,
+): void {
+  const library = new StoryLibrary({ rootDirectory });
+  const storyId = storyReviewStoryId(characterId);
+  const metadata = library.getStory(storyId);
+  if (metadata === null) throw new Error(`${characterId} review story lacks library metadata`);
+  assertReviewStoryIdentity(characterId, metadata);
+  if (metadata.chapterCount !== state.chapter || chapters.length !== state.chapter) {
+    throw new Error(`${characterId} review library chapter count does not match canonical SQLite`);
+  }
+  const povName = state.characters.find(({ id }) => id === characterId)?.name;
+  if (povName === undefined) throw new Error(`${characterId} is missing from its canonical world`);
+
+  for (const chapter of chapters) {
+    const markdownPath = library.chapterMarkdownPath(storyId, chapter.chapter);
+    if (!existsSync(markdownPath)) {
+      throw new Error(
+        `${characterId} lacks projected chapter-${String(chapter.chapter).padStart(3, "0")}.md`,
+      );
+    }
+    const projected = parseStoryChapterMarkdown(readFileSync(markdownPath, "utf8"));
+    if (
+      projected.storyId !== storyId ||
+      projected.chapter !== chapter.chapter ||
+      projected.title !== chapter.title ||
+      projected.pov !== povName ||
+      projected.prose !== chapter.prose ||
+      projected.worldVersion !== chapter.stateAfterVersion
+    ) {
+      throw new Error(`${characterId} chapter ${chapter.chapter} Markdown differs from SQLite`);
+    }
+  }
 }
 
 function currentVariantMarker(sourceGitSha: string): StoryReviewVariantMarker {

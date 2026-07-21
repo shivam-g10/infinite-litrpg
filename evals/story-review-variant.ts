@@ -33,24 +33,56 @@ import {
 } from "./story-review";
 
 const ARCHIVE_SCHEMA_VERSION = "1.0.0-story-review-variant-archive" as const;
+const CHAINED_ARCHIVE_SCHEMA_VERSION = "2.0.0-story-review-variant-archive" as const;
 const MARKER_SCHEMA_VERSION = "1.0.0-story-review-variant-marker" as const;
+const CHAINED_MARKER_SCHEMA_VERSION = "2.0.0-story-review-variant-marker" as const;
 const MIGRATION_REASON = "narration-route-reversal-and-repetitive-branching" as const;
+const CHAINED_MIGRATION_REASON = "human-rejected-progression-and-canon-quality" as const;
 export const STORY_REVIEW_VARIANT_MIGRATION_RUN_ID = "00000000-0000-4000-8000-000000000612";
 const PREVIOUS_PROMPT_VERSION = "1.4.11" as const;
 const PREVIOUS_BRANCH_POLICY = "first-offered-choice" as const;
 const PREVIOUS_SCHEMA_VERSION = "1.1.0-story-review" as const;
+const REJECTED_PROMPT_VERSION = "1.4.12" as const;
+const REJECTED_BRANCH_POLICY = "least-used-action-type" as const;
+const REJECTED_SCHEMA_VERSION = "1.2.0-story-review" as const;
 const PREVIOUS_TOTAL_CAP_USD = 2.544 as const;
 const MONEY_EPSILON_USD = 0.000_000_001;
 const Sha256Schema = z.string().regex(/^[a-f0-9]{64}$/u);
 const GitShaSchema = z.string().regex(/^[a-f0-9]{40}$/u);
 
-const VariantConfigSchema = z
+const LegacyVariantConfigSchema = z
   .object({
     branchPolicy: z.string().min(1).max(120),
     promptVersion: z.string().min(1).max(120),
     schemaVersion: z.string().min(1).max(120),
   })
   .strict();
+
+const QualityVariantConfigSchema = z
+  .object({
+    branchPolicy: z.string().min(1).max(120),
+    enforceNarrativeQuality: z.literal(true),
+    modelRouting: z
+      .object({
+        audit: z
+          .object({ model: z.literal("gpt-5.6-terra"), reasoningEffort: z.literal("low") })
+          .strict(),
+        frame: z
+          .object({ model: z.literal("gpt-5.6-sol"), reasoningEffort: z.literal("low") })
+          .strict(),
+        narration: z
+          .object({ model: z.literal("gpt-5.6-sol"), reasoningEffort: z.literal("low") })
+          .strict(),
+      })
+      .strict(),
+    promptVersion: z.string().min(1).max(120),
+    schemaVersion: z.string().min(1).max(120),
+    storyQualityEvalVersion: z.string().min(1).max(120),
+    storyQualityGateCount: z.literal(26),
+  })
+  .strict();
+
+const VariantConfigSchema = z.union([LegacyVariantConfigSchema, QualityVariantConfigSchema]);
 
 const ArchiveFileSchema = z
   .object({
@@ -72,7 +104,7 @@ const ArchiveStorySchema = z
   })
   .strict();
 
-export const StoryReviewVariantArchiveManifestSchema = z
+const StoryReviewVariantArchiveManifestV1Schema = z
   .object({
     archivedAt: z.string().datetime({ offset: true }),
     archiveSchemaVersion: z.literal(ARCHIVE_SCHEMA_VERSION),
@@ -94,7 +126,39 @@ export const StoryReviewVariantArchiveManifestSchema = z
   })
   .strict();
 
-export const StoryReviewVariantMarkerSchema = z
+const StoryReviewVariantArchiveManifestV2Schema = z
+  .object({
+    archivedAt: z.string().datetime({ offset: true }),
+    archiveSchemaVersion: z.literal(CHAINED_ARCHIVE_SCHEMA_VERSION),
+    carriedExposureUsd: z.number().nonnegative().max(STORY_REVIEW_TOTAL_CAP_USD),
+    files: z.array(ArchiveFileSchema).min(1),
+    fromLedgerSourceId: z.string().min(1).max(240),
+    fromSourceGitSha: GitShaSchema,
+    fromTotalCapUsd: z.literal(STORY_REVIEW_TOTAL_CAP_USD),
+    fromVariant: LegacyVariantConfigSchema,
+    fromVariantConfigSha256: Sha256Schema,
+    lineageDepth: z.number().int().min(2).max(32),
+    parentManifestSha256: Sha256Schema,
+    parentMarkerFile: ArchiveFileSchema,
+    parentMarkerSha256: Sha256Schema,
+    priorLineageExposureUsd: z.number().nonnegative().max(STORY_REVIEW_TOTAL_CAP_USD),
+    reason: z.literal(CHAINED_MIGRATION_REASON),
+    stories: z.array(ArchiveStorySchema).length(CHARACTER_IDS.length),
+    toSourceGitSha: GitShaSchema,
+    toTotalCapUsd: z.literal(STORY_REVIEW_TOTAL_CAP_USD),
+    toVariant: QualityVariantConfigSchema,
+    toVariantConfigSha256: Sha256Schema,
+    uniqueResponseCostUsd: z.number().nonnegative().max(STORY_REVIEW_TOTAL_CAP_USD),
+    uniqueResponseCount: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export const StoryReviewVariantArchiveManifestSchema = z.discriminatedUnion(
+  "archiveSchemaVersion",
+  [StoryReviewVariantArchiveManifestV1Schema, StoryReviewVariantArchiveManifestV2Schema],
+);
+
+const StoryReviewVariantMarkerV1Schema = z
   .object({
     archiveDirectory: z.string().regex(/^[a-f0-9]{40}-to-[a-f0-9]{40}$/u),
     carriedExposureUsd: z.number().nonnegative().max(STORY_REVIEW_TOTAL_CAP_USD),
@@ -107,6 +171,27 @@ export const StoryReviewVariantMarkerSchema = z
   })
   .strict();
 
+const StoryReviewVariantMarkerV2Schema = z
+  .object({
+    archiveDirectory: z.string().regex(/^[a-f0-9]{40}-to-[a-f0-9]{40}$/u),
+    carriedExposureUsd: z.number().nonnegative().max(STORY_REVIEW_TOTAL_CAP_USD),
+    fromSourceGitSha: GitShaSchema,
+    lineageDepth: z.number().int().min(2).max(32),
+    manifestSha256: Sha256Schema,
+    markerSchemaVersion: z.literal(CHAINED_MARKER_SCHEMA_VERSION),
+    parentManifestSha256: Sha256Schema,
+    parentMarkerSha256: Sha256Schema,
+    reason: z.literal(CHAINED_MIGRATION_REASON),
+    toSourceGitSha: GitShaSchema,
+    variantConfigSha256: Sha256Schema,
+  })
+  .strict();
+
+export const StoryReviewVariantMarkerSchema = z.discriminatedUnion("markerSchemaVersion", [
+  StoryReviewVariantMarkerV1Schema,
+  StoryReviewVariantMarkerV2Schema,
+]);
+
 export { STORY_REVIEW_VARIANT_CONFIG_SHA256 };
 
 const PREVIOUS_VARIANT_CONFIG = {
@@ -114,6 +199,13 @@ const PREVIOUS_VARIANT_CONFIG = {
   promptVersion: PREVIOUS_PROMPT_VERSION,
   schemaVersion: PREVIOUS_SCHEMA_VERSION,
 } as const;
+
+const REJECTED_VARIANT_CONFIG = {
+  branchPolicy: REJECTED_BRANCH_POLICY,
+  promptVersion: REJECTED_PROMPT_VERSION,
+  schemaVersion: REJECTED_SCHEMA_VERSION,
+} as const;
+const REJECTED_VARIANT_CONFIG_SHA256 = sha256Json(REJECTED_VARIANT_CONFIG);
 
 export type StoryReviewVariantMarker = z.infer<typeof StoryReviewVariantMarkerSchema>;
 
@@ -127,9 +219,9 @@ export interface StoryReviewVariantMigrationOptions {
   readonly toSourceGitSha: string;
 }
 
-export interface StoryReviewVariantMigrationResult extends StoryReviewVariantMarker {
+export type StoryReviewVariantMigrationResult = StoryReviewVariantMarker & {
   readonly archivePath: string;
-}
+};
 
 export function migrateStoryReviewVariant(
   options: StoryReviewVariantMigrationOptions,
@@ -141,20 +233,37 @@ export function migrateStoryReviewVariant(
   assertInside(paths.archiveRoot, archivePath, "variant archive");
 
   return withVariantLedgerLock(paths.ledgerPath, (ledger) => {
+    let parentMarker: StoryReviewVariantMarker | null = null;
+    let parentMarkerBytes: Buffer | null = null;
     if (existsSync(paths.markerPath)) {
-      if (existsSync(paths.storyDirectory)) {
-        throw new Error("Variant marker and active story-review directory cannot coexist");
+      const markerCandidate = StoryReviewVariantMarkerSchema.parse(
+        JSON.parse(readFileSync(paths.markerPath, "utf8")) as unknown,
+      );
+      const migrationAlreadyCompleted =
+        markerCandidate.toSourceGitSha === options.toSourceGitSha &&
+        markerCandidate.variantConfigSha256 === STORY_REVIEW_VARIANT_CONFIG_SHA256;
+      if (migrationAlreadyCompleted) {
+        if (existsSync(paths.storyDirectory)) {
+          throw new Error("Variant marker and active story-review directory cannot coexist");
+        }
+        const marker = readStoryReviewVariantMarker(
+          paths.markerPath,
+          paths.archiveRoot,
+          options.toSourceGitSha,
+        );
+        if (marker.fromSourceGitSha !== options.fromSourceGitSha) {
+          throw new Error("Existing variant marker belongs to a different source lineage");
+        }
+        foldOwnedVariantExposure(ledger, marker);
+        return { ...marker, archivePath };
       }
-      const marker = readStoryReviewVariantMarker(
+      parentMarkerBytes = readFileSync(paths.markerPath);
+      parentMarker = readStoryReviewVariantMarkerForConfig(
         paths.markerPath,
         paths.archiveRoot,
-        options.toSourceGitSha,
+        options.fromSourceGitSha,
+        REJECTED_VARIANT_CONFIG_SHA256,
       );
-      if (marker.fromSourceGitSha !== options.fromSourceGitSha) {
-        throw new Error("Existing variant marker belongs to a different source lineage");
-      }
-      foldOwnedVariantExposure(ledger, marker);
-      return { ...marker, archivePath };
     }
 
     if (existsSync(paths.storyDirectory) && existsSync(archivedStoryPath)) {
@@ -165,24 +274,47 @@ export function migrateStoryReviewVariant(
     }
 
     const ledgerBefore = ledger.snapshot();
-    assertMigratableLedger(ledgerBefore, options.fromSourceGitSha);
-    if (existsSync(paths.storyDirectory)) {
-      mkdirSync(archivePath, { recursive: true });
-      renameSync(paths.storyDirectory, archivedStoryPath);
+    if (parentMarker === null) {
+      assertMigratableLedger(ledgerBefore, options.fromSourceGitSha);
+    } else {
+      assertChainedMigratableLedger(ledgerBefore, options.fromSourceGitSha, parentMarker);
     }
-
+    const inspectionPath = existsSync(paths.storyDirectory)
+      ? paths.storyDirectory
+      : archivedStoryPath;
     const storyInspection = inspectArchivedStories(
-      archivedStoryPath,
+      inspectionPath,
       options.fromSourceGitSha,
-      PREVIOUS_PROMPT_VERSION,
+      parentMarker === null ? PREVIOUS_PROMPT_VERSION : REJECTED_PROMPT_VERSION,
+    );
+    const priorLineageExposureUsd = parentMarker?.carriedExposureUsd ?? 0;
+    const currentVariantExposureUsd = roundMoney(
+      ledgerBefore.totalExposureUsd - priorLineageExposureUsd,
     );
     if (
-      Math.abs(storyInspection.uniqueResponseCostUsd - ledgerBefore.totalExposureUsd) >
+      Math.abs(storyInspection.uniqueResponseCostUsd - currentVariantExposureUsd) >
       MONEY_EPSILON_USD
     ) {
       throw new Error(
         "Archived unique response cost does not match the durable story-review exposure",
       );
+    }
+    if (
+      parentMarker !== null &&
+      storyInspection.stories.some(
+        ({ committedChapters, databasePresent }) => !databasePresent || committedChapters !== 10,
+      )
+    ) {
+      throw new Error("Rejected story-review variant must contain six complete ten-chapter POVs");
+    }
+    if (existsSync(paths.storyDirectory)) {
+      mkdirSync(archivePath, { recursive: true });
+      renameSync(paths.storyDirectory, archivedStoryPath);
+    }
+
+    let parentMarkerFile: z.infer<typeof ArchiveFileSchema> | null = null;
+    if (parentMarker !== null && parentMarkerBytes !== null) {
+      parentMarkerFile = archiveParentMarker(archivePath, parentMarkerBytes);
     }
 
     const manifestPath = resolve(archivePath, "manifest.json");
@@ -192,17 +324,11 @@ export function migrateStoryReviewVariant(
         JSON.parse(readFileSync(manifestPath, "utf8")) as unknown,
       );
     } else {
-      manifest = StoryReviewVariantArchiveManifestSchema.parse({
+      const commonManifest = {
         archivedAt: new Date().toISOString(),
-        archiveSchemaVersion: ARCHIVE_SCHEMA_VERSION,
         carriedExposureUsd: ledgerBefore.totalExposureUsd,
         files: inventoryFiles(archivedStoryPath, archivePath),
-        fromLedgerSourceId: `fresh:${options.fromSourceGitSha}`,
         fromSourceGitSha: options.fromSourceGitSha,
-        fromTotalCapUsd: PREVIOUS_TOTAL_CAP_USD,
-        fromVariant: PREVIOUS_VARIANT_CONFIG,
-        fromVariantConfigSha256: sha256Json(PREVIOUS_VARIANT_CONFIG),
-        reason: MIGRATION_REASON,
         stories: storyInspection.stories,
         toSourceGitSha: options.toSourceGitSha,
         toTotalCapUsd: STORY_REVIEW_TOTAL_CAP_USD,
@@ -210,7 +336,33 @@ export function migrateStoryReviewVariant(
         toVariantConfigSha256: STORY_REVIEW_VARIANT_CONFIG_SHA256,
         uniqueResponseCostUsd: storyInspection.uniqueResponseCostUsd,
         uniqueResponseCount: storyInspection.uniqueResponseCount,
-      });
+      };
+      manifest = StoryReviewVariantArchiveManifestSchema.parse(
+        parentMarker === null
+          ? {
+              ...commonManifest,
+              archiveSchemaVersion: ARCHIVE_SCHEMA_VERSION,
+              fromLedgerSourceId: `fresh:${options.fromSourceGitSha}`,
+              fromTotalCapUsd: PREVIOUS_TOTAL_CAP_USD,
+              fromVariant: PREVIOUS_VARIANT_CONFIG,
+              fromVariantConfigSha256: sha256Json(PREVIOUS_VARIANT_CONFIG),
+              reason: MIGRATION_REASON,
+            }
+          : {
+              ...commonManifest,
+              archiveSchemaVersion: CHAINED_ARCHIVE_SCHEMA_VERSION,
+              fromLedgerSourceId: storyReviewLedgerSourceId(options.fromSourceGitSha, parentMarker),
+              fromTotalCapUsd: STORY_REVIEW_TOTAL_CAP_USD,
+              fromVariant: REJECTED_VARIANT_CONFIG,
+              fromVariantConfigSha256: REJECTED_VARIANT_CONFIG_SHA256,
+              lineageDepth: markerLineageDepth(parentMarker) + 1,
+              parentManifestSha256: parentMarker.manifestSha256,
+              parentMarkerFile,
+              parentMarkerSha256: sha256Bytes(parentMarkerBytes!),
+              priorLineageExposureUsd,
+              reason: CHAINED_MIGRATION_REASON,
+            },
+      );
       writeAtomic(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
     }
     validateManifest(
@@ -219,18 +371,34 @@ export function migrateStoryReviewVariant(
       archivedStoryPath,
       archivePath,
       ledgerBefore.totalExposureUsd,
+      storyInspection,
+      parentMarker,
     );
     const manifestSha256 = sha256Bytes(readFileSync(manifestPath));
-    const marker = StoryReviewVariantMarkerSchema.parse({
+    const commonMarker = {
       archiveDirectory,
       carriedExposureUsd: ledgerBefore.totalExposureUsd,
       fromSourceGitSha: options.fromSourceGitSha,
       manifestSha256,
-      markerSchemaVersion: MARKER_SCHEMA_VERSION,
-      reason: MIGRATION_REASON,
       toSourceGitSha: options.toSourceGitSha,
       variantConfigSha256: STORY_REVIEW_VARIANT_CONFIG_SHA256,
-    });
+    };
+    const marker = StoryReviewVariantMarkerSchema.parse(
+      parentMarker === null
+        ? {
+            ...commonMarker,
+            markerSchemaVersion: MARKER_SCHEMA_VERSION,
+            reason: MIGRATION_REASON,
+          }
+        : {
+            ...commonMarker,
+            lineageDepth: markerLineageDepth(parentMarker) + 1,
+            markerSchemaVersion: CHAINED_MARKER_SCHEMA_VERSION,
+            parentManifestSha256: parentMarker.manifestSha256,
+            parentMarkerSha256: sha256Bytes(parentMarkerBytes!),
+            reason: CHAINED_MIGRATION_REASON,
+          },
+    );
     writeAtomic(paths.markerPath, `${JSON.stringify(marker, null, 2)}\n`);
     foldOwnedVariantExposure(ledger, marker);
     return { ...marker, archivePath };
@@ -242,17 +410,44 @@ export function readStoryReviewVariantMarker(
   archiveRoot: string,
   expectedSourceGitSha: string,
 ): StoryReviewVariantMarker {
+  return readStoryReviewVariantMarkerForConfig(
+    markerPath,
+    archiveRoot,
+    expectedSourceGitSha,
+    STORY_REVIEW_VARIANT_CONFIG_SHA256,
+  );
+}
+
+function readStoryReviewVariantMarkerForConfig(
+  markerPath: string,
+  archiveRoot: string,
+  expectedSourceGitSha: string,
+  expectedVariantConfigSha256: string,
+): StoryReviewVariantMarker {
   const marker = StoryReviewVariantMarkerSchema.parse(
     JSON.parse(readFileSync(markerPath, "utf8")) as unknown,
   );
   if (
     marker.toSourceGitSha !== expectedSourceGitSha ||
-    marker.variantConfigSha256 !== STORY_REVIEW_VARIANT_CONFIG_SHA256
+    marker.variantConfigSha256 !== expectedVariantConfigSha256
   ) {
-    throw new Error("Story-review variant marker does not match the current quality variant");
+    throw new Error("Story-review variant marker does not match the requested quality lineage");
   }
+  validateMarkerArchive(marker, resolve(archiveRoot), new Set());
+  return marker;
+}
+
+function validateMarkerArchive(
+  marker: StoryReviewVariantMarker,
+  archiveRoot: string,
+  visitedArchives: Set<string>,
+): void {
   const archivePath = resolve(archiveRoot, marker.archiveDirectory);
-  assertInside(resolve(archiveRoot), archivePath, "variant archive");
+  assertInside(archiveRoot, archivePath, "variant archive");
+  if (visitedArchives.has(marker.archiveDirectory)) {
+    throw new Error("Story-review variant marker lineage contains a cycle");
+  }
+  visitedArchives.add(marker.archiveDirectory);
   const manifestPath = resolve(archivePath, "manifest.json");
   const bytes = readFileSync(manifestPath);
   if (sha256Bytes(bytes) !== marker.manifestSha256) {
@@ -265,12 +460,51 @@ export function readStoryReviewVariantMarker(
     manifest.fromSourceGitSha !== marker.fromSourceGitSha ||
     manifest.toSourceGitSha !== marker.toSourceGitSha ||
     manifest.toVariantConfigSha256 !== marker.variantConfigSha256 ||
+    sha256Json(manifest.fromVariant) !== manifest.fromVariantConfigSha256 ||
+    sha256Json(manifest.toVariant) !== manifest.toVariantConfigSha256 ||
     Math.abs(manifest.carriedExposureUsd - marker.carriedExposureUsd) > MONEY_EPSILON_USD
   ) {
     throw new Error("Story-review variant marker does not match its archive manifest");
   }
+  if (marker.markerSchemaVersion === CHAINED_MARKER_SCHEMA_VERSION) {
+    if (
+      manifest.archiveSchemaVersion !== CHAINED_ARCHIVE_SCHEMA_VERSION ||
+      manifest.lineageDepth !== marker.lineageDepth ||
+      manifest.parentManifestSha256 !== marker.parentManifestSha256 ||
+      manifest.parentMarkerSha256 !== marker.parentMarkerSha256
+    ) {
+      throw new Error("Story-review chained marker does not match its archive lineage");
+    }
+    const parentMarkerPath = resolve(archivePath, manifest.parentMarkerFile.path);
+    assertInside(archivePath, parentMarkerPath, "parent marker");
+    const parentMarkerBytes = readFileSync(parentMarkerPath);
+    if (
+      manifest.parentMarkerFile.path !== "parent-marker.json" ||
+      parentMarkerBytes.byteLength !== manifest.parentMarkerFile.sizeBytes ||
+      sha256Bytes(parentMarkerBytes) !== manifest.parentMarkerFile.sha256 ||
+      sha256Bytes(parentMarkerBytes) !== marker.parentMarkerSha256
+    ) {
+      throw new Error("Story-review parent marker file does not match chained provenance");
+    }
+    const parentMarker = StoryReviewVariantMarkerSchema.parse(
+      JSON.parse(parentMarkerBytes.toString("utf8")) as unknown,
+    );
+    if (
+      parentMarker.toSourceGitSha !== marker.fromSourceGitSha ||
+      parentMarker.manifestSha256 !== marker.parentManifestSha256 ||
+      parentMarker.variantConfigSha256 !== manifest.fromVariantConfigSha256 ||
+      marker.lineageDepth !== markerLineageDepth(parentMarker) + 1 ||
+      Math.abs(parentMarker.carriedExposureUsd - manifest.priorLineageExposureUsd) >
+        MONEY_EPSILON_USD
+    ) {
+      throw new Error("Story-review parent marker does not match chained provenance");
+    }
+    validateMarkerArchive(parentMarker, archiveRoot, visitedArchives);
+  } else if (manifest.archiveSchemaVersion !== ARCHIVE_SCHEMA_VERSION) {
+    throw new Error("Story-review marker and archive schema versions disagree");
+  }
   validateManifestFiles(manifest, resolve(archivePath, "stories"), archivePath);
-  return marker;
+  visitedArchives.delete(marker.archiveDirectory);
 }
 
 export function storyReviewLedgerSourceId(
@@ -293,6 +527,13 @@ export function storyReviewVariantArchiveReference(marker: StoryReviewVariantMar
     reason: marker.reason,
     toSourceGitSha: marker.toSourceGitSha,
     variantConfigSha256: marker.variantConfigSha256,
+    ...(marker.markerSchemaVersion === CHAINED_MARKER_SCHEMA_VERSION
+      ? {
+          lineageDepth: marker.lineageDepth,
+          parentManifestSha256: marker.parentManifestSha256,
+          parentMarkerSha256: marker.parentMarkerSha256,
+        }
+      : {}),
   });
 }
 
@@ -436,17 +677,50 @@ function validateManifest(
   archivedStoryPath: string,
   archivePath: string,
   exposureUsd: number,
+  storyInspection: ReturnType<typeof inspectArchivedStories>,
+  parentMarker: StoryReviewVariantMarker | null,
 ): void {
   if (
     manifest.fromSourceGitSha !== options.fromSourceGitSha ||
     manifest.toSourceGitSha !== options.toSourceGitSha ||
-    manifest.fromLedgerSourceId !== `fresh:${options.fromSourceGitSha}` ||
-    manifest.fromVariantConfigSha256 !== sha256Json(PREVIOUS_VARIANT_CONFIG) ||
     manifest.toVariantConfigSha256 !== STORY_REVIEW_VARIANT_CONFIG_SHA256 ||
+    sha256Json(manifest.fromVariant) !== manifest.fromVariantConfigSha256 ||
+    sha256Json(manifest.toVariant) !== manifest.toVariantConfigSha256 ||
     Math.abs(manifest.carriedExposureUsd - exposureUsd) > MONEY_EPSILON_USD ||
-    Math.abs(manifest.uniqueResponseCostUsd - exposureUsd) > MONEY_EPSILON_USD
+    Math.abs(manifest.uniqueResponseCostUsd - storyInspection.uniqueResponseCostUsd) >
+      MONEY_EPSILON_USD ||
+    manifest.uniqueResponseCount !== storyInspection.uniqueResponseCount ||
+    JSON.stringify(manifest.stories) !== JSON.stringify(storyInspection.stories)
   ) {
     throw new Error("Existing story-review variant manifest does not match this migration");
+  }
+  if (parentMarker === null) {
+    if (
+      manifest.archiveSchemaVersion !== ARCHIVE_SCHEMA_VERSION ||
+      manifest.fromLedgerSourceId !== `fresh:${options.fromSourceGitSha}` ||
+      manifest.fromTotalCapUsd !== PREVIOUS_TOTAL_CAP_USD ||
+      manifest.fromVariantConfigSha256 !== sha256Json(PREVIOUS_VARIANT_CONFIG) ||
+      Math.abs(manifest.uniqueResponseCostUsd - exposureUsd) > MONEY_EPSILON_USD
+    ) {
+      throw new Error("Existing initial story-review variant manifest is invalid");
+    }
+  } else {
+    if (
+      manifest.archiveSchemaVersion !== CHAINED_ARCHIVE_SCHEMA_VERSION ||
+      manifest.fromLedgerSourceId !==
+        storyReviewLedgerSourceId(options.fromSourceGitSha, parentMarker) ||
+      manifest.fromTotalCapUsd !== STORY_REVIEW_TOTAL_CAP_USD ||
+      manifest.fromVariantConfigSha256 !== REJECTED_VARIANT_CONFIG_SHA256 ||
+      manifest.parentManifestSha256 !== parentMarker.manifestSha256 ||
+      manifest.lineageDepth !== markerLineageDepth(parentMarker) + 1 ||
+      Math.abs(manifest.priorLineageExposureUsd - parentMarker.carriedExposureUsd) >
+        MONEY_EPSILON_USD ||
+      Math.abs(manifest.priorLineageExposureUsd + manifest.uniqueResponseCostUsd - exposureUsd) >
+        MONEY_EPSILON_USD
+    ) {
+      throw new Error("Existing chained story-review variant manifest is invalid");
+    }
+    validateParentMarkerFile(manifest, archivePath, parentMarker);
   }
   validateManifestFiles(manifest, archivedStoryPath, archivePath);
 }
@@ -460,6 +734,52 @@ function validateManifestFiles(
   if (JSON.stringify(currentFiles) !== JSON.stringify(manifest.files)) {
     throw new Error("Story-review variant archive files do not match the manifest");
   }
+}
+
+function archiveParentMarker(
+  archivePath: string,
+  parentMarkerBytes: Buffer,
+): z.infer<typeof ArchiveFileSchema> {
+  const path = resolve(archivePath, "parent-marker.json");
+  assertInside(archivePath, path, "parent marker");
+  if (existsSync(path)) {
+    const existing = readFileSync(path);
+    if (!existing.equals(parentMarkerBytes)) {
+      throw new Error("Archived parent marker differs from active lineage marker");
+    }
+  } else {
+    writeAtomic(path, parentMarkerBytes.toString("utf8"));
+  }
+  return ArchiveFileSchema.parse({
+    path: "parent-marker.json",
+    sha256: sha256Bytes(parentMarkerBytes),
+    sizeBytes: parentMarkerBytes.byteLength,
+  });
+}
+
+function validateParentMarkerFile(
+  manifest: z.infer<typeof StoryReviewVariantArchiveManifestV2Schema>,
+  archivePath: string,
+  parentMarker: StoryReviewVariantMarker,
+): void {
+  const path = resolve(archivePath, manifest.parentMarkerFile.path);
+  assertInside(archivePath, path, "parent marker");
+  const bytes = readFileSync(path);
+  if (
+    manifest.parentMarkerFile.path !== "parent-marker.json" ||
+    bytes.byteLength !== manifest.parentMarkerFile.sizeBytes ||
+    sha256Bytes(bytes) !== manifest.parentMarkerFile.sha256 ||
+    sha256Bytes(bytes) !== manifest.parentMarkerSha256 ||
+    JSON.stringify(
+      StoryReviewVariantMarkerSchema.parse(JSON.parse(bytes.toString("utf8")) as unknown),
+    ) !== JSON.stringify(parentMarker)
+  ) {
+    throw new Error("Story-review parent marker does not match the chained manifest");
+  }
+}
+
+function markerLineageDepth(marker: StoryReviewVariantMarker): number {
+  return marker.markerSchemaVersion === CHAINED_MARKER_SCHEMA_VERSION ? marker.lineageDepth : 1;
 }
 
 function inventoryFiles(storyPath: string, archivePath: string) {
@@ -542,7 +862,10 @@ function foldOwnedVariantExposure(ledger: LiveSpendLedger, marker: StoryReviewVa
   ) {
     throw new Error("Variant migration requires exact settled durable exposure");
   }
-  const oldSourceId = `fresh:${marker.fromSourceGitSha}`;
+  const oldSourceId =
+    marker.markerSchemaVersion === CHAINED_MARKER_SCHEMA_VERSION
+      ? `fresh:${marker.fromSourceGitSha}:${marker.parentManifestSha256}`
+      : `fresh:${marker.fromSourceGitSha}`;
   const usesOldSource = snapshot.sourceReportSha256 === oldSourceId;
   const usesNewSource = snapshot.sourceReportSha256 === expectedNewSourceId;
   if (!usesOldSource && !usesNewSource) {
@@ -586,6 +909,28 @@ function assertMigratableLedger(
     snapshot.uncertainReservationCostUsd !== 0
   ) {
     throw new Error("Story-review ledger is not settled on the requested source lineage");
+  }
+}
+
+function assertChainedMigratableLedger(
+  snapshot: ReturnType<typeof readLiveSpendSnapshot>,
+  fromSourceGitSha: string,
+  parentMarker: StoryReviewVariantMarker,
+): void {
+  const currentVariantExposureUsd = roundMoney(
+    snapshot.totalExposureUsd - parentMarker.carriedExposureUsd,
+  );
+  if (
+    snapshot.totalCapUsd !== STORY_REVIEW_TOTAL_CAP_USD ||
+    snapshot.sourceReportSha256 !== storyReviewLedgerSourceId(fromSourceGitSha, parentMarker) ||
+    snapshot.activeReservationCount !== 0 ||
+    snapshot.uncertainReservationCostUsd !== 0 ||
+    snapshot.baselineAttemptCostUsd !== 0 ||
+    Math.abs(snapshot.priorSpendUsd - parentMarker.carriedExposureUsd) > MONEY_EPSILON_USD ||
+    Math.abs(snapshot.knownReservationCostUsd - currentVariantExposureUsd) > MONEY_EPSILON_USD ||
+    currentVariantExposureUsd < 0
+  ) {
+    throw new Error("Story-review ledger is not settled on the requested chained lineage");
   }
 }
 
@@ -660,6 +1005,10 @@ function sumNanos(values: Iterable<number>): number {
   let total = 0;
   for (const value of values) total += value;
   return total;
+}
+
+function roundMoney(value: number): number {
+  return nanoToUsd(usdToNano(value));
 }
 
 function sha256Json(value: unknown): string {

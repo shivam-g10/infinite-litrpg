@@ -157,6 +157,131 @@ describe("deterministic turn resolution", () => {
     );
   });
 
+  it("awards action-sensitive experience but never pays experience for waiting", () => {
+    const waitingState = seedState();
+    const waiting = resolveTurn(waitingState, playerAction(waitingState, { type: "wait" }), []);
+    expect(waiting.ok).toBe(true);
+    if (!waiting.ok) return;
+    expect(waiting.data.delta.stateMutations).not.toContainEqual(
+      expect.objectContaining({ type: "grant_experience" }),
+    );
+    const waited = stageWorldDelta(waitingState, waiting.data.intents, waiting.data.delta);
+    expect(waited.ok).toBe(true);
+    if (!waited.ok) return;
+    expect(waited.data.state.characters.find(({ id }) => id === "rowan-ashborn")?.experience).toBe(
+      0,
+    );
+
+    const movingState = seedState();
+    const moving = resolveTurn(
+      movingState,
+      playerAction(movingState, { destinationId: "ash-road", type: "move" }),
+      [],
+    );
+    expect(moving.ok).toBe(true);
+    if (!moving.ok) return;
+    expect(moving.data.delta.stateMutations).toContainEqual({
+      amount: 10,
+      characterId: "rowan-ashborn",
+      type: "grant_experience",
+    });
+
+    const investigatingState = seedState();
+    const investigating = resolveTurn(
+      investigatingState,
+      playerAction(investigatingState, {
+        subjectId: "cinder-village",
+        type: "investigate",
+      }),
+      [],
+    );
+    expect(investigating.ok).toBe(true);
+    if (!investigating.ok) return;
+    expect(investigating.data.delta.stateMutations).toContainEqual({
+      amount: 15,
+      characterId: "rowan-ashborn",
+      type: "grant_experience",
+    });
+  });
+
+  it("turns repeated Ash Road investigation into a finite four-clue progression", () => {
+    let state = seedState();
+    const moved = resolveTurn(
+      state,
+      playerAction(state, { destinationId: "ash-road", type: "move" }),
+      [],
+    );
+    expect(moved.ok).toBe(true);
+    if (!moved.ok) return;
+    const movedStage = stageWorldDelta(state, moved.data.intents, moved.data.delta);
+    expect(movedStage.ok).toBe(true);
+    if (!movedStage.ok) return;
+    state = movedStage.data.state;
+
+    const claims: string[] = [];
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const resolved = resolveTurn(
+        state,
+        playerAction(state, { subjectId: "ash-road", type: "investigate" }),
+        [],
+      );
+      expect(resolved.ok).toBe(true);
+      if (!resolved.ok) return;
+      const discovery = resolved.data.delta.knowledgeMutations.find(
+        ({ type }) => type === "discover_fact",
+      );
+      const experience = resolved.data.delta.stateMutations.find(
+        ({ type }) => type === "grant_experience",
+      );
+      if (attempt < 4) {
+        expect(discovery?.type === "discover_fact" ? discovery.fact.claim : null).toBeTruthy();
+        if (discovery?.type === "discover_fact") claims.push(discovery.fact.claim);
+        expect(experience).toMatchObject({ amount: 15, characterId: "rowan-ashborn" });
+      } else {
+        expect(discovery).toBeUndefined();
+        expect(experience).toBeUndefined();
+      }
+      const staged = stageWorldDelta(state, resolved.data.intents, resolved.data.delta);
+      expect(staged.ok).toBe(true);
+      if (!staged.ok) return;
+      state = staged.data.state;
+    }
+
+    expect(claims).toHaveLength(4);
+    expect(new Set(claims).size).toBe(4);
+    expect(claims.join(" ")).not.toContain("found corroborating traces tied to");
+    expect(claims.some((claim) => claim.includes("System"))).toBe(true);
+    expect(
+      state.facts.filter(
+        ({ ownerCharacterId, source }) =>
+          ownerCharacterId === "rowan-ashborn" && source === "Investigation of ash-road",
+      ),
+    ).toHaveLength(4);
+  });
+
+  it("applies action experience through the existing level progression rule", () => {
+    const state = seedState();
+    const rowan = state.characters.find(({ id }) => id === "rowan-ashborn");
+    if (!rowan) throw new Error("Rowan missing");
+    rowan.experience = 95;
+
+    const resolved = resolveTurn(
+      state,
+      playerAction(state, { subjectId: "cinder-village", type: "investigate" }),
+      [],
+    );
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    const staged = stageWorldDelta(state, resolved.data.intents, resolved.data.delta);
+    expect(staged.ok).toBe(true);
+    if (!staged.ok) return;
+    expect(staged.data.state.characters.find(({ id }) => id === "rowan-ashborn")).toMatchObject({
+      experience: 10,
+      level: 2,
+    });
+    expect(validateWorldState(staged.data.state).ok).toBe(true);
+  });
+
   it("gives the player priority when a background intent uses the same actor", () => {
     const state = seedState();
     const background = backgroundIntent(state, "rowan-ashborn", "intent-background-rowan");

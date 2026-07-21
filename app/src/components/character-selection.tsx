@@ -6,8 +6,10 @@ import { useState } from "react";
 interface CharacterSelectionProps {
   readonly apiKeyConfigured: boolean;
   readonly busy: boolean;
+  readonly cancelLabel?: string;
   readonly characters: readonly PublicCharacterProfile[];
   readonly error: string | null;
+  readonly onCancel?: () => void;
   readonly onLock: (characterId: CharacterId) => void;
   readonly onRetry: () => void;
 }
@@ -15,8 +17,10 @@ interface CharacterSelectionProps {
 export function CharacterSelection({
   apiKeyConfigured,
   busy,
+  cancelLabel = "Back to current story",
   characters,
   error,
+  onCancel,
   onLock,
   onRetry,
 }: CharacterSelectionProps) {
@@ -140,6 +144,16 @@ export function CharacterSelection({
           <span className="sr-only" id="viewpoint-lock-warning">
             Confirm permanent viewpoint lock.
           </span>
+          {onCancel ? (
+            <button
+              className="selection-secondary-action"
+              disabled={busy}
+              onClick={onCancel}
+              type="button"
+            >
+              {cancelLabel}
+            </button>
+          ) : null}
         </aside>
       </div>
 

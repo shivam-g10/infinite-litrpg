@@ -166,6 +166,75 @@ function storyAtChapter(chapter: number, title: string, canContinue = false) {
   };
 }
 
+interface StorySummaryFixture {
+  readonly chapterCount: number;
+  readonly createdAt: string;
+  readonly id: string;
+  readonly povCharacterId: string;
+  readonly status: "active" | "rejected";
+  readonly title: string;
+  readonly updatedAt: string;
+}
+
+const FIXTURE_TIME = "2026-07-21T00:00:00.000Z";
+
+function storySummary(
+  id = "rowan-story",
+  title = "Rowan's Ashen Crown",
+  chapterCount = 1,
+  status: StorySummaryFixture["status"] = "active",
+  povCharacterId = "rowan-ashborn",
+): StorySummaryFixture {
+  return {
+    chapterCount,
+    createdAt: FIXTURE_TIME,
+    id,
+    povCharacterId,
+    status,
+    title,
+    updatedAt: FIXTURE_TIME,
+  };
+}
+
+function storyEnvelope(
+  story: unknown,
+  stories?: readonly StorySummaryFixture[],
+  activeStoryId: string | null = story === null ? null : "rowan-story",
+) {
+  const storyRecord = story as {
+    readonly pov?: { readonly id?: unknown };
+    readonly world?: { readonly chapter?: unknown };
+  } | null;
+  const chapterCount = storyRecord?.world?.chapter;
+  const povCharacterId = storyRecord?.pov?.id;
+  const resolvedStories =
+    stories ??
+    (story === null
+      ? []
+      : [
+          storySummary(
+            "rowan-story",
+            "Rowan's Ashen Crown",
+            Number.isSafeInteger(chapterCount) ? (chapterCount as number) : 0,
+            "active",
+            typeof povCharacterId === "string" ? povCharacterId : "rowan-ashborn",
+          ),
+        ]);
+  return {
+    library: { activeStoryId, stories: resolvedStories },
+    story,
+    warnings: [],
+  };
+}
+
+function storyEvent(
+  story: unknown,
+  stories?: readonly StorySummaryFixture[],
+  activeStoryId = "rowan-story",
+) {
+  return { ...storyEnvelope(story, stories, activeStoryId), type: "story" };
+}
+
 async function fulfillJson(route: Route, body: unknown, status = 200): Promise<void> {
   await route.fulfill({
     body: JSON.stringify(body),
@@ -178,6 +247,15 @@ async function confirmContinuation(page: Page): Promise<void> {
   await page.getByText("Create several chapters", { exact: true }).click();
   await page.getByRole("button", { name: "Continue to next decision" }).click();
   await page.getByRole("button", { name: "Start generation" }).click();
+}
+
+async function openDeveloperDetails(page: Page, mobile: boolean): Promise<void> {
+  if (mobile) {
+    await page.locator(".mobile-menu > summary").click();
+  } else {
+    await page.getByText("More", { exact: true }).click();
+  }
+  await page.getByRole("button", { name: "Developer details" }).click();
 }
 
 async function fulfillNdjson(
@@ -193,17 +271,16 @@ async function fulfillNdjson(
 
 async function mockLoadedStory(page: Page): Promise<void> {
   await page.route("**/api/story", async (route) => {
-    await fulfillJson(route, { story: baseStory });
+    await fulfillJson(route, storyEnvelope(baseStory));
   });
 }
 
 test("selects one of six characters, locks POV, and enters reader", async ({ page }) => {
   let postedBody: unknown = null;
   await page.route("**/api/story", async (route) => {
-    if (route.request().method() === "GET") {
-      await fulfillJson(route, { story: null });
-      return;
-    }
+    await fulfillJson(route, storyEnvelope(null, [], null));
+  });
+  await page.route("**/api/stories", async (route) => {
     postedBody = route.request().postDataJSON();
     const elaraStory = {
       ...baseStory,
@@ -217,7 +294,14 @@ test("selects one of six characters, locks POV, and enters reader", async ({ pag
         publicRole: "Chosen Hero who doubts the prophecy",
       },
     };
-    await fulfillJson(route, { story: elaraStory });
+    await fulfillJson(
+      route,
+      storyEnvelope(
+        elaraStory,
+        [storySummary("elara-story", "Elara's Ashen Crown", 1, "active", "elara-voss")],
+        "elara-story",
+      ),
+    );
   });
 
   await page.goto("/");
@@ -235,14 +319,14 @@ test("selects one of six characters, locks POV, and enters reader", async ({ pag
   await expect(page.locator(".reader-context strong")).toContainText("Elara Voss");
   await expect(page.getByRole("heading", { level: 1, name: "Embers Remember" })).toBeVisible();
   await expect(page.getByText("Viewpoint locked")).toBeAttached();
-  expect(postedBody).toEqual({ povCharacterId: "elara-voss", type: "select_pov" });
+  expect(postedBody).toEqual({ povCharacterId: "elara-voss", type: "create" });
 });
 
 test("takes a suggested choice and renders the committed chapter", async ({ page }) => {
   let postedBody: unknown = null;
   await page.route("**/api/story", async (route) => {
     if (route.request().method() === "GET") {
-      await fulfillJson(route, { story: baseStory });
+      await fulfillJson(route, storyEnvelope(baseStory));
       return;
     }
     postedBody = route.request().postDataJSON();
@@ -250,7 +334,7 @@ test("takes a suggested choice and renders the committed chapter", async ({ page
     await fulfillNdjson(route, [
       { text: "Validated prose chunk one. ", type: "chunk" },
       { text: "Validated prose chunk two.", type: "chunk" },
-      { story: storyAtChapter(2, "The Ash Road"), type: "story" },
+      storyEvent(storyAtChapter(2, "The Ash Road")),
     ]);
   });
 
@@ -264,18 +348,20 @@ test("takes a suggested choice and renders the committed chapter", async ({ page
     type: "take_action",
   });
   expect((postedBody as { requestId: string }).requestId).toMatch(/^[0-9a-f-]{36}$/u);
-  await expect(page.getByText(/Generated live with OpenAI in this session/u)).toBeVisible();
+  await expect(
+    page.getByText("Chapter saved locally. OpenAI generation is complete."),
+  ).toBeVisible();
 });
 
 test("creates one routine chapter without starting a batch", async ({ page }) => {
   let postedBody: unknown = null;
   await page.route("**/api/story", async (route) => {
     if (route.request().method() === "GET") {
-      await fulfillJson(route, { story: storyAtChapter(1, "Embers Remember", true) });
+      await fulfillJson(route, storyEnvelope(storyAtChapter(1, "Embers Remember", true)));
       return;
     }
     postedBody = route.request().postDataJSON();
-    await fulfillNdjson(route, [{ story: storyAtChapter(2, "The Ash Road", true), type: "story" }]);
+    await fulfillNdjson(route, [storyEvent(storyAtChapter(2, "The Ash Road", true))]);
   });
 
   await page.goto("/");
@@ -309,7 +395,7 @@ test("reviews saved chapters without generating another turn", async ({ page }) 
       });
       return;
     }
-    await fulfillJson(route, { story: storyAtChapter(3, "Third Ember", true) });
+    await fulfillJson(route, storyEnvelope(storyAtChapter(3, "Third Ember", true)));
   });
 
   await page.goto("/");
@@ -327,6 +413,289 @@ test("reviews saved chapters without generating another turn", async ({ page }) 
   expect(postCount).toBe(0);
 });
 
+test("switches stories, updates scoped exports, and clears the chapter cache", async ({ page }) => {
+  const firstSummary = storySummary("story-a", "First Path", 3);
+  const secondSummary = storySummary("story-b", "Second Path", 3, "active", "elara-voss");
+  const summaries = [firstSummary, secondSummary];
+  const firstStory = storyAtChapter(3, "First Latest", true);
+  const secondStory = {
+    ...storyAtChapter(3, "Second Latest", true),
+    pov: {
+      ...baseStory.pov,
+      characterClass: "Sunblade",
+      id: "elara-voss",
+      name: "Elara Voss",
+    },
+  };
+  const openedChapters: string[] = [];
+  let lifecycleBody: unknown = null;
+
+  await page.route("**/api/story**", async (route) => {
+    const url = new URL(route.request().url());
+    const chapter = url.searchParams.get("chapter");
+    if (chapter) {
+      const storyId = url.searchParams.get("storyId") ?? "missing";
+      openedChapters.push(`${storyId}:${chapter}`);
+      await fulfillJson(route, {
+        chapter: {
+          chapter: Number(chapter),
+          prose: `${storyId} saved prose.`,
+          title: `${storyId} saved chapter ${chapter}`,
+        },
+      });
+      return;
+    }
+    await fulfillJson(route, storyEnvelope(firstStory, summaries, "story-a"));
+  });
+  await page.route("**/api/stories", async (route) => {
+    lifecycleBody = route.request().postDataJSON();
+    await fulfillJson(route, storyEnvelope(secondStory, summaries, "story-b"));
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Previous saved chapter" }).click();
+  await expect(
+    page.getByRole("heading", { level: 1, name: "story-a saved chapter 2" }),
+  ).toBeVisible();
+
+  await page.getByLabel("Open story library. Current story: First Path").click();
+  await page.getByRole("button", { name: "Open", exact: true }).click();
+  await expect(page.getByLabel("Open story library. Current story: Second Path")).toBeVisible();
+  await expect(
+    page.locator('a[href="/api/story/export?format=markdown&storyId=story-b"]'),
+  ).toHaveCount(2);
+
+  await page.getByRole("button", { name: "Previous saved chapter" }).click();
+  await expect(
+    page.getByRole("heading", { level: 1, name: "story-b saved chapter 2" }),
+  ).toBeVisible();
+  expect(openedChapters).toEqual(["story-a:2", "story-b:2"]);
+  expect(lifecycleBody).toEqual({ storyId: "story-b", type: "activate" });
+});
+
+test("starts a new story and rejects it before showing another picker", async ({ page }) => {
+  const firstSummary = storySummary("story-a", "First Path", 1);
+  const secondSummary = storySummary("story-b", "Elara's Path", 1, "active", "elara-voss");
+  const elaraStory = {
+    ...baseStory,
+    pov: {
+      ...baseStory.pov,
+      characterClass: "Sunblade",
+      id: "elara-voss",
+      name: "Elara Voss",
+    },
+  };
+  const lifecycleBodies: unknown[] = [];
+
+  await page.route("**/api/story", async (route) => {
+    await fulfillJson(route, storyEnvelope(baseStory, [firstSummary], "story-a"));
+  });
+  await page.route("**/api/stories", async (route) => {
+    const body = route.request().postDataJSON() as { type: string };
+    lifecycleBodies.push(body);
+    if (body.type === "create") {
+      await fulfillJson(route, storyEnvelope(elaraStory, [firstSummary, secondSummary], "story-b"));
+      return;
+    }
+    if (body.type === "reopen") {
+      await fulfillJson(
+        route,
+        storyEnvelope(
+          elaraStory,
+          [firstSummary, { ...secondSummary, status: "active" }],
+          "story-b",
+        ),
+      );
+      return;
+    }
+    await fulfillJson(
+      route,
+      storyEnvelope(null, [firstSummary, { ...secondSummary, status: "rejected" }], null),
+    );
+  });
+
+  await page.goto("/");
+  await page.getByLabel("Open story library. Current story: First Path").click();
+  await page.getByRole("button", { name: "Start new story" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Choose one life." })).toBeVisible();
+  await page.getByRole("button", { name: "Back to current story" }).click();
+  await expect(page.getByLabel("Open story library. Current story: First Path")).toBeVisible();
+  expect(lifecycleBodies).toEqual([]);
+
+  await page.getByLabel("Open story library. Current story: First Path").click();
+  await page.getByRole("button", { name: "Start new story" }).click();
+  await page.getByRole("radio", { name: /Rowan Ashborn/u }).focus();
+  await page.keyboard.press("ArrowDown");
+  await expect(page.getByRole("radio", { name: /Elara Voss/u })).toBeChecked();
+  await page.getByRole("button", { name: "Begin as Elara" }).click();
+  await expect(page.getByLabel("Open story library. Current story: Elara's Path")).toBeVisible();
+
+  await page.getByLabel("Open story library. Current story: Elara's Path").click();
+  await page.getByRole("button", { name: "Try another" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Choose one life." })).toBeVisible();
+  await page.getByRole("button", { name: "Reopen previous draft" }).click();
+  await expect(page.getByLabel("Open story library. Current story: Elara's Path")).toBeVisible();
+  expect(lifecycleBodies).toEqual([
+    { povCharacterId: "elara-voss", type: "create" },
+    { storyId: "story-b", type: "reject" },
+    { storyId: "story-b", type: "reopen" },
+  ]);
+});
+
+test("reopens a rejected story and restarts without deleting the old draft", async ({ page }) => {
+  const firstSummary = storySummary("story-a", "First Path", 2);
+  const rejectedSummary = storySummary("story-b", "Rejected Path", 3, "rejected", "elara-voss");
+  const reopenedSummary = { ...rejectedSummary, status: "active" as const };
+  const restartedSummary = storySummary(
+    "story-c",
+    "Rejected Path — Restart",
+    0,
+    "active",
+    "elara-voss",
+  );
+  const elaraStory = {
+    ...storyAtChapter(3, "A Reopened Ember"),
+    pov: { ...baseStory.pov, id: "elara-voss", name: "Elara Voss" },
+  };
+  const restartedStory = {
+    ...baseStory,
+    chapter: null,
+    chapterHistory: [],
+    pov: { ...baseStory.pov, id: "elara-voss", name: "Elara Voss" },
+    world: { ...baseStory.world, chapter: 0, version: 1 },
+  };
+  const lifecycleBodies: unknown[] = [];
+
+  await page.route("**/api/story", async (route) => {
+    await fulfillJson(
+      route,
+      storyEnvelope(storyAtChapter(2, "First Latest"), [firstSummary, rejectedSummary], "story-a"),
+    );
+  });
+  await page.route("**/api/stories", async (route) => {
+    const body = route.request().postDataJSON() as { type: string };
+    lifecycleBodies.push(body);
+    if (body.type === "reopen") {
+      await fulfillJson(
+        route,
+        storyEnvelope(elaraStory, [firstSummary, reopenedSummary], "story-b"),
+      );
+      return;
+    }
+    await fulfillJson(
+      route,
+      storyEnvelope(restartedStory, [firstSummary, rejectedSummary, restartedSummary], "story-c"),
+    );
+  });
+
+  await page.goto("/");
+  await page.getByLabel("Open story library. Current story: First Path").click();
+  await page.getByRole("button", { name: "Reopen" }).click();
+  await expect(page.getByLabel("Open story library. Current story: Rejected Path")).toBeVisible();
+
+  await page.getByLabel("Open story library. Current story: Rejected Path").click();
+  await page.getByRole("button", { name: "Restart from beginning" }).click();
+  await expect(page.getByRole("heading", { name: "Restart from the beginning?" })).toBeVisible();
+  await page.getByRole("button", { name: "Restart story" }).click();
+  await expect(
+    page.getByLabel("Open story library. Current story: Rejected Path — Restart"),
+  ).toBeVisible();
+  await page.getByLabel("Open story library. Current story: Rejected Path — Restart").click();
+  await expect(page.getByRole("button", { name: "Reopen" })).toBeVisible();
+  expect(lifecycleBodies).toEqual([
+    { storyId: "story-b", type: "reopen" },
+    { storyId: "story-b", type: "restart" },
+  ]);
+});
+
+test("keeps the active chapter readable while later chapters generate", async ({ page }) => {
+  let chapter = 1;
+  let releaseSecondChapter!: () => void;
+  const secondChapterMayFinish = new Promise<void>((resolve) => {
+    releaseSecondChapter = resolve;
+  });
+  await page.route("**/api/story", async (route) => {
+    if (route.request().method() === "GET") {
+      await fulfillJson(route, storyEnvelope(storyAtChapter(1, "Embers Remember", true)));
+      return;
+    }
+    chapter += 1;
+    if (chapter === 3) await secondChapterMayFinish;
+    const responseStory = storyAtChapter(chapter, `Chapter ${chapter}`, chapter === 2);
+    await fulfillJson(
+      route,
+      storyEnvelope(chapter === 2 ? responseStory : { ...responseStory, continuationPlan: null }),
+    );
+  });
+
+  await page.goto("/");
+  await confirmContinuation(page);
+  await expect(page.getByText("Creating chapter 3 of 100")).toBeVisible();
+
+  await expect(page.getByRole("heading", { level: 1, name: "Embers Remember" })).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "Jump to saved chapter" })).toBeEnabled();
+
+  releaseSecondChapter();
+  await expect(page.getByText("Decision ready at chapter 3.", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Embers Remember" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Return to chapter 3" })).toBeVisible();
+});
+
+test("rewrites only the latest saved chapter and keeps canon in place", async ({ page }) => {
+  let finishRewrite!: () => void;
+  const rewriteMayFinish = new Promise<void>((resolve) => {
+    finishRewrite = resolve;
+  });
+  let postedBody: unknown = null;
+  const latestStory = storyAtChapter(2, "Before Rewrite");
+  const rewrittenStory = {
+    ...latestStory,
+    chapter: {
+      ...latestStory.chapter,
+      prose: "Rewritten prose follows the same accepted events.",
+      title: "After Rewrite",
+    },
+  };
+
+  await page.route("**/api/story**", async (route) => {
+    const request = route.request();
+    if (request.method() === "GET") {
+      const chapter = new URL(request.url()).searchParams.get("chapter");
+      if (chapter) {
+        await fulfillJson(route, {
+          chapter: { chapter: 1, prose: "Older saved prose.", title: "Older Chapter" },
+        });
+        return;
+      }
+      await fulfillJson(
+        route,
+        storyEnvelope(latestStory, [storySummary("rowan-story", "Rewrite Path", 2)]),
+      );
+      return;
+    }
+    postedBody = request.postDataJSON();
+    await rewriteMayFinish;
+    await fulfillNdjson(route, [
+      storyEvent(rewrittenStory, [storySummary("rowan-story", "Rewrite Path", 2)]),
+    ]);
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Rewrite latest chapter" }).click();
+  await expect(page.getByRole("heading", { name: "Rewriting chapter 2" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Rewrite latest chapter" })).toBeDisabled();
+  finishRewrite();
+
+  await expect(page.getByRole("heading", { level: 1, name: "After Rewrite" })).toBeVisible();
+  await expect(page.getByText("Rewritten prose follows the same accepted events.")).toBeVisible();
+  expect(postedBody).toMatchObject({ expectedWorldVersion: 3, type: "reroll_latest" });
+  expect((postedBody as { requestId: string }).requestId).toMatch(/^[0-9a-f-]{36}$/u);
+
+  await page.getByRole("button", { name: "Previous saved chapter" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Older Chapter" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Rewrite latest chapter" })).toHaveCount(0);
+});
+
 test("rejects a mismatched saved-chapter response", async ({ page }) => {
   await page.route("**/api/story**", async (route) => {
     const chapter = new URL(route.request().url()).searchParams.get("chapter");
@@ -336,7 +705,7 @@ test("rejects a mismatched saved-chapter response", async ({ page }) => {
       });
       return;
     }
-    await fulfillJson(route, { story: storyAtChapter(3, "Third Ember", true) });
+    await fulfillJson(route, storyEnvelope(storyAtChapter(3, "Third Ember", true)));
   });
 
   await page.goto("/");
@@ -363,7 +732,7 @@ test("continues routine chapters, pauses at both decisions, and stops at chapter
   }> = [];
   await page.route("**/api/story", async (route) => {
     if (route.request().method() === "GET") {
-      await fulfillJson(route, { story: storyAtChapter(1, "Embers Remember", true) });
+      await fulfillJson(route, storyEnvelope(storyAtChapter(1, "Embers Remember", true)));
       return;
     }
     postedBodies.push(
@@ -376,19 +745,25 @@ test("continues routine chapters, pauses at both decisions, and stops at chapter
     );
     chapter += 1;
     const canContinue = chapter < 100 && chapter !== 47 && chapter !== 97;
-    await fulfillJson(route, {
-      story: storyAtChapter(chapter, `Chapter ${chapter}`, canContinue),
-    });
+    await fulfillJson(
+      route,
+      storyEnvelope(storyAtChapter(chapter, `Chapter ${chapter}`, canContinue)),
+    );
   });
 
   await page.goto("/");
   await expect(page.getByRole("button", { name: "Create chapter 2" })).toBeVisible();
   await page.getByText("Create several chapters", { exact: true }).click();
-  await expect(page.getByText("Up to 46 chapters · maximum $4.6000")).toBeVisible();
+  await expect(page.getByText("Up to 46 chapters, through chapter 47")).toBeVisible();
   await page.getByRole("button", { name: "Continue to next decision" }).click();
   await expect(page.getByRole("heading", { name: "Create up to 46 chapters?" })).toBeVisible();
-  await expect(page.getByText(/Through chapter 47\. Maximum \$4\.6000/u)).toBeVisible();
+  await expect(page.getByText(/Runs in the background through chapter 47/u)).toBeVisible();
   await page.getByRole("button", { name: "Start generation" }).click();
+  await expect(page.getByText("Decision ready at chapter 47.", { exact: true })).toBeVisible({
+    timeout: 30_000,
+  });
+  await expect(page.getByRole("heading", { level: 1, name: "Embers Remember" })).toBeVisible();
+  await page.getByRole("button", { name: "Return to chapter 47" }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Chapter 47" })).toBeVisible({
     timeout: 30_000,
   });
@@ -396,6 +771,11 @@ test("continues routine chapters, pauses at both decisions, and stops at chapter
 
   await expect(page.getByRole("heading", { level: 1, name: "Chapter 48" })).toBeVisible();
   await confirmContinuation(page);
+  await expect(page.getByText("Decision ready at chapter 97.", { exact: true })).toBeVisible({
+    timeout: 30_000,
+  });
+  await expect(page.getByRole("heading", { level: 1, name: "Chapter 48" })).toBeVisible();
+  await page.getByRole("button", { name: "Return to chapter 97" }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Chapter 97" })).toBeVisible({
     timeout: 30_000,
   });
@@ -403,6 +783,9 @@ test("continues routine chapters, pauses at both decisions, and stops at chapter
 
   await expect(page.getByRole("heading", { level: 1, name: "Chapter 98" })).toBeVisible();
   await confirmContinuation(page);
+  await expect(page.getByText("Chapter 100 is ready for review.", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Chapter 98" })).toBeVisible();
+  await page.getByRole("button", { name: "Return to chapter 100" }).click();
   await expect(
     page.getByRole("heading", { exact: true, level: 1, name: "Chapter 100" }),
   ).toBeVisible();
@@ -447,23 +830,25 @@ test("stops an automatic run only after the active chapter commits", async ({ pa
   let postCount = 0;
   await page.route("**/api/story", async (route) => {
     if (route.request().method() === "GET") {
-      await fulfillJson(route, { story: storyAtChapter(1, "Embers Remember", true) });
+      await fulfillJson(route, storyEnvelope(storyAtChapter(1, "Embers Remember", true)));
       return;
     }
     postCount += 1;
     await requestMayFinish;
-    await fulfillJson(route, { story: storyAtChapter(2, "The Next Ember", true) });
+    await fulfillJson(route, storyEnvelope(storyAtChapter(2, "The Next Ember", true)));
   });
 
   await page.goto("/");
   await confirmContinuation(page);
-  await expect(page.getByRole("combobox", { name: "Jump to saved chapter" })).toBeDisabled();
+  await expect(page.getByRole("combobox", { name: "Jump to saved chapter" })).toBeEnabled();
   await page.getByRole("button", { name: "Stop after this chapter" }).click();
   finishRequest();
 
-  await expect(page.getByRole("heading", { level: 1, name: "The Next Ember" })).toBeVisible();
-  await expect(page.getByRole("heading", { level: 1, name: "The Next Ember" })).toBeFocused();
+  await expect(page.getByRole("heading", { level: 1, name: "Embers Remember" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Return to chapter 2" })).toBeVisible();
   await expect(page.getByText("Stopped after chapter 2.", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Return to chapter 2" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "The Next Ember" })).toBeFocused();
   await expect(page.getByRole("button", { name: "Create chapter 3" })).toBeVisible();
   expect(postCount).toBe(1);
 });
@@ -472,11 +857,11 @@ test("submits a custom action", async ({ page }) => {
   let postedBody: unknown = null;
   await page.route("**/api/story", async (route) => {
     if (route.request().method() === "GET") {
-      await fulfillJson(route, { story: baseStory });
+      await fulfillJson(route, storyEnvelope(baseStory));
       return;
     }
     postedBody = route.request().postDataJSON();
-    await fulfillJson(route, { story: storyAtChapter(2, "A Quiet Gambit") });
+    await fulfillJson(route, storyEnvelope(storyAtChapter(2, "A Quiet Gambit")));
   });
 
   await page.goto("/");
@@ -499,7 +884,7 @@ test("shows a turn failure and retries the same command", async ({ page }) => {
   const postedBodies: unknown[] = [];
   await page.route("**/api/story", async (route) => {
     if (route.request().method() === "GET") {
-      await fulfillJson(route, { story: baseStory });
+      await fulfillJson(route, storyEnvelope(baseStory));
       return;
     }
     postCount += 1;
@@ -508,7 +893,7 @@ test("shows a turn failure and retries the same command", async ({ page }) => {
       await fulfillJson(route, { error: "World resolution timed out." }, 504);
       return;
     }
-    await fulfillJson(route, { story: storyAtChapter(2, "Recovered Embers") });
+    await fulfillJson(route, storyEnvelope(storyAtChapter(2, "Recovered Embers")));
   });
 
   await page.goto("/");
@@ -523,13 +908,25 @@ test("shows a turn failure and retries the same command", async ({ page }) => {
   expect(postedBodies[1]).toEqual(postedBodies[0]);
 });
 
-test("opens God Mode with intents, rejection, delta, usage, and trace", async ({ page }) => {
+test("keeps cost telemetry out of Reader and behind developer details", async ({ page }) => {
   await mockLoadedStory(page);
   await page.goto("/");
 
-  await page.locator("button:visible", { hasText: "God Mode" }).click();
+  await expect(page.getByText("$0.0241")).toHaveCount(0);
+  await expect(page.getByText(/3,290 tokens/u)).toHaveCount(0);
+  await expect(page.getByText("God Mode", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Developer details" })).not.toBeVisible();
+});
 
-  await expect(page.getByRole("heading", { level: 1, name: "God Mode" })).toBeAttached();
+test("opens secondary developer details with intents, rejection, delta, usage, and trace", async ({
+  page,
+}, testInfo) => {
+  await mockLoadedStory(page);
+  await page.goto("/");
+
+  await openDeveloperDetails(page, testInfo.project.name === "mobile");
+
+  await expect(page.getByRole("heading", { level: 1, name: "Developer details" })).toBeAttached();
   await expect(page.getByRole("heading", { level: 2, name: "Background intents" })).toBeVisible();
   await expect(page.getByText("Verify the broken prophecy seal")).toBeVisible();
   await expect(page.getByRole("heading", { level: 3, name: "Rejected intents" })).toBeVisible();
@@ -565,23 +962,27 @@ test("opens God Mode with intents, rejection, delta, usage, and trace", async ({
   expect(dimensions.scrollWidth).toBe(dimensions.clientWidth);
 });
 
-test("exposes Markdown and JSON export endpoints", async ({ page }) => {
+test("exposes Markdown and JSON export endpoints", async ({ page }, testInfo) => {
   await mockLoadedStory(page);
   await page.goto("/");
 
-  await expect(page.locator('a[href="/api/story/export?format=markdown"]')).toHaveCount(2);
-  await expect(page.locator('a[href="/api/story/export?format=json"]')).toHaveCount(2);
-  await expect(page.locator('a[href="/api/story/export?format=markdown"]').first()).toHaveAttribute(
-    "download",
-    "",
-  );
-  await expect(page.locator('a[href="/api/story/export?format=json"]').first()).toHaveAttribute(
-    "download",
-    "",
-  );
-  await page.locator("button:visible", { hasText: "God Mode" }).click();
-  await expect(page.locator('a[href="/api/story/export?format=json&scope=god"]')).toHaveCount(2);
-  await expect(page.getByText("God Mode JSON").first()).toBeAttached();
+  await expect(
+    page.locator('a[href="/api/story/export?format=markdown&storyId=rowan-story"]'),
+  ).toHaveCount(2);
+  await expect(
+    page.locator('a[href="/api/story/export?format=json&storyId=rowan-story"]'),
+  ).toHaveCount(2);
+  await expect(
+    page.locator('a[href="/api/story/export?format=markdown&storyId=rowan-story"]').first(),
+  ).toHaveAttribute("download", "");
+  await expect(
+    page.locator('a[href="/api/story/export?format=json&storyId=rowan-story"]').first(),
+  ).toHaveAttribute("download", "");
+  await openDeveloperDetails(page, testInfo.project.name === "mobile");
+  await expect(
+    page.locator('a[href="/api/story/export?format=json&scope=god&storyId=rowan-story"]'),
+  ).toHaveCount(2);
+  await expect(page.getByText("Developer JSON").first()).toBeAttached();
 });
 
 test("mobile reader has no horizontal overflow", async ({ page }, testInfo) => {

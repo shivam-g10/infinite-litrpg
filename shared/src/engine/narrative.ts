@@ -17,6 +17,8 @@ import { buildPovContext } from "./knowledge";
 import { resolveTurn } from "./resolver";
 import type { ValidationIssue, ValidationResult } from "./validation";
 
+export const MAX_CONSECUTIVE_CHAPTERS_IN_ONE_SCENE = 3 as const;
+
 export function decodeChapterFrameModelCandidate(input: unknown): ChapterFrameCandidate {
   const candidate = ChapterFrameModelCandidateSchema.parse(input);
   return ChapterFrameCandidateSchema.parse({
@@ -261,6 +263,33 @@ export function buildChapterChoiceOptions(state: WorldState): readonly ChapterCh
     valid.push({ ...candidate, id: `option-${valid.length + 1}` });
   }
   return valid;
+}
+
+/**
+ * Keeps automatic continuation from offering an endless stationary loop. The
+ * reader can still choose another valid option; application-owned canon is not
+ * changed here.
+ */
+export function prioritizeSceneMovementOptionIds(
+  state: WorldState,
+  requestedOptionIds: readonly string[],
+  recentActions: readonly IntentAction[],
+): string[] {
+  let stationaryStreak = 0;
+  for (let index = recentActions.length - 1; index >= 0; index -= 1) {
+    if (recentActions[index]?.type === "move") break;
+    stationaryStreak += 1;
+  }
+  if (stationaryStreak < MAX_CONSECUTIVE_CHAPTERS_IN_ONE_SCENE) {
+    return [...requestedOptionIds];
+  }
+
+  const movement = buildChapterChoiceOptions(state).find(({ action }) => action.type === "move");
+  if (movement === undefined) return [...requestedOptionIds];
+  return [movement.id, ...requestedOptionIds.filter((optionId) => optionId !== movement.id)].slice(
+    0,
+    2,
+  );
 }
 
 export function canonicalizeChapterFrameCandidate(

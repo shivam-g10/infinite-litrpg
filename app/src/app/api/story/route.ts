@@ -1,40 +1,73 @@
 import { CHARACTER_IDS, DEMO_CHAPTER_LIMIT } from "@infinite-litrpg/shared";
 
-import { getServerEnvironment, redactSecret } from "@/server/env";
-import { OpenAIRuntimeError } from "@/server/openai";
-import { InvalidCommitError, StaleWorldVersionError } from "@/server/storage/story-store";
-import { getStoryRuntime } from "@/server/story/runtime";
-import { StoryServiceError, type TurnCommand } from "@/server/story/story-service";
+import { getStoryRuntime, type StoryRuntime } from "@/server/story/runtime";
+import {
+  defaultStoryTitle,
+  describeStoryError,
+  storyEnvelope,
+  storyErrorResponse,
+} from "@/server/story/story-http";
+import {
+  StoryServiceError,
+  type RerollLatestCommand,
+  type TurnCommand,
+} from "@/server/story/story-service";
+import type { WorkspaceStoryResult } from "@/server/story/story-workspace";
 
 export const dynamic = "force-dynamic";
 
-export function GET(request: Request) {
+export async function GET(request: Request) {
   try {
-    const chapter = new URL(request.url).searchParams.get("chapter");
-    const service = getStoryRuntime().service;
-    return chapter === null
-      ? Response.json({ story: service.getStory() })
-      : Response.json({ chapter: service.getReaderChapter(parseReaderChapterNumber(chapter)) });
+    const parameters = new URL(request.url).searchParams;
+    const chapter = parameters.get("chapter");
+    const runtime = await getStoryRuntime();
+    if (chapter !== null) {
+      const storyId = parameters.get("storyId") ?? requireActiveStoryId(runtime);
+      return Response.json({
+        chapter: await runtime.workspace.getReaderChapter(
+          storyId,
+          parseReaderChapterNumber(chapter),
+        ),
+      });
+    }
+    const result = await runtime.workspace.getActiveStory();
+    return Response.json(storyEnvelope(runtime, result));
   } catch (error) {
-    return errorResponse(error);
+    return storyErrorResponse(error);
   }
 }
 
 export async function POST(request: Request) {
   try {
     const command = parseCommand(await request.json());
-    const runtime = getStoryRuntime();
+    const runtime = await getStoryRuntime();
     if (command.type === "select_pov") {
-      return Response.json({ story: runtime.service.selectPov(command.povCharacterId) });
+      const active = runtime.workspace.getActiveStoryMetadata();
+      const result =
+        active === null
+          ? await runtime.workspace.createStory({
+              povCharacterId: command.povCharacterId,
+              title: defaultStoryTitle(
+                command.povCharacterId,
+                runtime.workspace.listStories().length,
+              ),
+            })
+          : await requireMatchingActiveStory(
+              runtime,
+              active.povCharacterId,
+              command.povCharacterId,
+            );
+      return Response.json(storyEnvelope(runtime, result));
     }
     requireApiKey(runtime.environment.openAiApiKey);
+    const storyId = requireActiveStoryId(runtime);
     if (request.headers.get("accept")?.includes("application/x-ndjson")) {
-      return streamTurn(runtime.service, command);
+      return streamTurn(runtime, storyId, command);
     }
-    const story = await runtime.service.takeTurn(command);
-    return Response.json({ story });
+    const result = await dispatchStoryCommand(runtime, storyId, command);
+    return Response.json(storyEnvelope(runtime, result));
   } catch (error) {
-    return errorResponse(error);
+    return storyErrorResponse(error);
   }
 }
 
@@ -45,8 +78,9 @@ function requireApiKey(apiKey: string | undefined): asserts apiKey is string {
 }
 
 function streamTurn(
-  service: ReturnType<typeof getStoryRuntime>["service"],
-  command: TurnCommand,
+  runtime: StoryRuntime,
+  storyId: string,
+  command: StoryMutationCommand,
 ): Response {
   const encoder = new TextEncoder();
   let cancelled = false;
@@ -57,17 +91,20 @@ function streamTurn(
     start(controller) {
       void (async () => {
         try {
-          const story = await service.takeTurn(command, (text) => {
+          const result = await dispatchStoryCommand(runtime, storyId, command, (text) => {
             if (!cancelled && !enqueue(controller, encoder, { text, type: "chunk" })) {
               cancelled = true;
             }
           });
-          if (!cancelled && !enqueue(controller, encoder, { story, type: "story" })) {
+          if (
+            !cancelled &&
+            !enqueue(controller, encoder, { ...storyEnvelope(runtime, result), type: "story" })
+          ) {
             cancelled = true;
           }
         } catch (error) {
           if (!cancelled) {
-            const descriptor = describeError(error);
+            const descriptor = describeStoryError(error);
             if (
               !enqueue(controller, encoder, {
                 ...descriptor.body,
@@ -114,7 +151,10 @@ function enqueue(
 
 type ApiCommand =
   | { readonly povCharacterId: (typeof CHARACTER_IDS)[number]; readonly type: "select_pov" }
-  | TurnCommand;
+  | StoryMutationCommand;
+
+type StoryMutationCommand =
+  TurnCommand | (RerollLatestCommand & { readonly type: "reroll_latest" });
 
 function parseCommand(value: unknown): ApiCommand {
   if (!isRecord(value) || typeof value.type !== "string") {
@@ -171,7 +211,53 @@ function parseCommand(value: unknown): ApiCommand {
       type: "continue_story",
     };
   }
+  if (value.type === "reroll_latest") {
+    requireExactKeys(value, ["expectedWorldVersion", "requestId", "type"]);
+    return {
+      expectedWorldVersion: parseWorldVersion(value.expectedWorldVersion),
+      requestId: parseRequestId(value.requestId),
+      type: "reroll_latest",
+    };
+  }
   throw new StoryServiceError("Unknown command type");
+}
+
+async function dispatchStoryCommand(
+  runtime: StoryRuntime,
+  storyId: string,
+  command: StoryMutationCommand,
+  onNarrationChunk?: (chunk: string) => void | Promise<void>,
+): Promise<WorkspaceStoryResult> {
+  if (command.type === "reroll_latest") {
+    return runtime.workspace.rerollLatest(
+      storyId,
+      {
+        expectedWorldVersion: command.expectedWorldVersion,
+        requestId: command.requestId,
+      },
+      onNarrationChunk,
+    );
+  }
+  return runtime.workspace.takeTurn(storyId, command, onNarrationChunk);
+}
+
+function requireActiveStoryId(runtime: StoryRuntime): string {
+  const active = runtime.workspace.getActiveStoryMetadata();
+  if (active === null) throw new StoryServiceError("No active story exists", 404);
+  return active.id;
+}
+
+async function requireMatchingActiveStory(
+  runtime: StoryRuntime,
+  activePovCharacterId: string,
+  requestedPovCharacterId: string,
+): Promise<WorkspaceStoryResult> {
+  if (activePovCharacterId !== requestedPovCharacterId) {
+    throw new StoryServiceError("Viewpoint is permanently locked for this story", 409);
+  }
+  const result = await runtime.workspace.getActiveStory();
+  if (result === null) throw new StoryServiceError("No active story exists", 404);
+  return result;
 }
 
 function parseApprovedChapter(value: unknown): number {
@@ -223,48 +309,4 @@ function requireExactKeys(value: Record<string, unknown>, expected: readonly str
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function errorResponse(error: unknown): Response {
-  const descriptor = describeError(error);
-  return Response.json(descriptor.body, { status: descriptor.status });
-}
-
-function describeError(error: unknown): {
-  readonly body: { readonly code: string; readonly error: string };
-  readonly status: number;
-} {
-  const secret = getServerEnvironment().openAiApiKey;
-  if (error instanceof StoryServiceError) {
-    return {
-      body: { code: "STORY_ERROR", error: redactSecret(error.message, secret) },
-      status: error.status,
-    };
-  }
-  if (error instanceof SyntaxError) {
-    return {
-      body: { code: "INVALID_JSON", error: "Request body is not valid JSON" },
-      status: 400,
-    };
-  }
-  if (error instanceof OpenAIRuntimeError) {
-    const status = error.code === "COST_CAP_EXCEEDED" ? 422 : 502;
-    return {
-      body: { code: error.code, error: `Model call failed: ${error.code}` },
-      status,
-    };
-  }
-  if (error instanceof StaleWorldVersionError) {
-    return {
-      body: { code: "STALE_WORLD_VERSION", error: "World changed before commit" },
-      status: 409,
-    };
-  }
-  if (error instanceof InvalidCommitError) {
-    return {
-      body: { code: "INVALID_COMMIT", error: "Atomic commit rejected invalid output" },
-      status: 500,
-    };
-  }
-  return { body: { code: "INTERNAL_ERROR", error: "Story server failed safely" }, status: 500 };
 }

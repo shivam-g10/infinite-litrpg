@@ -38,6 +38,7 @@ describe("stable Responses adapter", () => {
     };
     expect(body.model).toBe("gpt-5.6-terra");
     expect(body.prompt_cache_options).toEqual({ mode: "explicit" });
+    expect(body).not.toHaveProperty("prompt_cache_key");
     expect(body.store).toBe(false);
     expect(body.text.format).toMatchObject({
       name: "test_result",
@@ -46,6 +47,34 @@ describe("stable Responses adapter", () => {
     });
     expect((body as { service_tier?: string }).service_tier).toBe("default");
   });
+
+  it("opts a structured request into stable implicit prompt caching", async () => {
+    const parse = vi.fn().mockResolvedValue(parsedResponse({ answer: "cached ash" }));
+    const request = structuredRequest({ maxRetries: 0 });
+    request.promptCacheKey = "story.ashen-crown:frame-01";
+
+    await runStructuredResponse(stableClient({ parse }), request);
+
+    expect(parse.mock.calls[0]?.[0]).toMatchObject({
+      prompt_cache_key: "story.ashen-crown:frame-01",
+      prompt_cache_options: { mode: "implicit", ttl: "30m" },
+    });
+  });
+
+  it.each(["", " leading", "contains space", "story/path", "a".repeat(65)])(
+    "rejects an unsafe structured prompt cache key: %j",
+    async (promptCacheKey) => {
+      const parse = vi.fn().mockResolvedValue(parsedResponse({ answer: "never called" }));
+      const request = structuredRequest({ maxRetries: 0 });
+      request.promptCacheKey = promptCacheKey;
+
+      await expectRuntimeError(
+        runStructuredResponse(stableClient({ parse }), request),
+        "INVALID_POLICY",
+      );
+      expect(parse).not.toHaveBeenCalled();
+    },
+  );
 
   it("requests, verifies, traces, and half-prices explicit Flex processing", async () => {
     const parse = vi
@@ -163,9 +192,33 @@ describe("stable Responses adapter", () => {
       .mockResolvedValueOnce(refusal)
       .mockResolvedValueOnce(parsedResponse({ answer: "done" }));
 
-    const result = await runStructuredResponse(stableClient({ parse }), structuredRequest());
+    const request = structuredRequest();
+    request.promptCacheKey = "story-ashen-crown-frame";
+    const result = await runStructuredResponse(stableClient({ parse }), request);
 
     expect(parse).toHaveBeenCalledTimes(3);
+    expect(
+      parse.mock.calls.map(([body]) =>
+        Object.fromEntries(
+          Object.entries(body as Record<string, unknown>).filter(([key]) =>
+            key.startsWith("prompt_cache"),
+          ),
+        ),
+      ),
+    ).toEqual([
+      {
+        prompt_cache_key: "story-ashen-crown-frame",
+        prompt_cache_options: { mode: "implicit", ttl: "30m" },
+      },
+      {
+        prompt_cache_key: "story-ashen-crown-frame",
+        prompt_cache_options: { mode: "implicit", ttl: "30m" },
+      },
+      {
+        prompt_cache_key: "story-ashen-crown-frame",
+        prompt_cache_options: { mode: "implicit", ttl: "30m" },
+      },
+    ]);
     expect(result.retries).toBe(2);
     expect(result.usage.inputTokens).toBe(300);
     expect(result.estimatedCostUsd).toBeCloseTo(0.001588125, 10);
@@ -355,6 +408,39 @@ describe("stable Responses adapter", () => {
     expect(count.mock.calls[0]?.[1]).toEqual({ maxRetries: 0, timeout: 10_000 });
   });
 
+  it("reserves the cache-write rate and never assumes a structured cache hit", async () => {
+    const input = "x".repeat(5_000);
+    const uncachedCount = vi.fn().mockResolvedValue(countResponse(100));
+    const uncachedParse = vi.fn().mockResolvedValue(parsedResponse({ answer: "uncached" }));
+    const uncachedRequest = structuredRequest({ maxRetries: 0 });
+    uncachedRequest.input = input;
+    uncachedRequest.policy = { budget: new ChapterCostBudget(0.0032), maxRetries: 0 };
+
+    await runStructuredResponse(
+      stableClient({ count: uncachedCount, parse: uncachedParse }),
+      uncachedRequest,
+    );
+
+    const cachedCount = vi.fn().mockResolvedValue(countResponse(100));
+    const cachedParse = vi.fn().mockResolvedValue(parsedResponse({ answer: "unsafe" }));
+    const cachedRequest = structuredRequest({ maxRetries: 0 });
+    cachedRequest.input = input;
+    cachedRequest.policy = { budget: new ChapterCostBudget(0.0032), maxRetries: 0 };
+    cachedRequest.promptCacheKey = "story-ashen-crown-cost-guard";
+
+    await expectRuntimeError(
+      runStructuredResponse(
+        stableClient({ count: cachedCount, parse: cachedParse }),
+        cachedRequest,
+      ),
+      "COST_CAP_EXCEEDED",
+    );
+    expect(uncachedCount).toHaveBeenCalledOnce();
+    expect(uncachedParse).toHaveBeenCalledOnce();
+    expect(cachedCount).toHaveBeenCalledOnce();
+    expect(cachedParse).not.toHaveBeenCalled();
+  });
+
   it("falls back to the byte bound when input counting fails", async () => {
     const count = vi.fn().mockRejectedValue(new Error("counter unavailable"));
     const parse = vi.fn().mockResolvedValue(parsedResponse({ answer: "blocked" }));
@@ -472,6 +558,26 @@ describe("stable Responses adapter", () => {
     expect(stream.mock.calls[0]?.[0]).toMatchObject({
       prompt_cache_options: { mode: "explicit" },
     });
+    expect(stream.mock.calls[0]?.[0]).not.toHaveProperty("prompt_cache_key");
+  });
+
+  it("rejects an unsafe narration prompt cache key before streaming", async () => {
+    const stream = vi.fn();
+
+    await expectRuntimeError(
+      createAuditedNarrationReplay(stableClient({ stream }), {
+        audit: () => ({ accepted: true }),
+        input: "safe POV context",
+        instructions: "Narrate.",
+        maxOutputTokens: 100,
+        model: "gpt-5.6-terra",
+        policy: { budget: new ChapterCostBudget(1), maxRetries: 0 },
+        promptCacheKey: "unsafe cache key",
+        reasoningEffort: "none",
+      }),
+      "INVALID_POLICY",
+    );
+    expect(stream).not.toHaveBeenCalled();
   });
 
   it("requests and verifies Flex on the streaming narration path", async () => {
@@ -570,6 +676,27 @@ describe("stable Responses adapter", () => {
     expect(count.mock.calls[0]?.[0]).not.toHaveProperty("text");
   });
 
+  it("reserves the cache-write rate and never assumes a narration cache hit", async () => {
+    const count = vi.fn().mockResolvedValue(countResponse(100));
+    const stream = vi.fn();
+
+    await expectRuntimeError(
+      createAuditedNarrationReplay(stableClient({ count, stream }), {
+        audit: () => ({ accepted: true }),
+        input: "x".repeat(5_000),
+        instructions: "Narrate.",
+        maxOutputTokens: 100,
+        model: "gpt-5.6-terra",
+        policy: { budget: new ChapterCostBudget(0.0032), maxRetries: 0 },
+        promptCacheKey: "story-ashen-crown-narration-cost",
+        reasoningEffort: "none",
+      }),
+      "COST_CAP_EXCEEDED",
+    );
+    expect(count).toHaveBeenCalledOnce();
+    expect(stream).not.toHaveBeenCalled();
+  });
+
   it("never returns a replay when audit rejects prose", async () => {
     const response = narrationResponse("leaked fact");
     const stream = vi.fn().mockReturnValue(fakeStream(["leaked fact"], response));
@@ -626,6 +753,7 @@ describe("stable Responses adapter", () => {
       maxOutputTokens: 100,
       model: "gpt-5.6-terra",
       policy: { budget: new ChapterCostBudget(1), maxRetries: 2 },
+      promptCacheKey: "story-ashen-crown-narration",
       reasoningEffort: "none",
     });
 
@@ -637,6 +765,16 @@ describe("stable Responses adapter", () => {
     expect(stream.mock.calls.map(([body]) => (body as { input: string }).input)).toEqual([
       "safe POV context attempt 1",
       "safe POV context attempt 2",
+    ]);
+    expect(stream.mock.calls.map(([body]) => body)).toEqual([
+      expect.objectContaining({
+        prompt_cache_key: "story-ashen-crown-narration",
+        prompt_cache_options: { mode: "implicit", ttl: "30m" },
+      }),
+      expect.objectContaining({
+        prompt_cache_key: "story-ashen-crown-narration",
+        prompt_cache_options: { mode: "implicit", ttl: "30m" },
+      }),
     ]);
   });
 

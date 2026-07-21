@@ -2,7 +2,7 @@
 
 ## Fast no-cost review
 
-Use a clean clone or a workspace with no `data/ashen-crown.db`.
+Use a clean clone, or preserve any existing ignored `stories/` directory before resetting demo data.
 
 ```powershell
 npm ci
@@ -10,19 +10,19 @@ npm run demo:seed
 npm run dev
 ```
 
-Open `http://127.0.0.1:3000`. The seed command restores authenticated Rowan chapter 1 from tracked evidence and makes no provider request.
+Open `http://127.0.0.1:3000`. The seed command restores authenticated Rowan chapter 1. On first app start, the legacy database is safely copied into `stories/imported-ashen-crown/`; no provider request runs.
 
 Check:
 
 1. Reader opens on Rowan with `Chapter 1 of 100` and the full chapter visible.
 2. `Continue to next decision` is the only primary story action.
-3. Opening it shows the exact chapter count, stop chapter, per-chapter cap, and worst-case total before `Start generation` appears.
+3. Opening it shows the exact target chapter before `Start generation` appears.
 4. Story and character details stay behind one disclosure.
-5. God Mode shows intent, delta, audit, model, usage, cost, latency, and state hashes.
+5. `More` → `Developer details` shows intent, delta, audit, model, usage, cost, latency, and state hashes without cluttering the Reader.
 6. Desktop and phone widths have no horizontal overflow.
 7. Markdown and Reader JSON exports contain no hidden canon.
 
-Do not use the current one-chapter excerpts for progression signoff. They prove voice only. Final narrative review requires six contiguous ten-chapter stories.
+Final narrative signoff requires six contiguous ten-chapter stories. The current tracked pack is a human-rejected baseline until prompt `1.5.0` replaces it.
 
 The long-form gate must pass first:
 
@@ -30,7 +30,7 @@ The long-form gate must pass first:
 npm run review:stories:check
 ```
 
-It currently fails until provenance-checked chapter-1-through-10 evidence exists for all six viewpoints. The tracked source artifact must contain every canonical chapter record, committed world delta, matching trace, and final state; the check rebuilds each state chain and the readable pack from those payloads. When green, read [SAMPLE_STORIES.md](SAMPLE_STORIES.md) in order. Compare each displayed chosen action with the following chapter, then complete each chapter progression table and story verdict.
+It fails unless every viewpoint has a provenance-checked chapter 1 through 10 and all 26 quality gates pass. The tracked source artifact contains every canonical chapter record, committed world delta, matching trace, and final state. The check rebuilds each state chain and readable pack. When green, read [SAMPLE_STORIES.md](SAMPLE_STORIES.md) in order, compare each chosen action with the next chapter, then complete each story verdict.
 
 For release review, use the complete authenticated [review packet set](review-packets/). Its manifest is `human-reviewed-rejected`: Rowan chapter 2, Elara chapter 1, and Lucan chapter 1 failed. The curated samples use different passing chapters and do not replace that rejected evidence.
 
@@ -62,15 +62,15 @@ The exact paid command is authorized with a hard `$5.088` aggregate Responses ge
 npm run review:stories:live -- --confirm-cost --chapter-cap-usd 0.0848 --total-cap-usd 5.088
 ```
 
-It avoids an immediate repeated action type, then selects the least-used offered action type and exact action with stable offered-order ties. It retains up to three sequential background agents, checkpoints each atomic commit, and publishes only chapters whose runtime audit passed. The `$0.0848` chapter flag budgets one uninterrupted attempt chain plus known failed turns restored from the story database. It uses an isolated spend ledger under ignored `evals/reports/`. Input-token count endpoint billing, if any, is outside the local ledger and provider invoice reconciliation.
+It avoids an immediate repeated action type, then selects the least-used offered action type and exact action with stable offered-order ties. It retains up to three sequential background agents, checkpoints each atomic commit, and publishes only chapters whose runtime audit and all story gates pass. The `$0.0848` flag is an upper bound. With `$0.86713` carried exposure, fair-share lowers the effective ceiling to `$0.070347833` so all 60 slots fit below `$5.088`. Canonical review stories and chapter Markdown live under ignored `stories/review-<character-id>/`; the spend ledger stays under ignored `evals/reports/`. Input-token count endpoint billing, if any, is outside the local ledger and provider invoice reconciliation.
 
-The rejected prompt `1.4.11` databases must first move through the provider-free, hash-bound quality migration after the new source commit:
+The completed, human-rejected prompt `1.4.12` databases must first move through the provider-free, hash-bound lineage migration after the new source commit:
 
 ```powershell
-npm run review:stories:migrate-variant -- --from-source-git-sha 5c92e7a75629d0d39e6edea676b4cf4ad44fb12c --confirm-archive
+npm run review:stories:migrate-variant -- --from-source-git-sha 90ca3462ea8c456cedc8f63d357b05970b5168aa --confirm-archive
 ```
 
-It archives every old database, verifies unique response cost against the ledger, carries `$0.1635525` as prior spend, applies only the authorized `$2.544` to `$5.088` cap transition, and makes zero provider requests.
+It archives every old database, verifies both prior manifests and unique response cost, carries `$0.86713` as prior spend, keeps the authorized `$5.088` cap unchanged, and makes zero provider requests.
 
 After a killed process, use only the run ID printed by the lock error and only after that process is dead:
 
@@ -94,7 +94,7 @@ Put the API key and the per-chapter ceiling you accept in root `.env`, then star
 
 ```dotenv
 OPENAI_API_KEY=
-OPENAI_MAX_COST_USD_PER_CHAPTER=0.10
+OPENAI_MAX_COST_USD_PER_CHAPTER=0.20
 ```
 
 ```powershell
@@ -103,7 +103,7 @@ npm run dev
 
 Choose a character and make the opening decision. Then use `Continue to next decision`.
 
-- Review the exact maximum shown and confirm `Start generation` only if you accept it.
+- Confirm the target chapter, then start only the run you intend.
 - Keep the tab open. The browser orchestrates one atomic chapter request at a time.
 - The story asks again only at an incomplete act milestone: after chapter 47 and after chapter 97 on the path to 100.
 - `Stop after this chapter` is truthful. It does not cancel active provider work.
