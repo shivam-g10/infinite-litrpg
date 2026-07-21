@@ -82,7 +82,7 @@ No sample data import is needed. The Ashen Crown world seeds automatically into 
 - [Architecture](ARCHITECTURE.md)
 - [Current verified status](STATUS.md)
 - [Human review guide](HUMAN_REVIEW.md)
-- [Six POV story samples](SAMPLE_STORIES.md)
+- [Current one-chapter POV excerpts; ten-chapter replacement pending](SAMPLE_STORIES.md)
 - [Eval contract](../evals/README.md)
 - [Narrative rubric](../evals/RUBRIC.md)
 - [Desktop reader](screenshots/reader-desktop.png)
@@ -96,6 +96,7 @@ No sample data import is needed. The Ashen Crown world seeds automatically into 
 
 - [ ] Strict full live report contains twelve valid commits across six POVs.
 - [ ] Six POV packets pass human narrative review.
+- [ ] Six contiguous ten-chapter stories pass human progression review.
 - [x] Repository is public with an MIT license.
 - [ ] Current release checkpoint is pushed after user authorization.
 - [ ] Public YouTube demo is approved and below three minutes.

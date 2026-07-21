@@ -188,6 +188,45 @@ export class LiveSpendLedger {
     transaction.immediate();
   }
 
+  acquireRunWithBaseline(runId: string, baseline: LiveSpendBaseline): void {
+    validateRunId(runId);
+    validateShaOrFreshId(baseline.sourceReportSha256);
+    const priorSpendNano = usdToNano(baseline.priorSpendUsd, "prior spend");
+    const attemptCostNano = usdToNano(baseline.attemptCostUsd, "attempt cost");
+    const transaction = this.db.transaction(() => {
+      const existing = this.readRunLock();
+      if (existing) {
+        throw new Error(`Live spend ledger is locked by run ${existing.run_id}`);
+      }
+      const meta = this.readMeta();
+      if (
+        meta.prior_spend_nano !== null ||
+        meta.baseline_attempt_nano !== 0 ||
+        meta.source_report_sha256 !== null ||
+        this.countAllReservations() !== 0
+      ) {
+        throw new Error("Atomic run initialization requires a fresh spend ledger");
+      }
+      if (priorSpendNano + attemptCostNano > meta.total_cap_nano) {
+        throw new Error("Atomic run baseline exceeds the live spend cap");
+      }
+      this.db
+        .prepare("INSERT INTO run_lock (id, run_id, pid, started_at) VALUES (1, ?, ?, ?)")
+        .run(runId, process.pid, new Date().toISOString());
+      const update = this.db
+        .prepare(
+          `UPDATE ledger_meta
+              SET prior_spend_nano = ?, baseline_attempt_nano = ?, source_report_sha256 = ?
+            WHERE id = 1 AND prior_spend_nano IS NULL AND source_report_sha256 IS NULL`,
+        )
+        .run(priorSpendNano, attemptCostNano, baseline.sourceReportSha256);
+      if (update.changes !== 1) {
+        throw new Error("Atomic run baseline changed during initialization");
+      }
+    });
+    transaction.immediate();
+  }
+
   increaseTotalCap(runId: string, requestedTotalCapUsd: number): void {
     validateRunId(runId);
     const requestedTotalCapNano = usdToNano(requestedTotalCapUsd, "requested total cap");
@@ -848,6 +887,84 @@ export function preflightLiveSpendCap(
       sourceReportSha256: snapshot.sourceReportSha256,
       totalExposureUsd: snapshot.totalExposureUsd,
       uncertainReservationCostUsd: snapshot.uncertainReservationCostUsd,
+    };
+  } finally {
+    db.close();
+  }
+}
+
+export function readLiveSpendSnapshot(filename: string): LiveSpendSnapshot {
+  const db = new Database(filename, { fileMustExist: true, readonly: true });
+  try {
+    const meta = readMetaFromDatabase(db);
+    if (meta.version !== LEDGER_VERSION) {
+      throw new Error("Live spend ledger must be migrated before read-only inspection");
+    }
+    return snapshotFromDatabase(db);
+  } finally {
+    db.close();
+  }
+}
+
+export function inspectLiveSpendRecovery(
+  filename: string,
+  expectedRunId: string,
+): InterruptedRunExpectation {
+  validateRunId(expectedRunId);
+  const db = new Database(filename, { fileMustExist: true, readonly: true });
+  try {
+    const meta = readMetaFromDatabase(db);
+    if (meta.version !== LEDGER_VERSION || meta.source_report_sha256 === null) {
+      throw new Error("Live spend recovery ledger is uninitialized or needs migration");
+    }
+    const lock = db.prepare("SELECT run_id FROM run_lock WHERE id = 1").get() as
+      { readonly run_id: string } | undefined;
+    if (lock?.run_id !== expectedRunId) {
+      throw new Error("Live spend recovery run ID does not match the durable lock");
+    }
+    const rows = db
+      .prepare(
+        `SELECT id, run_id, agent_id, attempt, model, service_tier, max_nano, actual_nano,
+                status
+           FROM reservations
+          ORDER BY id`,
+      )
+      .all() as ReservationAuditRow[];
+    if (rows.some(({ run_id }) => run_id !== expectedRunId)) {
+      throw new Error("Live spend recovery contains reservations from another run");
+    }
+    return {
+      baseline: {
+        attemptCostUsd: nanoToUsd(meta.baseline_attempt_nano),
+        priorSpendUsd: nanoToUsd(meta.prior_spend_nano ?? 0),
+        sourceReportSha256: meta.source_report_sha256,
+      },
+      knownReservations: rows
+        .filter((row) => row.status === "known")
+        .map((row) => {
+          if (row.actual_nano === null) {
+            throw new Error("Known live spend reservation lacks actual cost");
+          }
+          return {
+            actualCostUsd: nanoToUsd(row.actual_nano),
+            agentId: row.agent_id,
+            attempt: row.attempt,
+            id: row.id,
+            maximumCostUsd: nanoToUsd(row.max_nano),
+            model: row.model,
+            serviceTier: row.service_tier,
+          };
+        }),
+      unknownReservations: rows
+        .filter((row) => row.status === "active" || row.status === "uncertain")
+        .map((row) => ({
+          agentId: row.agent_id,
+          attempt: row.attempt,
+          id: row.id,
+          maximumCostUsd: nanoToUsd(row.max_nano),
+          model: row.model,
+          serviceTier: row.service_tier,
+        })),
     };
   } finally {
     db.close();

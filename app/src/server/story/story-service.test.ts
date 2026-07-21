@@ -642,6 +642,73 @@ describe("StoryService", () => {
     store.close();
   });
 
+  it.each(CHARACTER_IDS)(
+    "commits a contiguous ten-chapter first-choice branch for %s",
+    async (characterId) => {
+      const store = new StoryStore();
+      const prose = Array.from({ length: 900 }, (_, index) => `ember${index}`).join(" ");
+      const proseHash = createHash("sha256").update(prose).digest("hex");
+      const frame = { choices: [], terminal: false, title: "The Ash Road" } as const;
+      const audit: NarrativeAudit = {
+        approved: true,
+        evidence: NARRATIVE_AUDIT_DIMENSIONS.map((dimension) => ({
+          detail: "The chapter follows committed canon.",
+          dimension,
+          issueCode: "pass",
+        })),
+        leakedFactIds: [],
+        proseHash,
+        scores: {
+          arcProgress: 2,
+          characterAutonomy: 2,
+          choiceFulfillment: 2,
+          continuity: 2,
+          litrpgMechanics: 2,
+          povSafety: 2,
+          prose: 2,
+        },
+      };
+      let createIndex = 0;
+      let streamIndex = 0;
+      const create = vi.fn(() => {
+        const index = createIndex++;
+        return Promise.resolve(
+          index % 2 === 0
+            ? parsedResponse(frame, `resp_frame_${index}`)
+            : parsedResponse(audit, `resp_audit_${index}`),
+        );
+      });
+      const stream = vi.fn(() => fakeStream(prose, `resp_narration_${streamIndex++}`));
+      const service = new StoryService(
+        store,
+        { responses: { create, stream } } as unknown as OpenAI,
+        options(),
+      );
+      let view = service.selectPov(characterId);
+
+      for (let chapter = 1; chapter <= 10; chapter += 1) {
+        const state = store.loadWorldState("ashen-crown-v1");
+        if (!state) throw new Error("Review story state disappeared");
+        const choice = view.chapter.choices.find(({ id }) => id === "choice-1");
+        if (!choice) throw new Error("Review story lacks the first offered choice");
+        view = await service.takeTurn({
+          choiceId: choice.id,
+          expectedWorldVersion: state.version,
+          requestId: `00000000-0000-4000-8000-${String(200 + chapter).padStart(12, "0")}`,
+          type: "take_action",
+        });
+      }
+
+      expect(view.world).toMatchObject({ chapter: 10, version: 11 });
+      expect(store.loadChapters("ashen-crown-v1").map(({ chapter }) => chapter)).toEqual([
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+      ]);
+      expect(create).toHaveBeenCalledTimes(20);
+      expect(stream).toHaveBeenCalledTimes(10);
+      store.close();
+    },
+  );
+
   it("rejects automatic continuation at the chapter-100 demo horizon before model work", async () => {
     const store = new StoryStore();
     const horizon = demoHorizonWorld();

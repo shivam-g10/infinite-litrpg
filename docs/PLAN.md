@@ -59,6 +59,7 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 - [x] Implement canon-preserving re-narration with exact source provenance, pre-provider validation, replacement WAL, and hard total-cost preflight.
 - [x] Complete the prompt `1.4.11` twelve-cycle automated matrix with all strict automated gates green.
 - [x] Pass automated zero-leak checks across all six POVs.
+- [ ] Generate six authentic contiguous ten-chapter stories and pass progression review. The prior one-chapter excerpt pack is insufficient.
 - [ ] Replace the three human-rejected chapters and pass final human review across all twelve cycles.
 
 ### Phase 6: Product UI
@@ -80,6 +81,7 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 - [ ] Current prompt native Multi-agent live smoke path green. Sequential Rowan proof is current; native proof predates prompt `1.4.11`.
 - [x] Strict offline review-packet generator rejects partial, false-gate, and mixed-tier reports.
 - [x] Six POV review packets generated and agent-reviewed. Full report approval remains separate.
+- [ ] Six ten-chapter progression stories generated, provenance-checked, and human-reviewed.
 - [x] Secret scan and dependency-license check green.
 - [x] Clean-clone setup verified.
 
@@ -90,7 +92,7 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 - [x] Screenshots and architecture diagram ready.
 - [x] Complete the no-cost real-browser Reader, God Mode, cost-confirmation, and cancel rehearsal in 87.4 seconds.
 - [ ] Final real-click demo rehearsal completes below three minutes. Script and no-cost layout rehearsal path are ready.
-- [ ] User approves six POV review packets.
+- [ ] User approves six ten-chapter story reviews and the strict POV packets.
 - [ ] User authorizes public repository push.
 - [ ] User records or approves public demo under three minutes.
 - [ ] User supplies Codex feedback session ID.
@@ -161,6 +163,8 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 - ADR-019 uses shared deterministic milestone policy for player input. Routine continuation submits the persisted application-owned recommendation one atomic chapter at a time, stops after chapters 47 and 97 for decisions, and ends the demo run at chapter 100 without a chapter-101 request.
 - Primary UX research supports progressive disclosure, truthful status, polite live-region updates, and rare interruption. Browser QA found no horizontal overflow or console warning at desktop or phone width. The foreground run deliberately does not claim reload-safe background generation.
 - A provider-free generator now derives one passed chapter for each of the six POVs from authenticated human-reviewed packets. The tracked Markdown pack is reproducible and cannot silently select a rejected chapter.
+- Progression review invalidated the one-chapter excerpt bar. Authentic local prose stops at chapter 2 for every POV; browser chapter-100 fixtures are mocked and cannot fill the gap. A provider-free exact-choice regression now proves all six runtime states can commit through chapter 10 without changing model behavior.
+- The long-form runner is isolated from the strict two-chapter release matrix. It uses the first offered choice, up to three sequential background agents, one atomic commit per chapter, strict current-prompt audit evidence, a separate durable ledger, a `$0.0424` chapter ceiling, and a `$2.544` Responses generation-exposure ceiling. SDK retries are disabled. One stable run ID preserves recovery across suffix resumes. Its read-only preflight makes zero provider requests.
 
 ## Decision Log
 
@@ -176,6 +180,7 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 - ADR-018 permits canon-preserving prose replacement only after exact source authentication and deterministic re-resolution. It records actual reasoning configuration, keeps replacement evidence crash-safe, and rejects the full target plan before client creation if its hard ceilings exceed the global ledger cap.
 - ADR-019 permits routine continuation only when shared milestone policy says no player decision is due. It uses the persisted application-owned recommendation, keeps one atomic request per chapter, and treats chapter 100 as a UI horizon rather than terminal canon.
 - ADR-020 permits only the exact `$3` to `$3.021` live-ledger extension for the two-target human-review correction. Read-only preflight authenticates report, baseline, exposure, target ceiling, and lock state before dotenv or client creation. It does not include native smoke spend.
+- ADR-021 keeps ten-chapter progression evidence outside the version 9 two-chapter release matrix. Six fresh contiguous runs use one isolated ledger and publish only passed runtime commits.
 - ADR-010 permits official input-token counting to narrow a byte reservation. Failed counting keeps the byte bound. Actual overrun aborts before commit with exact accounting.
 - Prompt `1.4.9` distinguishes reader access to selected-POV private canon from an in-world knowledge transfer. It does not auto-approve empty leak lists or weaken forbidden fact and remote-effect checks.
 - ADR-011 replaces pair-only live recovery and static suite rejection with authenticated prefix recovery plus durable request-level global reservations. Static projection stays visible but cannot reclaim or spend exposure.
@@ -187,8 +192,8 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 
 ## Outcomes and Retrospective
 
-- Phases 1 through 4 and Phase 6 are implemented. Offline contracts, deterministic transitions, knowledge boundaries, atomic storage, both OpenAI adapters, the simplified reader, chapter-100 demo path, six-story review pack, README, architecture, and current screenshots are green. Provider-free correction preflight is implemented without changing story gates. Phase 5 still awaits a human-approved corrected report. The public real-click video and current native live proof remain open user and paid gates.
+- Phases 1 through 4 and Phase 6 are implemented. Offline contracts, deterministic transitions, knowledge boundaries, atomic storage, both OpenAI adapters, the simplified reader, chapter-100 demo path, README, architecture, and current screenshots are green. The prior one-chapter pack remains reproducible but no longer satisfies narrative review. Phase 5 now awaits six authentic ten-chapter runs and human progression verdicts, plus the corrected strict release report. The public real-click video and current native live proof remain open user and paid gates.
 
 ## Current Milestone
 
-Phase 6 is ready for human testing. The centered Reader, meaningful-decision continuation, truthful stop and retry behavior, chapter-100 boundary, provider-free seeded evidence, six-POV sample pack, desktop and mobile browser QA, full non-live gate, and clean-clone gate passed. Phase 5 correction preflight authenticated the exact two-target plan without changing ledger or evidence bytes. Work stops at fresh authority for its `$0.027` paid ceiling, then later separate native-smoke authority. User release gates remain unchanged.
+Reader UX is ready for local testing. Narrative progression review is not ready: the required six-by-ten artifact does not exist. The tested long-form runner and no-provider preflight are ready. Work stops at fresh authority for the exact `$2.544` story-review ceiling. The separate `$0.027` release correction, native smoke, push, video, feedback, and submission gates remain unchanged.

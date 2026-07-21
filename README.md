@@ -40,7 +40,7 @@ npm run dev
 
 Open `http://127.0.0.1:3000`. Choose one of six characters. The viewpoint locks for that local world. After the opening action, the reader can create routine chapters one at a time until the next meaningful act decision. The demo flow pauses after chapters 47 and 97 and stops at chapter 100. Runtime state stays in ignored `data/ashen-crown.db`.
 
-For a no-cost seeded review, the exact chapter-100 behavior proof, and the live cost boundary, use the [human review guide](docs/HUMAN_REVIEW.md). Six authenticated POV samples are ready in [SAMPLE_STORIES.md](docs/SAMPLE_STORIES.md).
+For a no-cost seeded UI review, the exact chapter-100 behavior proof, and the live cost boundary, use the [human review guide](docs/HUMAN_REVIEW.md). The current [sample file](docs/SAMPLE_STORIES.md) contains one reviewed excerpt per POV and is not sufficient for progression signoff. The required provenance-checked six-by-ten pack is pending its separately capped live run.
 
 Set `OPENAI_NATIVE_MULTI_AGENT=true` to use the native Multi-agent beta. The default sequential Luna adapter preserves the same intent schema and deterministic resolver.
 
@@ -95,7 +95,7 @@ Only the OpenAI Responses API is used.
 npm run check
 ```
 
-This runs format, lint, strict type checks, unit tests, 1,000 deterministic simulations, POV and chapter-350 evals, production build, desktop and mobile E2E tests, secret and client-bundle scans, license checks, the six-story packet check, dependency audit, and diff hygiene.
+This runs format, lint, strict type checks, unit tests, 1,000 deterministic simulations, POV and chapter-350 evals, production build, desktop and mobile E2E tests, secret and client-bundle scans, license checks, the required six-by-ten story-review check, dependency audit, and diff hygiene. The full command intentionally remains red until that authentic long-form artifact exists.
 
 Live API evals are separate and capped:
 

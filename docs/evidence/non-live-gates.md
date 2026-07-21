@@ -1,5 +1,7 @@
 # Non-Live Release Evidence
 
+> Historical 2026-07-21 snapshot. Its one-chapter sample gate is superseded for progression review by the required six-story, ten-chapter gate in `docs/PLAN.md`.
+
 - Verified: 2026-07-21
 - Scope: release-truth, human-review Reader, and chapter-100 continuation checkpoint
 - Paid generation calls in this scope: zero

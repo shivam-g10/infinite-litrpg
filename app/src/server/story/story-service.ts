@@ -1677,7 +1677,7 @@ async function generateAuditedCanonicalNarration(
   return { audit: approvedAudit, calls, prose: narration.prose, replay: narration.replay };
 }
 
-function loadSeedWorld(): WorldState {
+export function loadSeedWorld(): WorldState {
   const path = resolve(workspaceRoot(), "evals", "fixtures", "demon-king-world.json");
   const raw = JSON.parse(readFileSync(path, "utf8")) as unknown;
   const result = validateWorldState(raw);
@@ -1685,7 +1685,7 @@ function loadSeedWorld(): WorldState {
   return structuredClone(result.data);
 }
 
-function initialChoices(state: WorldState): readonly Choice[] {
+export function initialChoices(state: WorldState): readonly Choice[] {
   if (state.lockedPovId === null) return [];
   const actor = state.characters.find(({ id }) => id === state.lockedPovId);
   if (!actor) return [];

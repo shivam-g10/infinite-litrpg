@@ -2,12 +2,12 @@
 
 - Updated: 2026-07-21
 - Layer: Product hardening and human review
-- Current phase: Phase 6 chapter-100 demo and simple Reader
+- Current phase: Six ten-chapter progression stories for human review
 - Repository: initialized on `main`
 - Remote: public `https://github.com/shivam-g10/infinite-litrpg`; current local build not pushed
 - Initial commit: `39b19a2` (`chore: scaffold agent workflow`)
 - App: strict Next.js Reader with meaningful-decision continuation, deterministic engine, and SQLite store
-- Live API: prompt `1.4.11` sequential twelve-cycle automation green; Rowan correction retained; Elara and Lucan correction plus current-prompt native proof pending; no paid call authorized now
+- Live API: prompt `1.4.11` sequential twelve-cycle automation green; the new six-by-ten review run is provider-ready but not authorized
 - Evals: offline suite green
 - Build Week deadline: 2026-07-22 05:30 IST
 
@@ -21,21 +21,26 @@
 
 ## Current Blockers
 
+- The old `docs/SAMPLE_STORIES.md` contains one excerpt per viewpoint. It is not enough to judge progression and is no longer accepted as the human-review packet.
+- Authentic local prose reaches only chapter 2 for each viewpoint. No authentic chapters 3 through 10 exist. Reusing drafts, browser mocks, or repeated prose would create fake evidence.
+- A separate long-form runner now requires six exact chapter-1-through-10 prefixes, one passed runtime audit per chapter, current prompt and Git provenance, Flex receipts, canonical chapter, delta, trace, and final-state payloads, derived hashes, and one durable aggregate ledger. The strict two-chapter release matrix remains unchanged.
+- Provider-free preflight projects 60 missing chapters at a `$0.0424` uninterrupted chapter-chain budget and a hard `$2.544` aggregate Responses generation-exposure ceiling. A hard-killed unknown is charged in full; its resumed chapter may exceed `$0.0424` in lifetime exposure while the aggregate remains capped. Input-token count endpoint billing, if any, is outside the local ledger. Preflight creates no client or provider request. The exact paid command has not been authorized.
+
 - Human review originally rejected Rowan chapter 2, Elara chapter 1, and Lucan chapter 1 in automated-green report `fb9295d7c33ca154c7e407894b807d4a371b83d5ef066d78eee05ee42d4c49d2`.
 - The authorized re-narration chain retained a corrected Rowan chapter 2. Elara did not commit and Lucan was not reached. Failure report SHA-256 `d935b56ed039e560ac067c2ec268ed7780b9daf196497e3ffde6349be2c02e0a` is registered under `prompt-1-4-11-flex-elara-renarration-failure-3` with 43 exact bridge hashes.
 - Durable exposure is `$2.993429175`; headroom is `$0.006570825`. Ledger has zero lock and zero active or uncertain reservations. No later paid command has run or is authorized.
 - Provider-free preflight accepts only the registered report, sequential Flex mode, exact prior and chapter caps, and ordered Elara chapter 1 then Lucan chapter 1 targets. Their hard `$0.027` new-work ceiling projects `$3.020429175` and `$0.000570825` final headroom under `$3.021`. The migration and paid command exist but have not run. Fresh user authority is required.
-- Current-prompt native Multi-agent proof, a human-approved corrected six-POV report, real-click video approval, feedback session ID, push, and submission remain release gates. They do not block local human testing of the Reader.
+- Current-prompt native Multi-agent proof, a human-approved corrected six-POV report, the six ten-chapter progression verdicts, real-click video approval, feedback session ID, push, and submission remain release gates. The Reader UI can still be tested locally; narrative progression review cannot start.
 
 ## Next Action
 
-Stop for user authority. The only prepared paid command is:
+Stop for fresh user authority. The current priority command is:
 
 ```powershell
-npm run evals:live:full -- --total-cap-usd 3.021 --prior-spend-usd 2.811082175 --chapter-cap-usd 0.0135 --resume-report evals/reports/live-full-sequential-renarrated.json --renarrate elara-voss:1 --renarrate lucan-aurelis:1
+npm run review:stories:live -- --confirm-cost --chapter-cap-usd 0.0424 --total-cap-usd 2.544
 ```
 
-It permits at most `$0.027` new provider exposure. Current-prompt native Multi-agent smoke needs a separate later plan after correction cost is known. User-owned work then remains: full packet approval, current checkpoint push, public demo video, feedback Session ID, and Devpost submission.
+It permits at most `$2.544` Responses generation exposure across 60 chapters and resumes. It uses a separate ledger and does not spend or modify the release-eval `$3.021` ledger. SDK retries are disabled so every generation attempt has one durable reservation. A killed run can be recovered at the unknown request's full reservation without a provider call; retrying that chapter can exceed its `$0.0424` uninterrupted-chain budget but cannot exceed the aggregate. If all 60 chapters committed before an output-write crash, `npm run review:stories:finalize` rebuilds both artifacts without a provider call. The earlier `$0.027` Elara and Lucan correction command remains separate and is not implied by this authority. After generation, `npm run review:stories:check` must pass before human review starts.
 
 ## Evidence Log
 
@@ -200,5 +205,8 @@ It permits at most `$0.027` new provider exposure. Current-prompt native Multi-a
 - 2026-07-21 cap-extension full gate: `npm run check` exited 0 in 35.7 seconds. Format, lint, all three strict TypeScript projects, 282 tests across 18 files, all six offline gates with 1,000 simulations and chapter 351 blocked, production build, 21 E2E passes with one intentional desktop skip, both security scans across 216 working files, 526 licenses, reproducible six-story pack, zero-vulnerability audit, and diff hygiene passed. No provider call ran.
 - 2026-07-21 exact no-provider preflight: commit `d023d7e` ran `npm run evals:live:full:preflight -- --total-cap-usd 3.021 --prior-spend-usd 2.811082175 --chapter-cap-usd 0.0135 --resume-report evals/reports/live-full-sequential-renarrated.json --renarrate elara-voss:1 --renarrate lucan-aurelis:1` with a deliberately invalid key sentinel and exited 0 in 1.3 seconds. It authenticated 43 bridge hashes, the exact two targets, `$2.993429175` durable exposure, `$0.027` maximum new work, `$3.020429175` projected final exposure, and `$0.000570825` headroom. SHA-256 and byte lengths for the ledger, WAL, SHM, report, and sidecar were identical before and after. The ledger cap remains `$3`; no client or provider request ran.
 - 2026-07-21 cap-extension clean clone: `npm run verify:clean-clone` exited 0 in 61.6 seconds and reported its isolated gate at 58.4 seconds. A fresh install audited 448 packages with zero vulnerabilities, then passed 282 tests, all six offline eval gates, production build, 21 E2E passes with one intentional desktop skip, both security scans, 526 licenses, reproducible six-story pack, audit, and diff hygiene. No provider call ran.
+- 2026-07-21 ten-chapter review baseline: the prior provider-free sample check passed but exposed only one excerpt per viewpoint. Local inventory found no valid contiguous ten-chapter pack. The new focused test failed first on the missing long-form evidence contract. No provider call ran.
+- 2026-07-21 ten-chapter vertical slice: the isolated runner commits six first-choice branches through chapter 10 with the production `StoryService`, sequential Flex mode, up to three background agents, a `$0.0424` uninterrupted chapter-chain budget, a `$2.544` aggregate ledger cap, zero SDK retries, prefix validation, stale-run recovery, and provider-free finalization. The first run lock and baseline now commit in one SQLite transaction. The tracked source artifact must contain all 60 canonical chapter records, deltas, traces, and six final states; the check restages state, branch choice, usage, summaries, hashes, costs, and Markdown. Final hardening binds pricing and runtime schemas, retry groups, successful call flags, all audit dimensions, unique request, trace, response identities, and the source Git bridge. Focused story, ledger, and service tests pass 95 cases. No provider call ran.
+- 2026-07-21 intentional long-form gate: `npm run check` passed format, lint, strict types, 308 tests, all six offline gates with 1,000 simulations and chapter 351 blocked, production build, 21 E2E passes with one intentional skip, both security scans, and 526 licenses. It then exited 1 only because the required provenance-checked six-by-ten artifact does not exist. `npm run review:stories:preflight` reported zero of 60 committed chapters, per-viewpoint zero counts, `$2.544` maximum exposure, and zero provider requests. No provider call ran.
 
 Add exact command, date, exit code, cost, and report path after every future milestone gate.

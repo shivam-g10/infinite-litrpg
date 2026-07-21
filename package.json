@@ -27,6 +27,11 @@
     "evals:live:reconcile": "tsx evals/reconcile-live-interruption.ts",
     "evals:live:reconcile-settled": "tsx evals/reconcile-settled-live-run.ts",
     "evals:review-packets": "tsx evals/review-packets.ts",
+    "review:stories:preflight": "tsx evals/run-story-review.ts --preflight-only",
+    "review:stories:live": "tsx evals/run-story-review.ts",
+    "review:stories:finalize": "tsx evals/run-story-review.ts --finalize-only",
+    "review:stories:recover": "tsx evals/recover-story-review.ts",
+    "review:stories:check": "tsx scripts/export-sample-stories.ts --check --require-ten-chapters",
     "demo:evidence": "tsx scripts/export-demo-evidence.ts",
     "demo:samples": "tsx scripts/export-sample-stories.ts",
     "demo:samples:check": "tsx scripts/export-sample-stories.ts --check",
@@ -39,7 +44,7 @@
     "audit": "npm audit --audit-level=low",
     "diff:check": "git diff --check",
     "verify:clean-clone": "tsx scripts/verify-clean-clone.ts",
-    "check": "npm run format:check && npm run lint && npm run typecheck && npm run test && npm run evals && npm run build && npm run test:e2e && npm run security:secrets && npm run security:bundle && npm run licenses && npm run demo:samples:check && npm run audit && npm run diff:check"
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm run test && npm run evals && npm run build && npm run test:e2e && npm run security:secrets && npm run security:bundle && npm run licenses && npm run review:stories:check && npm run audit && npm run diff:check"
   },
   "devDependencies": {
     "@playwright/test": "1.61.1",

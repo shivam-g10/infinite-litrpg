@@ -10,6 +10,11 @@ Evals define completion. Implement runner before live prompt work.
 - `npm run evals:live:full:preflight`: full Flex resume authentication and cost proof with no API key, client, provider request, report write, or ledger mutation.
 - `npm run evals:live:reconcile`: registered no-network reconciliation for an interrupted unknown request.
 - `npm run evals:live:reconcile-settled`: registered no-network report materialization for a released run whose requests all settled.
+- `npm run review:stories:preflight`: read-only six-by-ten progress and exact cost projection with zero provider requests.
+- `npm run review:stories:live`: isolated Flex generation of six contiguous ten-chapter review stories.
+- `npm run review:stories:finalize`: no-network artifact finalization after all 60 chapters committed.
+- `npm run review:stories:recover`: no-network stale-lock recovery at maximum unknown exposure.
+- `npm run review:stories:check`: strict provider-free check for the generated six-by-ten Markdown pack.
 
 Live runs accept `--prior-spend-usd`, `--chapter-cap-usd`, and `--service-tier`. Report version 9 retains all version 8 canon, response, candidate, turn, stream, cost, and resume evidence. It also requires explicit requested and returned service tier on every current attempt and model call, tier-specific pricing version, exact clean-path projection, and a recomputed `serviceTierEvidenceComplete` gate. Selective resumes persist the exact human-rejected `rerunFrom` suffixes. Canon-preserving resumes instead persist exact `renarrate` targets plus source and replacement canonical hash, prose hash, request ID, and turn ID. The two modes are mutually exclusive. Paid source evidence remains append-only under `supersededTurnIds`, but each ID must fall inside the authenticated source evidence boundary. A settled finalization failure uses separate checkpoint-bound `settledFailure` provenance for its uncommitted evidence suffix. Neither kind can root current canon or satisfy a committed result. Older version 9 reports default new fields safely. A full version 9 report must use Flex. Missing, `auto`, mixed, mismatched, or retained poisoned tier evidence fails closed. Historical version 5 through 8 reports stay readable and default only their legacy tier provenance to Standard. An ignored atomic evidence sidecar survives interruption before chapter commit and carries the same tier and pricing bindings.
 
@@ -40,6 +45,26 @@ That strict failure report is registered under `prompt-1-4-11-flex-elara-renarra
 The safe preflight command is the third command above. The paid command is identical except it uses `evals:live:full` instead of `evals:live:full:preflight`. Current ledger exposure is `$2.993429175`; headroom is `$0.006570825`. There is no run lock and no active or uncertain reservation. Elara chapter 1 and Lucan chapter 1 still need eligible corrected prose. The paid command is prepared but not authorized.
 
 Never resume automatically.
+
+## Ten-Chapter Story Review
+
+The version 9 release matrix stays fixed at chapters 1 and 2. Long-form human progression review uses a separate runner, data directory, and spend ledger. It generates one first-offered-choice branch from chapters 1 through 10 for every canonical viewpoint. Each included chapter must be a real `StoryService` atomic commit with an approved audit, contiguous world versions, current prompt and source Git provenance, exact prose and trace hashes, Flex receipts, and no validation failure.
+
+```powershell
+npm run review:stories:preflight
+npm run review:stories:live -- --confirm-cost --chapter-cap-usd 0.0424 --total-cap-usd 2.544
+npm run review:stories:check
+```
+
+The first command loads no API key and creates no client, ledger, report, or provider request. It prints each viewpoint's committed prefix plus the aggregate projection. The paid command requires a clean committed worktree and exact flags. Its isolated durable ledger caps Responses generation exposure at `$2.544`, equal to 60 fresh uninterrupted chapter budgets of `$0.0424`. SDK retries are disabled; every transport attempt needs its own reservation. A clean product retry remains inside the chapter's attempt chain. A hard-killed unknown request is charged in full to the aggregate ledger, and its resumed chapter can exceed `$0.0424` in lifetime exposure because no failed-turn trace exists. The `$2.544` aggregate remains hard. Input-token count endpoint billing, if any, is outside this local ledger and needs provider-invoice reconciliation.
+
+One stable run ID owns all suffix resumes so historical reservations remain recoverable. A clean failure releases the lock and preserves committed prefixes. If the process dies, use the exact run ID from the lock error only after confirming that process is dead:
+
+```powershell
+npm run review:stories:recover -- --run-id <uuid>
+```
+
+Recovery loads no API key and makes no provider request. It converts each unknown active reservation to uncertain at full maximum, releases the stale lock, and retains that conservative exposure against remaining headroom. If all 60 chapters already committed but output writing did not finish, run `npm run review:stories:finalize`; it loads no key, makes no provider request, and permits only the two review output paths to be dirty. The tracked JSON contains all 60 canonical chapter records, committed deltas, matching traces, and six final states. The final check restages those payloads, recomputes the first-choice branch and usage totals, rebuilds every summary, binds the source SHA as an ancestor of the current checkout, and permits only named non-runtime review-document bridges. It rejects a missing viewpoint, any gap or reorder in chapters 1 through 10, a false audit, mismatched action, delta, state, prose or trace, mixed source provenance, runtime drift, unrelated worktree drift, or stale generated Markdown. Human notes inside marked review blocks remain editable. Human verdict remains authoritative.
 
 Runner must load root `.env`, redact secrets, write reports under ignored `evals/reports/`, and return nonzero on gate failure.
 

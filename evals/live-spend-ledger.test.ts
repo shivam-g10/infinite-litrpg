@@ -6,7 +6,12 @@ import { join } from "node:path";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { LiveSpendLedger, preflightLiveSpendCap } from "./live-spend-ledger";
+import {
+  LiveSpendLedger,
+  inspectLiveSpendRecovery,
+  preflightLiveSpendCap,
+  readLiveSpendSnapshot,
+} from "./live-spend-ledger";
 
 const SOURCE_A = "a".repeat(64);
 const SOURCE_B = "b".repeat(64);
@@ -25,6 +30,88 @@ afterEach(() => {
 });
 
 describe("durable live spend ledger", () => {
+  it("reads an arbitrary isolated cap without opening a writable ledger", () => {
+    const filename = temporaryLedgerPath();
+    const ledger = new LiveSpendLedger(filename, 2.544);
+    ledger.close();
+
+    expect(readLiveSpendSnapshot(filename)).toMatchObject({
+      totalCapUsd: 2.544,
+      totalExposureUsd: 0,
+    });
+  });
+
+  it("acquires the first run and baseline in one durable transaction", () => {
+    const filename = temporaryLedgerPath();
+    const ledger = new LiveSpendLedger(filename, 2.544);
+    const runId = randomUUID();
+
+    ledger.acquireRunWithBaseline(runId, {
+      attemptCostUsd: 0,
+      priorSpendUsd: 0,
+      sourceReportSha256: "fresh:aaaaaaa",
+    });
+
+    expect(ledger.snapshot()).toMatchObject({
+      sourceReportSha256: "fresh:aaaaaaa",
+      totalExposureUsd: 0,
+    });
+    const database = new Database(filename, { readonly: true });
+    try {
+      expect(database.prepare("SELECT run_id FROM run_lock WHERE id = 1").get()).toEqual({
+        run_id: runId,
+      });
+      expect(
+        database.prepare("SELECT source_report_sha256 FROM ledger_meta WHERE id = 1").get(),
+      ).toEqual({ source_report_sha256: "fresh:aaaaaaa" });
+    } finally {
+      database.close();
+    }
+    ledger.releaseRun(runId);
+    expect(() =>
+      ledger.acquireRunWithBaseline(randomUUID(), {
+        attemptCostUsd: 0,
+        priorSpendUsd: 0,
+        sourceReportSha256: "fresh:bbbbbbb",
+      }),
+    ).toThrow(/fresh spend ledger/iu);
+    ledger.close();
+  });
+
+  it("inspects and conservatively releases an isolated interrupted run", () => {
+    const filename = temporaryLedgerPath();
+    const ledger = new LiveSpendLedger(filename, 2.544);
+    const runId = randomUUID();
+    ledger.acquireRun(runId);
+    ledger.synchronizeBaseline(runId, {
+      attemptCostUsd: 0,
+      priorSpendUsd: 0,
+      sourceReportSha256: "fresh:aaaaaaa",
+    });
+    const hooks = ledger.createCostHooks(runId);
+    hooks.reserve(reservation("known-review", 0.01));
+    hooks.settle({ actualCostUsd: 0.006, id: "known-review" });
+    hooks.reserve(reservation("unknown-review", 0.02));
+    ledger.close();
+    const database = new Database(filename);
+    database.prepare("UPDATE run_lock SET pid = ? WHERE run_id = ?").run(2_147_483_647, runId);
+    database.close();
+
+    const inspection = inspectLiveSpendRecovery(filename, runId);
+    expect(inspection.knownReservations).toHaveLength(1);
+    expect(inspection.unknownReservations).toHaveLength(1);
+
+    const recovery = new LiveSpendLedger(filename, 2.544);
+    recovery.claimInterruptedRunAtMaximum(runId, inspection);
+    expect(recovery.snapshot()).toMatchObject({
+      activeReservationCount: 0,
+      knownReservationCostUsd: 0.006,
+      uncertainReservationCostUsd: 0.02,
+    });
+    recovery.releaseRun(runId);
+    recovery.close();
+  });
+
   it("previews a cap increase without mutating the ledger", () => {
     const filename = temporaryLedgerPath();
     const ledger = new LiveSpendLedger(filename, 3);
