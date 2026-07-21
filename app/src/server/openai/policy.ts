@@ -18,6 +18,7 @@ import {
 export const MAX_RETRIES = 2 as const;
 export const DEFAULT_TIMEOUT_MS = 60_000;
 export const DEFAULT_CHAPTER_COST_CAP_USD = 0.1;
+const NANO_USD = 1_000_000_000;
 
 export interface RuntimePolicy {
   readonly budget: ChapterCostBudget;
@@ -192,8 +193,10 @@ export async function runRetriedRequest<TResponse, TData>({
 
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
     const attemptStartedAt = performance.now();
-    const reservedCostUsd =
+    const requestedMaximumCostUsd =
       typeof maximumCostUsd === "function" ? await maximumCostUsd(attempt) : maximumCostUsd;
+    policy.budget.assertRequestAllowed(requestedMaximumCostUsd);
+    const reservedCostUsd = canonicalizeRuntimeCostUsd(requestedMaximumCostUsd);
     policy.budget.reserve(reservedCostUsd);
     const reservationId = randomUUID();
     if (policy.costHooks) {
@@ -216,7 +219,7 @@ export async function runRetriedRequest<TResponse, TData>({
     let providerUsageKnown = false;
     let responseId: string | null = null;
     let responseServiceTier: RuntimeServiceTier | null = null;
-    aggregateCostUsd += reservedCostUsd;
+    aggregateCostUsd = canonicalizeRuntimeCostUsd(aggregateCostUsd + reservedCostUsd);
     try {
       const response = await withTimeout((signal) => invoke(signal, attempt), timeoutMs);
       responseId = getResponseId(response);
@@ -224,13 +227,15 @@ export async function runRetriedRequest<TResponse, TData>({
       const usage = mapResponseUsage(getUsage(response));
       attemptUsage = usage;
       responseServiceTier = canonicalResponseServiceTier(getServiceTier(response));
-      const costUsd = estimateResponseCostUsd(model, usage, {
-        serviceTier: responseServiceTier,
-      });
+      const costUsd = canonicalizeRuntimeCostUsd(
+        estimateResponseCostUsd(model, usage, {
+          serviceTier: responseServiceTier,
+        }),
+      );
       attemptCostUsd = costUsd;
       providerUsageKnown = true;
       aggregateUsage = addUsage(aggregateUsage, usage);
-      aggregateCostUsd += costUsd - reservedCostUsd;
+      aggregateCostUsd = canonicalizeRuntimeCostUsd(aggregateCostUsd + costUsd - reservedCostUsd);
       let localSettlementError: unknown = null;
       try {
         policy.budget.settleReservation(reservedCostUsd, costUsd);
@@ -335,6 +340,20 @@ function canonicalResponseServiceTier(value: ProviderResponseServiceTier): Runti
     "INVALID_USAGE",
     `OpenAI returned unpriced service tier ${value ?? "missing"}`,
   );
+}
+
+function canonicalizeRuntimeCostUsd(value: number): number {
+  if (!Number.isFinite(value) || value < 0) {
+    throw new OpenAIRuntimeError("INVALID_USAGE", "Runtime request cost is invalid");
+  }
+  const scaled = value * NANO_USD;
+  const nearest = Math.round(scaled);
+  const floatingPointTolerance = Number.EPSILON * Math.max(1, Math.abs(scaled)) * 4;
+  const nano = Math.abs(scaled - nearest) <= floatingPointTolerance ? nearest : Math.ceil(scaled);
+  if (!Number.isSafeInteger(nano)) {
+    throw new OpenAIRuntimeError("INVALID_USAGE", "Runtime request cost exceeds safe precision");
+  }
+  return nano / NANO_USD;
 }
 
 function invokeCostHook(callback: () => void): void {

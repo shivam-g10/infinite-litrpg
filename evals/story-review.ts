@@ -55,6 +55,18 @@ export const STORY_REVIEW_VARIANT_CONFIG = {
 export const STORY_REVIEW_VARIANT_CONFIG_SHA256 = sha256(
   JSON.stringify(STORY_REVIEW_VARIANT_CONFIG),
 );
+export const STORY_REVIEW_SOURCE_BRIDGE_FROM_GIT_SHA =
+  "c7a1ae9a9fe2cdac505a10c614dec482c430c0ac" as const;
+export const STORY_REVIEW_SOURCE_BRIDGE_PATHS = [
+  "app/src/server/openai/policy.test.ts",
+  "app/src/server/openai/policy.ts",
+  "app/src/server/openai/stable.test.ts",
+  "docs/STATUS.md",
+  "evals/live-spend-ledger.test.ts",
+  "evals/run-story-review.ts",
+  "evals/story-review.test.ts",
+  "evals/story-review.ts",
+] as const;
 export const STORY_REVIEW_GIT_BRIDGE_PATHS = [
   "README.md",
   "docs/HUMAN_REVIEW.md",
@@ -107,6 +119,52 @@ export const StoryReviewVariantArchiveReferenceSchema = z.union([
   StoryReviewVariantArchiveReferenceV1Schema,
   StoryReviewVariantArchiveReferenceV2Schema,
 ]);
+export type StoryReviewVariantArchiveReference = z.infer<
+  typeof StoryReviewVariantArchiveReferenceSchema
+>;
+
+export const StoryReviewSourceBridgeSchema = z
+  .object({
+    changedPaths: z.array(z.enum(STORY_REVIEW_SOURCE_BRIDGE_PATHS)),
+    diffSha256: Sha256Schema,
+    fromSourceGitSha: z.literal(STORY_REVIEW_SOURCE_BRIDGE_FROM_GIT_SHA),
+    reason: z.literal("conservative-subnano-cost-accounting"),
+    toSourceGitSha: GitShaSchema,
+  })
+  .strict()
+  .superRefine((bridge, context) => {
+    if (
+      bridge.changedPaths.length !== STORY_REVIEW_SOURCE_BRIDGE_PATHS.length ||
+      bridge.changedPaths.some((path, index) => path !== STORY_REVIEW_SOURCE_BRIDGE_PATHS[index])
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Story-review source bridge paths do not match the approved hotfix",
+        path: ["changedPaths"],
+      });
+    }
+    if (bridge.toSourceGitSha === bridge.fromSourceGitSha) {
+      context.addIssue({
+        code: "custom",
+        message: "Story-review source bridge must advance Git history",
+        path: ["toSourceGitSha"],
+      });
+    }
+  });
+export type StoryReviewSourceBridge = z.infer<typeof StoryReviewSourceBridgeSchema>;
+
+export function buildStoryReviewSourceBridge(input: {
+  readonly changedPaths: readonly string[];
+  readonly diffSha256: string;
+  readonly fromSourceGitSha: string;
+  readonly toSourceGitSha: string;
+}): StoryReviewSourceBridge {
+  return StoryReviewSourceBridgeSchema.parse({
+    ...input,
+    changedPaths: [...input.changedPaths],
+    reason: "conservative-subnano-cost-accounting",
+  });
+}
 
 const StoryReviewChapterSchema = z
   .object({
@@ -193,6 +251,7 @@ export const StoryReviewEvidenceSchema = z
     schemaVersion: z.literal(STORY_REVIEW_SCHEMA_VERSION),
     serviceTier: z.literal("flex"),
     sourceGitSha: GitShaSchema,
+    sourceBridge: StoryReviewSourceBridgeSchema.optional(),
     stories: z.array(StoryReviewStorySchema).length(CHARACTER_IDS.length),
     totalCapUsd: z.literal(STORY_REVIEW_TOTAL_CAP_USD),
     variantConfigSha256: CurrentVariantHashSchema,
@@ -265,8 +324,11 @@ export const StoryReviewEvidenceSchema = z
         path: ["durableExposureUsd"],
       });
     }
+    const archiveSourceGitSha = evidence.sourceBridge?.fromSourceGitSha ?? evidence.sourceGitSha;
     if (
-      evidence.qualityVariantArchive.toSourceGitSha !== evidence.sourceGitSha ||
+      evidence.qualityVariantArchive.toSourceGitSha !== archiveSourceGitSha ||
+      (evidence.sourceBridge !== undefined &&
+        evidence.sourceBridge.toSourceGitSha !== evidence.sourceGitSha) ||
       evidence.qualityVariantArchive.variantConfigSha256 !== evidence.variantConfigSha256 ||
       evidence.qualityVariantArchive.carriedExposureUsd >
         evidence.durableExposureUsd + MONEY_EPSILON_USD
@@ -319,14 +381,18 @@ export const StoryReviewSourceEvidenceSchema = z
     schemaVersion: z.literal(STORY_REVIEW_SCHEMA_VERSION),
     serviceTier: z.literal("flex"),
     sourceGitSha: GitShaSchema,
+    sourceBridge: StoryReviewSourceBridgeSchema.optional(),
     stories: z.array(StoryReviewSourceStorySchema).length(CHARACTER_IDS.length),
     totalCapUsd: z.literal(STORY_REVIEW_TOTAL_CAP_USD),
     variantConfigSha256: CurrentVariantHashSchema,
   })
   .strict()
   .superRefine((evidence, context) => {
+    const archiveSourceGitSha = evidence.sourceBridge?.fromSourceGitSha ?? evidence.sourceGitSha;
     if (
-      evidence.qualityVariantArchive.toSourceGitSha !== evidence.sourceGitSha ||
+      evidence.qualityVariantArchive.toSourceGitSha !== archiveSourceGitSha ||
+      (evidence.sourceBridge !== undefined &&
+        evidence.sourceBridge.toSourceGitSha !== evidence.sourceGitSha) ||
       evidence.qualityVariantArchive.variantConfigSha256 !== evidence.variantConfigSha256 ||
       evidence.qualityVariantArchive.carriedExposureUsd >
         evidence.durableExposureUsd + MONEY_EPSILON_USD

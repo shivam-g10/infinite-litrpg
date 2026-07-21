@@ -287,6 +287,42 @@ describe("durable live spend ledger", () => {
     ledger.close();
   });
 
+  it("stores the canonical nano-USD Flex cost supplied by runtime policy", () => {
+    const filename = temporaryLedgerPath();
+    const ledger = new LiveSpendLedger(filename, 3);
+    const runId = randomUUID();
+    ledger.acquireRun(runId);
+    ledger.synchronizeBaseline(runId, {
+      attemptCostUsd: 0,
+      priorSpendUsd: 0,
+      sourceReportSha256: SOURCE_A,
+    });
+    const hooks = ledger.createCostHooks(runId);
+    hooks.reserve(reservation("terra-flex-half-nano", 0.025_821_875));
+    hooks.settle({
+      actualCostUsd: 0.007_344_688,
+      id: "terra-flex-half-nano",
+    });
+
+    expect(ledger.snapshot()).toMatchObject({
+      activeReservationCount: 0,
+      knownReservationCostUsd: 0.007_344_688,
+      totalExposureUsd: 0.007_344_688,
+    });
+    const database = new Database(filename, { readonly: true });
+    try {
+      expect(
+        database
+          .prepare("SELECT actual_nano FROM reservations WHERE id = ?")
+          .get("terra-flex-half-nano"),
+      ).toEqual({ actual_nano: 7_344_688 });
+    } finally {
+      database.close();
+    }
+    ledger.releaseRun(runId);
+    ledger.close();
+  });
+
   it("stores the requested service tier with every reservation", () => {
     const filename = temporaryLedgerPath();
     const ledger = new LiveSpendLedger(filename, 3);

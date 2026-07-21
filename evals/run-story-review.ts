@@ -38,6 +38,7 @@ import {
   STORY_REVIEW_CHAPTER_CAP_USD,
   STORY_REVIEW_BRANCH_POLICY,
   STORY_REVIEW_SCHEMA_VERSION,
+  STORY_REVIEW_SOURCE_BRIDGE_FROM_GIT_SHA,
   STORY_REVIEW_TOTAL_CAP_USD,
   STORY_REVIEW_TOTAL_CHAPTERS,
   STORY_REVIEW_VARIANT_CONFIG_SHA256,
@@ -47,11 +48,14 @@ import {
   buildStoryReviewEvidence,
   buildStoryReviewMarkdown,
   buildStoryReviewPreflight,
+  buildStoryReviewSourceBridge,
   mergeStoryReviewHumanSections,
   parseStoryReviewArgs,
   validateStoryReviewPrefix,
   selectStoryReviewChoice,
+  type StoryReviewSourceBridge,
   type StoryReviewSourceEvidence,
+  type StoryReviewVariantArchiveReference,
 } from "./story-review";
 import {
   assertStoryReviewVariantLedger,
@@ -80,8 +84,12 @@ export interface StoryReviewProgress {
 async function main(): Promise<void> {
   const args = parseStoryReviewArgs(process.argv.slice(2));
   const sourceGitSha = currentGitSha();
-  const variantMarker = currentVariantMarker(sourceGitSha);
-  const expectedLedgerSourceId = storyReviewLedgerSourceId(sourceGitSha, variantMarker);
+  const { sourceBridge, variantMarker } = currentVariantContext(sourceGitSha);
+  const qualityVariantArchive = storyReviewVariantArchiveReference(variantMarker);
+  const expectedLedgerSourceId = storyReviewLedgerSourceId(
+    variantMarker.toSourceGitSha,
+    variantMarker,
+  );
   const progress = readStoryReviewProgress(sourceGitSha);
   const ledgerState = readReviewLedgerState();
   const ledgerSnapshot = requireStoryReviewLedgerState(ledgerState, variantMarker);
@@ -104,8 +112,9 @@ async function main(): Promise<void> {
           paidCommand,
           priorVariantExposureUsd: ledgerSnapshot.priorSpendUsd,
           providerRequests: 0,
-          qualityVariantArchive: storyReviewVariantArchiveReference(variantMarker),
+          qualityVariantArchive,
           sourceGitSha,
+          ...(sourceBridge === undefined ? {} : { sourceBridge }),
           stories: CHARACTER_IDS.length,
           totalCapUsd: args.totalCapUsd,
           uncertainExposureUsd: ledgerSnapshot.uncertainReservationCostUsd,
@@ -126,7 +135,7 @@ async function main(): Promise<void> {
       throw new Error("Provider-free finalization allows changes only to story-review outputs");
     }
     const evidence = writeReviewArtifacts(
-      collectSourceEvidence(sourceGitSha, ledgerSnapshot, variantMarker),
+      collectSourceEvidence(sourceGitSha, ledgerSnapshot, qualityVariantArchive, sourceBridge),
     );
     console.log(
       `finalized six ten-chapter stories without provider requests: ${MARKDOWN_PATH}; durable exposure $${evidence.durableExposureUsd.toFixed(6)}`,
@@ -172,7 +181,7 @@ async function main(): Promise<void> {
       throw new Error("Completed story review still has an active provider reservation");
     }
     const evidence = writeReviewArtifacts(
-      collectSourceEvidence(sourceGitSha, snapshot, variantMarker),
+      collectSourceEvidence(sourceGitSha, snapshot, qualityVariantArchive, sourceBridge),
     );
     ledger.releaseRun(runId);
     ownsRun = false;
@@ -240,7 +249,8 @@ async function generateStory(characterId: CharacterId, workspace: StoryWorkspace
 function collectSourceEvidence(
   sourceGitSha: string,
   snapshot: LiveSpendSnapshot,
-  variantMarker: StoryReviewVariantMarker,
+  qualityVariantArchive: StoryReviewVariantArchiveReference,
+  sourceBridge?: StoryReviewSourceBridge,
 ): StoryReviewSourceEvidence {
   const stories = CHARACTER_IDS.map((characterId) => {
     const databasePath = storyReviewDatabasePath(characterId);
@@ -281,10 +291,11 @@ function collectSourceEvidence(
     generatedAt: new Date().toISOString(),
     priorVariantExposureUsd: snapshot.priorSpendUsd,
     promptVersion: PROMPT_VERSION,
-    qualityVariantArchive: storyReviewVariantArchiveReference(variantMarker),
+    qualityVariantArchive,
     schemaVersion: STORY_REVIEW_SCHEMA_VERSION,
     serviceTier: "flex",
     sourceGitSha,
+    ...(sourceBridge === undefined ? {} : { sourceBridge }),
     stories,
     totalCapUsd: STORY_REVIEW_TOTAL_CAP_USD,
     variantConfigSha256: STORY_REVIEW_VARIANT_CONFIG_SHA256,
@@ -575,22 +586,77 @@ function assertCanonicalReviewProjection(
   }
 }
 
-function currentVariantMarker(sourceGitSha: string): StoryReviewVariantMarker {
+function currentVariantContext(sourceGitSha: string): {
+  readonly sourceBridge?: StoryReviewSourceBridge;
+  readonly variantMarker: StoryReviewVariantMarker;
+} {
   if (!existsSync(VARIANT_MARKER_PATH)) {
     throw new Error(
       "Story-review quality variant must be migrated before preflight or paid generation",
     );
   }
-  return readStoryReviewVariantMarker(VARIANT_MARKER_PATH, STORY_ARCHIVE_DIRECTORY, sourceGitSha);
+  if (sourceGitSha === STORY_REVIEW_SOURCE_BRIDGE_FROM_GIT_SHA) {
+    return {
+      variantMarker: readStoryReviewVariantMarker(
+        VARIANT_MARKER_PATH,
+        STORY_ARCHIVE_DIRECTORY,
+        sourceGitSha,
+      ),
+    };
+  }
+  const variantMarker = readStoryReviewVariantMarker(
+    VARIANT_MARKER_PATH,
+    STORY_ARCHIVE_DIRECTORY,
+    STORY_REVIEW_SOURCE_BRIDGE_FROM_GIT_SHA,
+  );
+  const parentGitSha = gitText(["rev-parse", `${sourceGitSha}^`]);
+  if (parentGitSha !== STORY_REVIEW_SOURCE_BRIDGE_FROM_GIT_SHA) {
+    throw new Error("Story-review source bridge must be the direct child of its failed run");
+  }
+  const changedPaths = gitText([
+    "diff",
+    "--name-only",
+    "--no-renames",
+    STORY_REVIEW_SOURCE_BRIDGE_FROM_GIT_SHA,
+    sourceGitSha,
+  ])
+    .split(/\r?\n/u)
+    .filter((path) => path.length > 0)
+    .sort();
+  const diffSha256 = createHash("sha256")
+    .update(
+      execFileSync(
+        "git",
+        [
+          "diff",
+          "--binary",
+          "--no-ext-diff",
+          STORY_REVIEW_SOURCE_BRIDGE_FROM_GIT_SHA,
+          sourceGitSha,
+        ],
+        { cwd: ROOT, maxBuffer: 10 * 1024 * 1024 },
+      ),
+    )
+    .digest("hex");
+  return {
+    sourceBridge: buildStoryReviewSourceBridge({
+      changedPaths,
+      diffSha256,
+      fromSourceGitSha: STORY_REVIEW_SOURCE_BRIDGE_FROM_GIT_SHA,
+      toSourceGitSha: sourceGitSha,
+    }),
+    variantMarker,
+  };
 }
 
 function currentGitSha(): string {
-  const sha = execFileSync("git", ["rev-parse", "HEAD"], {
-    cwd: ROOT,
-    encoding: "utf8",
-  }).trim();
+  const sha = gitText(["rev-parse", "HEAD"]);
   if (!/^[a-f0-9]{40}$/u.test(sha)) throw new Error("Current Git SHA is invalid");
   return sha;
+}
+
+function gitText(args: readonly string[]): string {
+  return execFileSync("git", args, { cwd: ROOT, encoding: "utf8" }).trim();
 }
 
 function isCleanWorktree(): boolean {

@@ -11,7 +11,74 @@ const USAGE = {
   total_tokens: 120,
 };
 
+const TERRA_FLEX_HALF_NANO_USAGE = {
+  input_tokens: 3_170,
+  input_tokens_details: { cache_write_tokens: 3_167, cached_tokens: 0 },
+  output_tokens: 319,
+  output_tokens_details: { reasoning_tokens: 266 },
+  total_tokens: 3_489,
+};
+
 describe("durable runtime cost hooks", () => {
+  it("canonicalizes each sub-nano Flex cost before traces and durable settlement", async () => {
+    const reserve = vi.fn();
+    const settle = vi.fn();
+    const onAttempt = vi.fn();
+
+    for (const id of ["resp_half_nano_one", "resp_half_nano_two"]) {
+      const result = await runRetriedRequest({
+        evaluate: (response: { id: string }) => ({ data: response.id, responseId: response.id }),
+        getResponseId: (response: { id: string }) => response.id,
+        getServiceTier: () => "flex",
+        getUsage: () => TERRA_FLEX_HALF_NANO_USAGE,
+        invoke: async () => ({ id }),
+        maximumCostUsd: 0.025_821_875_5,
+        model: "gpt-5.6-terra",
+        policy: {
+          budget: new ChapterCostBudget(0.1),
+          costHooks: { markUncertain: vi.fn(), reserve, settle },
+          maxRetries: 0,
+          onAttempt,
+          serviceTier: "flex",
+        },
+      });
+      expect(result.estimatedCostUsd).toBe(0.007_344_688);
+    }
+
+    expect(reserve.mock.calls.map(([entry]) => entry.maximumCostUsd)).toEqual([
+      0.025_821_876, 0.025_821_876,
+    ]);
+    expect(settle.mock.calls.map(([entry]) => entry.actualCostUsd)).toEqual([
+      0.007_344_688, 0.007_344_688,
+    ]);
+    expect(onAttempt.mock.calls.map(([entry]) => entry.costUsd)).toEqual([
+      0.007_344_688, 0.007_344_688,
+    ]);
+    expect(settle.mock.calls.reduce((sum, [entry]) => sum + entry.actualCostUsd, 0)).toBe(
+      0.014_689_376,
+    );
+  });
+
+  it.each([Number.NaN, -0.01, 0])(
+    "keeps invalid request bound %s as a local policy failure",
+    async (maximumCostUsd) => {
+      const invoke = vi.fn();
+      await expect(
+        runRetriedRequest({
+          evaluate: (response: { id: string }) => ({ data: response.id, responseId: response.id }),
+          getResponseId: (response: { id: string }) => response.id,
+          getServiceTier: () => "default",
+          getUsage: () => USAGE,
+          invoke,
+          maximumCostUsd,
+          model: "gpt-5.6-terra",
+          policy: { budget: new ChapterCostBudget(0.1), maxRetries: 0 },
+        }),
+      ).rejects.toMatchObject({ code: "INVALID_POLICY" });
+      expect(invoke).not.toHaveBeenCalled();
+    },
+  );
+
   it("never invokes the provider when durable reservation fails", async () => {
     const invoke = vi.fn();
     const hooks: RuntimeCostHooks = {

@@ -25,6 +25,8 @@ import {
   STORY_REVIEW_CHAPTERS_PER_STORY,
   STORY_REVIEW_BRANCH_POLICY,
   STORY_REVIEW_SCHEMA_VERSION,
+  STORY_REVIEW_SOURCE_BRIDGE_FROM_GIT_SHA,
+  STORY_REVIEW_SOURCE_BRIDGE_PATHS,
   STORY_REVIEW_TOTAL_CAP_USD,
   STORY_REVIEW_VARIANT_CONFIG_SHA256,
   StoryReviewEvidenceSchema,
@@ -34,6 +36,7 @@ import {
   buildStoryReviewEvidence,
   buildStoryReviewMarkdown,
   buildStoryReviewPreflight,
+  buildStoryReviewSourceBridge,
   mergeStoryReviewHumanSections,
   parseStoryReviewWorktreePaths,
   parseStoryReviewArgs,
@@ -46,6 +49,59 @@ import {
 } from "./story-review";
 
 describe("ten-chapter story review evidence", () => {
+  it("binds the ledger precision hotfix to one exact Git child and file set", () => {
+    const toSourceGitSha = "d".repeat(40);
+    const bridge = buildStoryReviewSourceBridge({
+      changedPaths: STORY_REVIEW_SOURCE_BRIDGE_PATHS,
+      diffSha256: "e".repeat(64),
+      fromSourceGitSha: STORY_REVIEW_SOURCE_BRIDGE_FROM_GIT_SHA,
+      toSourceGitSha,
+    });
+    expect(bridge).toEqual({
+      changedPaths: STORY_REVIEW_SOURCE_BRIDGE_PATHS,
+      diffSha256: "e".repeat(64),
+      fromSourceGitSha: STORY_REVIEW_SOURCE_BRIDGE_FROM_GIT_SHA,
+      reason: "conservative-subnano-cost-accounting",
+      toSourceGitSha,
+    });
+    expect(() =>
+      buildStoryReviewSourceBridge({
+        changedPaths: STORY_REVIEW_SOURCE_BRIDGE_PATHS.slice(0, -1),
+        diffSha256: "e".repeat(64),
+        fromSourceGitSha: STORY_REVIEW_SOURCE_BRIDGE_FROM_GIT_SHA,
+        toSourceGitSha,
+      }),
+    ).toThrow(/approved hotfix/u);
+    expect(() =>
+      buildStoryReviewSourceBridge({
+        changedPaths: STORY_REVIEW_SOURCE_BRIDGE_PATHS,
+        diffSha256: "e".repeat(64),
+        fromSourceGitSha: "f".repeat(40),
+        toSourceGitSha,
+      }),
+    ).toThrow();
+
+    const base = fixtureEvidence();
+    expect(
+      StoryReviewEvidenceSchema.safeParse({
+        ...base,
+        qualityVariantArchive: {
+          ...base.qualityVariantArchive,
+          toSourceGitSha: STORY_REVIEW_SOURCE_BRIDGE_FROM_GIT_SHA,
+        },
+        sourceBridge: bridge,
+        sourceGitSha: toSourceGitSha,
+        stories: base.stories.map((story) => ({
+          ...story,
+          chapters: story.chapters.map((chapter) => ({
+            ...chapter,
+            sourceGitSha: toSourceGitSha,
+          })),
+        })),
+      }).success,
+    ).toBe(true);
+  });
+
   it("disables invisible SDK retries so every provider attempt is reserved", () => {
     expect(createStoryReviewClient("test-key").maxRetries).toBe(0);
   });
@@ -237,6 +293,59 @@ describe("ten-chapter story review evidence", () => {
         demo.result.canonicalNarrativeInput.stateAfter,
       ),
     ).toThrow(/source Git/u);
+  });
+
+  it("accepts canonical nano-USD trace cost within raw Flex repricing tolerance", () => {
+    const demo = readCurrentDemo();
+    const chapter = structuredClone(demo.result.canonicalNarrativeInput.chapterRecord) as {
+      estimatedCostUsd: number;
+      usage: Record<string, number>;
+    };
+    const trace = structuredClone(demo.result.trace) as {
+      attempts: {
+        costUsd: number;
+        model: string;
+        phase: string;
+        responseId: string | null;
+        usage: Record<string, number>;
+      }[];
+      calls: {
+        estimatedCostUsd: number;
+        model: string;
+        phase: string;
+        responseId: string;
+        usage: Record<string, number>;
+      }[];
+      totalEstimatedCostUsd: number;
+      totalUsage: Record<string, number>;
+    };
+    const auditAttempt = trace.attempts.find(({ phase }) => phase === "audit")!;
+    const auditCall = trace.calls.find(({ responseId }) => responseId === auditAttempt.responseId)!;
+    const terraFlexUsage = {
+      cacheWriteTokens: 3_167,
+      cachedInputTokens: 0,
+      inputTokens: 3_170,
+      outputTokens: 319,
+      reasoningTokens: 266,
+      totalTokens: 3_489,
+    };
+    auditAttempt.costUsd = 0.007_344_688;
+    auditAttempt.model = "gpt-5.6-terra";
+    auditAttempt.usage = terraFlexUsage;
+    auditCall.estimatedCostUsd = 0.007_344_688;
+    auditCall.model = "gpt-5.6-terra";
+    auditCall.usage = terraFlexUsage;
+    trace.totalEstimatedCostUsd = trace.attempts.reduce((sum, attempt) => sum + attempt.costUsd, 0);
+    trace.totalUsage = trace.attempts.reduce<Record<string, number>>((total, attempt) => {
+      for (const [key, value] of Object.entries(attempt.usage)) {
+        total[key] = (total[key] ?? 0) + value;
+      }
+      return total;
+    }, {});
+    chapter.estimatedCostUsd = trace.totalEstimatedCostUsd;
+    chapter.usage = trace.totalUsage;
+
+    expect(() => buildStoryReviewChapter("rowan-ashborn", chapter, trace)).not.toThrow();
   });
 
   it("rejects chapter and trace usage totals that could not commit atomically", () => {

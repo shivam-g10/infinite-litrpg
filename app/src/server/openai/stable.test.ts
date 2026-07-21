@@ -92,7 +92,7 @@ describe("stable Responses adapter", () => {
 
     expect((parse.mock.calls[0]?.[0] as { service_tier?: string }).service_tier).toBe("flex");
     expect(result).toMatchObject({ requestedServiceTier: "flex", serviceTier: "flex" });
-    expect(result.estimatedCostUsd).toBeCloseTo(0.0002646875, 12);
+    expect(result.estimatedCostUsd).toBe(0.000264688);
   });
 
   it("rejects a provider tier that disagrees with explicit Flex", async () => {
