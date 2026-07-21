@@ -48,15 +48,23 @@ Never resume automatically.
 
 ## Ten-Chapter Story Review
 
-The version 9 release matrix stays fixed at chapters 1 and 2. Long-form human progression review uses a separate runner, data directory, and spend ledger. It generates one first-offered-choice branch from chapters 1 through 10 for every canonical viewpoint. Each included chapter must be a real `StoryService` atomic commit with an approved audit, contiguous world versions, current prompt and source Git provenance, exact prose and trace hashes, Flex receipts, and no validation failure.
+The version 9 release matrix stays fixed at chapters 1 and 2. Long-form human progression review uses a separate runner, data directory, and spend ledger. It generates one least-used-action-type branch from chapters 1 through 10 for every canonical viewpoint and avoids an immediate type repeat when another offered type exists. Each included chapter must be a real `StoryService` atomic commit with an approved audit, contiguous world versions, current prompt and source Git provenance, exact prose and trace hashes, Flex receipts, and no validation failure.
 
 ```powershell
 npm run review:stories:preflight
-npm run review:stories:live -- --confirm-cost --chapter-cap-usd 0.0424 --total-cap-usd 2.544
+npm run review:stories:live -- --confirm-cost --chapter-cap-usd 0.0848 --total-cap-usd 5.088
 npm run review:stories:check
 ```
 
-The first command loads no API key and creates no client, ledger, report, or provider request. It prints each viewpoint's committed prefix plus the aggregate projection. The paid command requires a clean committed worktree and exact flags. Its isolated durable ledger caps Responses generation exposure at `$2.544`, equal to 60 fresh uninterrupted chapter budgets of `$0.0424`. SDK retries are disabled; every transport attempt needs its own reservation. A clean product retry remains inside the chapter's attempt chain. A hard-killed unknown request is charged in full to the aggregate ledger, and its resumed chapter can exceed `$0.0424` in lifetime exposure because no failed-turn trace exists. The `$2.544` aggregate remains hard. Input-token count endpoint billing, if any, is outside this local ledger and needs provider-invoice reconciliation.
+The first command loads no API key and creates no client, ledger, report, or provider request. It prints each viewpoint's committed prefix plus the aggregate projection. The paid command requires a clean committed worktree and exact flags. Its isolated durable ledger caps Responses generation exposure at `$5.088`; each uninterrupted chapter chain is capped at `$0.0848`. SDK retries are disabled; every transport attempt needs its own reservation. A clean product retry remains inside the chapter's attempt chain. A hard-killed unknown request is charged in full to the aggregate ledger, and its resumed chapter can exceed `$0.0848` in lifetime exposure because no failed-turn trace exists. The `$5.088` aggregate remains hard. Input-token count endpoint billing, if any, is outside this local ledger and needs provider-invoice reconciliation.
+
+Prompt `1.4.12` replaces the rejected prompt `1.4.11` branch. After committing the new source, migrate the frozen databases without provider access:
+
+```powershell
+npm run review:stories:migrate-variant -- --from-source-git-sha 5c92e7a75629d0d39e6edea676b4cf4ad44fb12c --confirm-archive
+```
+
+The migration hashes every archived file, deduplicates restored response IDs before cost reconciliation, binds the manifest hash into the ledger source, carries all `$0.1635525` exposure, and applies only the authorized `$2.544` to `$5.088` cap transition.
 
 One stable run ID owns all suffix resumes so historical reservations remain recoverable. A clean failure releases the lock and preserves committed prefixes. If the process dies, use the exact run ID from the lock error only after confirming that process is dead:
 
@@ -64,7 +72,7 @@ One stable run ID owns all suffix resumes so historical reservations remain reco
 npm run review:stories:recover -- --run-id <uuid>
 ```
 
-Recovery loads no API key and makes no provider request. It converts each unknown active reservation to uncertain at full maximum, releases the stale lock, and retains that conservative exposure against remaining headroom. If all 60 chapters already committed but output writing did not finish, run `npm run review:stories:finalize`; it loads no key, makes no provider request, and permits only the two review output paths to be dirty. The tracked JSON contains all 60 canonical chapter records, committed deltas, matching traces, and six final states. The final check restages those payloads, recomputes the first-choice branch and usage totals, rebuilds every summary, binds the source SHA as an ancestor of the current checkout, and permits only named non-runtime review-document bridges. It rejects a missing viewpoint, any gap or reorder in chapters 1 through 10, a false audit, mismatched action, delta, state, prose or trace, mixed source provenance, runtime drift, unrelated worktree drift, or stale generated Markdown. Human notes inside marked review blocks remain editable. Human verdict remains authoritative.
+Recovery loads no API key and makes no provider request. It converts each unknown active reservation to uncertain at full maximum, releases the stale lock, and retains that conservative exposure against remaining headroom. If all 60 chapters already committed but output writing did not finish, run `npm run review:stories:finalize`; it loads no key, makes no provider request, and permits only the two review output paths to be dirty. The tracked JSON contains all 60 canonical chapter records, committed deltas, matching traces, six final states, current variant hash, and any carried archive reference. The final check restages those payloads, recomputes the varied branch and usage totals, rebuilds every summary, binds the source SHA as an ancestor of the current checkout, and permits only named non-runtime review-document bridges. It rejects a missing viewpoint, any gap or reorder in chapters 1 through 10, a false audit, mismatched action, delta, state, prose or trace, mixed source provenance, runtime drift, unrelated worktree drift, or stale generated Markdown. Human notes inside marked review blocks remain editable. Human verdict remains authoritative.
 
 Runner must load root `.env`, redact secrets, write reports under ignored `evals/reports/`, and return nonzero on gate failure.
 

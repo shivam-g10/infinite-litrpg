@@ -30,6 +30,7 @@
     "review:stories:preflight": "tsx evals/run-story-review.ts --preflight-only",
     "review:stories:live": "tsx evals/run-story-review.ts",
     "review:stories:finalize": "tsx evals/run-story-review.ts --finalize-only",
+    "review:stories:migrate-variant": "tsx evals/migrate-story-review-variant.ts",
     "review:stories:recover": "tsx evals/recover-story-review.ts",
     "review:stories:check": "tsx scripts/export-sample-stories.ts --check --require-ten-chapters",
     "demo:evidence": "tsx scripts/export-demo-evidence.ts",

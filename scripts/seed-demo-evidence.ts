@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
-import { CONTRACT_VERSION, PROMPT_VERSION } from "@infinite-litrpg/shared";
+import { CONTRACT_VERSION, PERSISTED_PROMPT_VERSIONS } from "@infinite-litrpg/shared";
 import type OpenAI from "openai";
 import { z } from "zod";
 
@@ -52,12 +52,14 @@ export const DemoEvidenceSchema = z
       });
     }
     if (
-      evidence.result.trace.promptVersion !== PROMPT_VERSION ||
+      !PERSISTED_PROMPT_VERSIONS.some(
+        (promptVersion) => promptVersion === evidence.result.trace.promptVersion,
+      ) ||
       evidence.result.trace.contractVersion !== CONTRACT_VERSION
     ) {
       context.addIssue({
         code: "custom",
-        message: "Demo evidence does not match current prompt and contract versions",
+        message: "Demo evidence does not match a persisted prompt and current contract version",
       });
     }
   });

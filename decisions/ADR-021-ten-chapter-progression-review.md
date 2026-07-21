@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-07-21
+- Amendment: ADR-022 replaces the branch policy, prompt, and cost ceilings after the first paid quality baseline. The remaining evidence contract stays active.
 
 ## Context
 

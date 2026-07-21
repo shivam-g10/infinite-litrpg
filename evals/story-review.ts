@@ -14,6 +14,7 @@ import {
   buildPovContext,
   stageWorldDelta,
   type CharacterId,
+  type ChapterRecord,
   type TraceEnvelope,
 } from "@infinite-litrpg/shared";
 import { z } from "zod";
@@ -21,11 +22,20 @@ import { z } from "zod";
 import { FLEX_PRICING_VERSION, estimateResponseCostUsd } from "../app/src/server/openai/usage";
 import { initialChoices, loadSeedWorld } from "../app/src/server/story/story-service";
 
-export const STORY_REVIEW_SCHEMA_VERSION = "1.1.0-story-review" as const;
+export const STORY_REVIEW_SCHEMA_VERSION = "1.2.0-story-review" as const;
+export const STORY_REVIEW_BRANCH_POLICY = "least-used-action-type" as const;
 export const STORY_REVIEW_CHAPTERS_PER_STORY = 10 as const;
-export const STORY_REVIEW_CHAPTER_CAP_USD = 0.0424 as const;
-export const STORY_REVIEW_TOTAL_CAP_USD = 2.544 as const;
+export const STORY_REVIEW_CHAPTER_CAP_USD = 0.0848 as const;
+export const STORY_REVIEW_TOTAL_CAP_USD = 5.088 as const;
 export const STORY_REVIEW_TOTAL_CHAPTERS = CHARACTER_IDS.length * STORY_REVIEW_CHAPTERS_PER_STORY;
+export const STORY_REVIEW_VARIANT_CONFIG = {
+  branchPolicy: STORY_REVIEW_BRANCH_POLICY,
+  promptVersion: PROMPT_VERSION,
+  schemaVersion: STORY_REVIEW_SCHEMA_VERSION,
+} as const;
+export const STORY_REVIEW_VARIANT_CONFIG_SHA256 = sha256(
+  JSON.stringify(STORY_REVIEW_VARIANT_CONFIG),
+);
 export const STORY_REVIEW_GIT_BRIDGE_PATHS = [
   "README.md",
   "docs/HUMAN_REVIEW.md",
@@ -42,6 +52,22 @@ const MONEY_EPSILON_USD = 0.000_000_001;
 const Sha256Schema = z.string().regex(/^[a-f0-9]{64}$/u);
 const GitShaSchema = z.string().regex(/^[a-f0-9]{7,40}$/u);
 const CharacterIdSchema = z.enum(CHARACTER_IDS);
+const CurrentVariantHashSchema = Sha256Schema.refine(
+  (value) => value === STORY_REVIEW_VARIANT_CONFIG_SHA256,
+  "Story-review variant config hash does not match current code",
+);
+
+export const StoryReviewVariantArchiveReferenceSchema = z
+  .object({
+    archiveDirectory: z.string().regex(/^[a-f0-9]{40}-to-[a-f0-9]{40}$/u),
+    carriedExposureUsd: z.number().nonnegative().max(STORY_REVIEW_TOTAL_CAP_USD),
+    fromSourceGitSha: GitShaSchema,
+    manifestSha256: Sha256Schema,
+    reason: z.literal("narration-route-reversal-and-repetitive-branching"),
+    toSourceGitSha: GitShaSchema,
+    variantConfigSha256: CurrentVariantHashSchema,
+  })
+  .strict();
 
 const StoryReviewChapterSchema = z
   .object({
@@ -116,18 +142,21 @@ const StoryReviewStorySchema = z
 
 export const StoryReviewEvidenceSchema = z
   .object({
-    branchPolicy: z.literal("first-offered-choice"),
+    branchPolicy: z.literal(STORY_REVIEW_BRANCH_POLICY),
     chapterCapUsd: z.literal(STORY_REVIEW_CHAPTER_CAP_USD),
     chaptersPerStory: z.literal(STORY_REVIEW_CHAPTERS_PER_STORY),
     committedChapterCostUsd: z.number().nonnegative().max(STORY_REVIEW_TOTAL_CAP_USD),
     durableExposureUsd: z.number().nonnegative().max(STORY_REVIEW_TOTAL_CAP_USD),
     generatedAt: z.string().datetime({ offset: true }),
+    priorVariantExposureUsd: z.number().nonnegative().max(STORY_REVIEW_TOTAL_CAP_USD),
     promptVersion: z.literal(PROMPT_VERSION),
+    qualityVariantArchive: StoryReviewVariantArchiveReferenceSchema,
     schemaVersion: z.literal(STORY_REVIEW_SCHEMA_VERSION),
     serviceTier: z.literal("flex"),
     sourceGitSha: GitShaSchema,
     stories: z.array(StoryReviewStorySchema).length(CHARACTER_IDS.length),
     totalCapUsd: z.literal(STORY_REVIEW_TOTAL_CAP_USD),
+    variantConfigSha256: CurrentVariantHashSchema,
   })
   .strict()
   .superRefine((evidence, context) => {
@@ -197,6 +226,29 @@ export const StoryReviewEvidenceSchema = z
         path: ["durableExposureUsd"],
       });
     }
+    if (
+      evidence.qualityVariantArchive.toSourceGitSha !== evidence.sourceGitSha ||
+      evidence.qualityVariantArchive.variantConfigSha256 !== evidence.variantConfigSha256 ||
+      evidence.qualityVariantArchive.carriedExposureUsd >
+        evidence.durableExposureUsd + MONEY_EPSILON_USD
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Quality-variant archive does not match the review evidence lineage",
+        path: ["qualityVariantArchive"],
+      });
+    }
+    if (
+      Math.abs(
+        evidence.qualityVariantArchive.carriedExposureUsd - evidence.priorVariantExposureUsd,
+      ) > MONEY_EPSILON_USD
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Prior variant exposure must match its archive reference",
+        path: ["priorVariantExposureUsd"],
+      });
+    }
   });
 
 const StoryReviewSourceChapterSchema = z
@@ -217,19 +269,47 @@ const StoryReviewSourceStorySchema = z
 
 export const StoryReviewSourceEvidenceSchema = z
   .object({
-    branchPolicy: z.literal("first-offered-choice"),
+    branchPolicy: z.literal(STORY_REVIEW_BRANCH_POLICY),
     chapterCapUsd: z.literal(STORY_REVIEW_CHAPTER_CAP_USD),
     chaptersPerStory: z.literal(STORY_REVIEW_CHAPTERS_PER_STORY),
     durableExposureUsd: z.number().nonnegative().max(STORY_REVIEW_TOTAL_CAP_USD),
     generatedAt: z.string().datetime({ offset: true }),
+    priorVariantExposureUsd: z.number().nonnegative().max(STORY_REVIEW_TOTAL_CAP_USD),
     promptVersion: z.literal(PROMPT_VERSION),
+    qualityVariantArchive: StoryReviewVariantArchiveReferenceSchema,
     schemaVersion: z.literal(STORY_REVIEW_SCHEMA_VERSION),
     serviceTier: z.literal("flex"),
     sourceGitSha: GitShaSchema,
     stories: z.array(StoryReviewSourceStorySchema).length(CHARACTER_IDS.length),
     totalCapUsd: z.literal(STORY_REVIEW_TOTAL_CAP_USD),
+    variantConfigSha256: CurrentVariantHashSchema,
   })
-  .strict();
+  .strict()
+  .superRefine((evidence, context) => {
+    if (
+      evidence.qualityVariantArchive.toSourceGitSha !== evidence.sourceGitSha ||
+      evidence.qualityVariantArchive.variantConfigSha256 !== evidence.variantConfigSha256 ||
+      evidence.qualityVariantArchive.carriedExposureUsd >
+        evidence.durableExposureUsd + MONEY_EPSILON_USD
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Quality-variant archive does not match the source evidence lineage",
+        path: ["qualityVariantArchive"],
+      });
+    }
+    if (
+      Math.abs(
+        evidence.qualityVariantArchive.carriedExposureUsd - evidence.priorVariantExposureUsd,
+      ) > MONEY_EPSILON_USD
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Prior variant exposure must match its archive reference",
+        path: ["priorVariantExposureUsd"],
+      });
+    }
+  });
 
 export type StoryReviewEvidence = z.infer<typeof StoryReviewEvidenceSchema>;
 export type StoryReviewStory = z.infer<typeof StoryReviewStorySchema>;
@@ -554,7 +634,7 @@ export function validateStoryReviewPrefix(
   if (rows.length > STORY_REVIEW_CHAPTERS_PER_STORY) {
     throw new Error(`${characterId} review prefix exceeds ten chapters`);
   }
-  const chapters = validateFirstChoiceBranch(
+  const chapters = validateStoryReviewBranch(
     characterId,
     rows.map(({ chapter }) => chapter),
   );
@@ -602,17 +682,17 @@ export function validateStoryReviewPrefix(
   return rows.length;
 }
 
-export function validateFirstChoiceBranch(
+export function validateStoryReviewBranch(
   characterId: CharacterId,
   chapterCandidates: readonly unknown[],
 ) {
   const chapters = chapterCandidates.map((chapter) => ChapterRecordSchema.parse(chapter));
   const seed = loadSeedWorld();
   seed.lockedPovId = characterId;
-  let expectedChoice = initialChoices(WorldStateSchema.parse(seed)).find(
-    ({ id }) => id === "choice-1",
-  );
+  let offeredChoices = initialChoices(WorldStateSchema.parse(seed));
+  const priorActions: ChapterRecord["playerAction"][] = [];
   for (const chapter of chapters) {
+    const expectedChoice = selectStoryReviewChoice(priorActions, offeredChoices);
     if (
       !expectedChoice ||
       chapter.povCharacterId !== characterId ||
@@ -622,12 +702,50 @@ export function validateFirstChoiceBranch(
       !isDeepStrictEqual(chapter.playerAction.action, expectedChoice.action)
     ) {
       throw new Error(
-        `${characterId} review chapter ${chapter.chapter} is not the first offered choice`,
+        `${characterId} review chapter ${chapter.chapter} violates the ${STORY_REVIEW_BRANCH_POLICY} policy`,
       );
     }
-    expectedChoice = chapter.choices.find(({ id }) => id === "choice-1");
+    priorActions.push(chapter.playerAction);
+    offeredChoices = chapter.choices;
   }
   return chapters;
+}
+
+export function selectStoryReviewChoice(
+  priorActions: readonly ChapterRecord["playerAction"][],
+  offeredChoices: readonly ChapterRecord["choices"][number][],
+): ChapterRecord["choices"][number] | undefined {
+  const lastType = priorActions.at(-1)?.action.type;
+  const typeCounts = new Map<string, number>();
+  const exactCounts = new Map<string, number>();
+  for (const action of priorActions) {
+    typeCounts.set(action.action.type, (typeCounts.get(action.action.type) ?? 0) + 1);
+    const signature = storyReviewActionSignature(action);
+    exactCounts.set(signature, (exactCounts.get(signature) ?? 0) + 1);
+  }
+  return offeredChoices
+    .map((choice, index) => ({
+      choice,
+      exactCount: exactCounts.get(storyReviewActionSignature(choice)) ?? 0,
+      immediateRepeat: choice.action.type === lastType ? 1 : 0,
+      index,
+      typeCount: typeCounts.get(choice.action.type) ?? 0,
+    }))
+    .sort(
+      (left, right) =>
+        left.immediateRepeat - right.immediateRepeat ||
+        left.typeCount - right.typeCount ||
+        left.exactCount - right.exactCount ||
+        left.index - right.index,
+    )[0]?.choice;
+}
+
+function storyReviewActionSignature(input: {
+  readonly action: ChapterRecord["playerAction"]["action"];
+  readonly description: string;
+  readonly milestoneId: string | null;
+}): string {
+  return JSON.stringify([input.action, input.description, input.milestoneId]);
 }
 
 export function parseStoryReviewArgs(args: readonly string[]): StoryReviewArgs {
@@ -728,8 +846,9 @@ export function buildStoryReviewMarkdown(candidate: unknown): string {
     `- Prompt version: \`${evidence.promptVersion}\``,
     `- Service tier: \`${evidence.serviceTier}\``,
     `- Estimated committed chapter cost: \`$${evidence.committedChapterCostUsd.toFixed(6)}\`. Conservative durable exposure: \`$${evidence.durableExposureUsd.toFixed(6)}\` under the authorized \`$${evidence.totalCapUsd.toFixed(3)}\` ceiling.`,
+    `- Carried prior-variant exposure: \`$${evidence.priorVariantExposureUsd.toFixed(6)}\`, archive manifest \`${evidence.qualityVariantArchive.manifestSha256}\`.`,
     "- Every chapter passed schema, canon, POV, narrative, and atomic-commit gates before inclusion.",
-    "- Branch policy: the runner selected the first offered in-world choice for every generated chapter; no repeated hardcoded custom action was injected.",
+    "- Branch policy: the runner avoided an immediate action-type repeat, then selected the least-used offered action type and exact action with stable offered-order ties; no hardcoded custom action was injected.",
     "",
     "## Reading order",
     "",

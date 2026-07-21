@@ -10,6 +10,8 @@ export const LIVE_SPEND_ORIGINAL_TOTAL_CAP_USD = 3 as const;
 export const LIVE_SPEND_EXTENDED_TOTAL_CAP_USD = 3.021 as const;
 const ORIGINAL_TOTAL_CAP_NANO = 3_000_000_000;
 const EXTENDED_TOTAL_CAP_NANO = 3_021_000_000;
+const STORY_REVIEW_ORIGINAL_TOTAL_CAP_NANO = 2_544_000_000;
+const STORY_REVIEW_EXTENDED_TOTAL_CAP_NANO = 5_088_000_000;
 
 export interface LiveSpendBaseline {
   readonly attemptCostUsd: number;
@@ -234,11 +236,14 @@ export class LiveSpendLedger {
       this.assertRunOwner(runId);
       const meta = this.readMeta();
       const exposureNano = this.totalExposureNano();
-      if (
-        meta.total_cap_nano !== ORIGINAL_TOTAL_CAP_NANO ||
-        requestedTotalCapNano !== EXTENDED_TOTAL_CAP_NANO
-      ) {
-        throw new Error("Live spend ledger supports only the explicit $3 to $3.021 cap increase");
+      const isReleaseEvalIncrease =
+        meta.total_cap_nano === ORIGINAL_TOTAL_CAP_NANO &&
+        requestedTotalCapNano === EXTENDED_TOTAL_CAP_NANO;
+      const isStoryReviewIncrease =
+        meta.total_cap_nano === STORY_REVIEW_ORIGINAL_TOTAL_CAP_NANO &&
+        requestedTotalCapNano === STORY_REVIEW_EXTENDED_TOTAL_CAP_NANO;
+      if (!isReleaseEvalIncrease && !isStoryReviewIncrease) {
+        throw new Error("Live spend ledger does not recognize this explicit cap increase");
       }
       if (this.countReservations("active") !== 0) {
         throw new Error("Live spend ledger cap increase requires zero active reservations");
@@ -248,7 +253,7 @@ export class LiveSpendLedger {
       }
       const updated = this.db
         .prepare("UPDATE ledger_meta SET total_cap_nano = ? WHERE id = 1 AND total_cap_nano = ?")
-        .run(requestedTotalCapNano, ORIGINAL_TOTAL_CAP_NANO);
+        .run(requestedTotalCapNano, meta.total_cap_nano);
       if (
         updated.changes !== 1 ||
         this.readMeta().total_cap_nano !== requestedTotalCapNano ||
@@ -1061,7 +1066,7 @@ function validateRunId(runId: string): void {
 }
 
 function validateShaOrFreshId(value: string): void {
-  if (!/^(?:[a-f0-9]{64}|fresh:[a-f0-9]{7,40})$/u.test(value)) {
+  if (!/^(?:[a-f0-9]{64}|fresh:[a-f0-9]{7,40}(?::[a-f0-9]{64})?)$/u.test(value)) {
     throw new Error("Live spend baseline needs a report hash or fresh Git identifier");
   }
 }

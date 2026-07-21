@@ -24,9 +24,11 @@ import {
 import {
   STORY_REVIEW_CHAPTERS_PER_STORY,
   STORY_REVIEW_CHAPTER_CAP_USD,
+  STORY_REVIEW_BRANCH_POLICY,
   STORY_REVIEW_SCHEMA_VERSION,
   STORY_REVIEW_TOTAL_CAP_USD,
   STORY_REVIEW_TOTAL_CHAPTERS,
+  STORY_REVIEW_VARIANT_CONFIG_SHA256,
   StoryReviewSourceEvidenceSchema,
   buildStoryReviewChapter,
   buildStoryReviewEvidence,
@@ -35,17 +37,26 @@ import {
   mergeStoryReviewHumanSections,
   parseStoryReviewArgs,
   validateStoryReviewPrefix,
+  selectStoryReviewChoice,
   type StoryReviewSourceEvidence,
 } from "./story-review";
+import {
+  assertStoryReviewVariantLedger,
+  readStoryReviewVariantMarker,
+  storyReviewLedgerSourceId,
+  storyReviewVariantArchiveReference,
+  type StoryReviewVariantMarker,
+} from "./story-review-variant";
 
 const ROOT = process.cwd();
 const WORLD_ID = "ashen-crown-v1";
 const REPORT_DIRECTORY = resolve(ROOT, "evals", "reports");
 const STORY_DATA_DIRECTORY = resolve(REPORT_DIRECTORY, "story-review");
+const STORY_ARCHIVE_DIRECTORY = resolve(REPORT_DIRECTORY, "story-review-archives");
 const LEDGER_PATH = resolve(REPORT_DIRECTORY, "story-review-spend.db");
+const VARIANT_MARKER_PATH = resolve(REPORT_DIRECTORY, "story-review-variant.json");
 const EVIDENCE_PATH = resolve(ROOT, "docs", "story-review-evidence.json");
 const MARKDOWN_PATH = resolve(ROOT, "docs", "SAMPLE_STORIES.md");
-const BRANCH_POLICY = "first-offered-choice" as const;
 const STORY_REVIEW_RUN_ID = "00000000-0000-4000-8000-000000000610";
 
 export interface StoryReviewProgress {
@@ -56,42 +67,35 @@ export interface StoryReviewProgress {
 async function main(): Promise<void> {
   const args = parseStoryReviewArgs(process.argv.slice(2));
   const sourceGitSha = currentGitSha();
+  const variantMarker = currentVariantMarker(sourceGitSha);
+  const expectedLedgerSourceId = storyReviewLedgerSourceId(sourceGitSha, variantMarker);
   const progress = readStoryReviewProgress(sourceGitSha);
   const ledgerState = readReviewLedgerState();
-  if (ledgerState.snapshot && ledgerState.snapshot.totalCapUsd !== args.totalCapUsd) {
-    throw new Error("Existing story-review ledger uses a different total cap");
+  const ledgerSnapshot = requireStoryReviewLedgerState(ledgerState, variantMarker);
+  if (ledgerSnapshot.sourceReportSha256 !== expectedLedgerSourceId) {
+    throw new Error("Existing story-review evidence belongs to a different source variant");
   }
-  if (ledgerState.runId !== null) {
-    throw new Error(
-      `Story-review spend ledger is locked by run ${ledgerState.runId}. Recover only after its process is dead: npm run review:stories:recover -- --run-id ${ledgerState.runId}`,
-    );
-  }
-  if (ledgerState.snapshot && ledgerState.snapshot.activeReservationCount !== 0) {
-    throw new Error("Story-review spend needs interruption reconciliation before more work");
-  }
-  const durableExposureUsd = ledgerState.snapshot?.totalExposureUsd ?? 0;
-  if (ledgerState.snapshot === null && progress.completedChapters !== 0) {
-    throw new Error("Story-review chapters exist without a durable spend ledger");
-  }
+  const durableExposureUsd = ledgerSnapshot.totalExposureUsd;
   const preflight = buildStoryReviewPreflight(progress.byCharacter, durableExposureUsd);
   const worktreeClean = isCleanWorktree();
-  const paidCommand =
-    "npm run review:stories:live -- --confirm-cost --chapter-cap-usd 0.0424 --total-cap-usd 2.544";
+  const paidCommand = `npm run review:stories:live -- --confirm-cost --chapter-cap-usd ${STORY_REVIEW_CHAPTER_CAP_USD} --total-cap-usd ${STORY_REVIEW_TOTAL_CAP_USD}`;
 
   if (args.preflightOnly) {
     console.log(
       JSON.stringify(
         {
           ...preflight,
-          branchPolicy: BRANCH_POLICY,
+          branchPolicy: STORY_REVIEW_BRANCH_POLICY,
           chapterCapUsd: args.chapterCapUsd,
           chaptersPerStory: STORY_REVIEW_CHAPTERS_PER_STORY,
           paidCommand,
+          priorVariantExposureUsd: ledgerSnapshot.priorSpendUsd,
           providerRequests: 0,
+          qualityVariantArchive: storyReviewVariantArchiveReference(variantMarker),
           sourceGitSha,
           stories: CHARACTER_IDS.length,
           totalCapUsd: args.totalCapUsd,
-          uncertainExposureUsd: ledgerState.snapshot?.uncertainReservationCostUsd ?? 0,
+          uncertainExposureUsd: ledgerSnapshot.uncertainReservationCostUsd,
           worktreeClean,
         },
         null,
@@ -99,14 +103,6 @@ async function main(): Promise<void> {
       ),
     );
     return;
-  }
-
-  if (
-    ledgerState.snapshot?.sourceReportSha256 !== null &&
-    ledgerState.snapshot?.sourceReportSha256 !== undefined &&
-    ledgerState.snapshot.sourceReportSha256 !== `fresh:${sourceGitSha}`
-  ) {
-    throw new Error("Existing story-review evidence belongs to a different source Git SHA");
   }
 
   if (args.finalizeOnly) {
@@ -117,7 +113,7 @@ async function main(): Promise<void> {
       throw new Error("Provider-free finalization allows changes only to story-review outputs");
     }
     const evidence = writeReviewArtifacts(
-      collectSourceEvidence(sourceGitSha, ledgerState.snapshot!),
+      collectSourceEvidence(sourceGitSha, ledgerSnapshot, variantMarker),
     );
     console.log(
       `finalized six ten-chapter stories without provider requests: ${MARKDOWN_PATH}; durable exposure $${evidence.durableExposureUsd.toFixed(6)}`,
@@ -142,16 +138,7 @@ async function main(): Promise<void> {
   const ledger = new LiveSpendLedger(LEDGER_PATH, STORY_REVIEW_TOTAL_CAP_USD);
   let ownsRun = false;
   try {
-    const initialSnapshot = ledger.snapshot();
-    if (initialSnapshot.sourceReportSha256 === null) {
-      ledger.acquireRunWithBaseline(runId, {
-        attemptCostUsd: 0,
-        priorSpendUsd: 0,
-        sourceReportSha256: `fresh:${sourceGitSha}`,
-      });
-    } else {
-      ledger.acquireRun(runId);
-    }
+    ledger.acquireRun(runId);
     ownsRun = true;
     const costHooks = ledger.createCostHooks(runId);
     const client = createStoryReviewClient(apiKey);
@@ -165,7 +152,9 @@ async function main(): Promise<void> {
     if (snapshot.activeReservationCount !== 0) {
       throw new Error("Completed story review still has an active provider reservation");
     }
-    const evidence = writeReviewArtifacts(collectSourceEvidence(sourceGitSha, snapshot));
+    const evidence = writeReviewArtifacts(
+      collectSourceEvidence(sourceGitSha, snapshot, variantMarker),
+    );
     ledger.releaseRun(runId);
     ownsRun = false;
     console.log(
@@ -206,8 +195,9 @@ async function generateStory(
       throw new Error(`${characterId} already exceeds the ten-chapter review horizon`);
     }
     while (state.chapter < STORY_REVIEW_CHAPTERS_PER_STORY) {
-      const choice = view.chapter.choices.find(({ id }) => id === "choice-1");
-      if (!choice) throw new Error(`${characterId} chapter ${state.chapter} lacks choice-1`);
+      const priorActions = store.loadChapters(WORLD_ID).map(({ playerAction }) => playerAction);
+      const choice = selectStoryReviewChoice(priorActions, view.chapter.choices);
+      if (!choice) throw new Error(`${characterId} chapter ${state.chapter} lacks a choice`);
       const beforeChapter = state.chapter;
       view = await service.takeTurn({
         choiceId: choice.id,
@@ -231,6 +221,7 @@ async function generateStory(
 function collectSourceEvidence(
   sourceGitSha: string,
   snapshot: LiveSpendSnapshot,
+  variantMarker: StoryReviewVariantMarker,
 ): StoryReviewSourceEvidence {
   const stories = CHARACTER_IDS.map((characterId) => {
     const store = new StoryStore(storyDatabasePath(characterId));
@@ -260,17 +251,20 @@ function collectSourceEvidence(
     }
   });
   return StoryReviewSourceEvidenceSchema.parse({
-    branchPolicy: BRANCH_POLICY,
+    branchPolicy: STORY_REVIEW_BRANCH_POLICY,
     chapterCapUsd: STORY_REVIEW_CHAPTER_CAP_USD,
     chaptersPerStory: STORY_REVIEW_CHAPTERS_PER_STORY,
     durableExposureUsd: snapshot.totalExposureUsd,
     generatedAt: new Date().toISOString(),
+    priorVariantExposureUsd: snapshot.priorSpendUsd,
     promptVersion: PROMPT_VERSION,
+    qualityVariantArchive: storyReviewVariantArchiveReference(variantMarker),
     schemaVersion: STORY_REVIEW_SCHEMA_VERSION,
     serviceTier: "flex",
     sourceGitSha,
     stories,
     totalCapUsd: STORY_REVIEW_TOTAL_CAP_USD,
+    variantConfigSha256: STORY_REVIEW_VARIANT_CONFIG_SHA256,
   });
 }
 
@@ -366,8 +360,41 @@ function readReviewLedgerState(): {
   }
 }
 
+export function requireStoryReviewLedgerState(
+  state: {
+    readonly runId: string | null;
+    readonly snapshot: LiveSpendSnapshot | null;
+  },
+  marker: StoryReviewVariantMarker,
+): LiveSpendSnapshot {
+  if (state.snapshot === null) {
+    throw new Error(
+      "Story-review quality variant must be migrated before preflight or paid generation",
+    );
+  }
+  if (state.runId !== null) {
+    throw new Error(
+      `Story-review spend ledger is locked by run ${state.runId}. Recover only after its process is dead: npm run review:stories:recover -- --run-id ${state.runId}`,
+    );
+  }
+  assertStoryReviewVariantLedger(state.snapshot, marker);
+  if (state.snapshot.activeReservationCount !== 0) {
+    throw new Error("Story-review spend needs interruption reconciliation before more work");
+  }
+  return state.snapshot;
+}
+
 function storyDatabasePath(characterId: CharacterId): string {
   return resolve(STORY_DATA_DIRECTORY, `${characterId}.db`);
+}
+
+function currentVariantMarker(sourceGitSha: string): StoryReviewVariantMarker {
+  if (!existsSync(VARIANT_MARKER_PATH)) {
+    throw new Error(
+      "Story-review quality variant must be migrated before preflight or paid generation",
+    );
+  }
+  return readStoryReviewVariantMarker(VARIANT_MARKER_PATH, STORY_ARCHIVE_DIRECTORY, sourceGitSha);
 }
 
 function currentGitSha(): string {

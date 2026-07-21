@@ -56,13 +56,21 @@ The reproducible six-story review run is separate from interactive browser testi
 npm run review:stories:preflight
 ```
 
-The exact paid command requires fresh authority and has a hard `$2.544` aggregate Responses generation-exposure ceiling across 60 chapters and any resumed attempts:
+The exact paid command is authorized with a hard `$5.088` aggregate Responses generation-exposure ceiling across the rejected archived branch, 60 replacement chapters, and any resumed attempts:
 
 ```powershell
-npm run review:stories:live -- --confirm-cost --chapter-cap-usd 0.0424 --total-cap-usd 2.544
+npm run review:stories:live -- --confirm-cost --chapter-cap-usd 0.0848 --total-cap-usd 5.088
 ```
 
-It runs the first offered in-world choice for one contiguous ten-chapter branch per viewpoint, retains up to three sequential background agents, checkpoints each atomic commit, and publishes only chapters whose runtime audit passed. The `$0.0424` chapter flag budgets one uninterrupted attempt chain plus known failed turns restored from the story database. It uses an isolated spend ledger under ignored `evals/reports/`. Input-token count endpoint billing, if any, is outside the local ledger and provider invoice reconciliation.
+It avoids an immediate repeated action type, then selects the least-used offered action type and exact action with stable offered-order ties. It retains up to three sequential background agents, checkpoints each atomic commit, and publishes only chapters whose runtime audit passed. The `$0.0848` chapter flag budgets one uninterrupted attempt chain plus known failed turns restored from the story database. It uses an isolated spend ledger under ignored `evals/reports/`. Input-token count endpoint billing, if any, is outside the local ledger and provider invoice reconciliation.
+
+The rejected prompt `1.4.11` databases must first move through the provider-free, hash-bound quality migration after the new source commit:
+
+```powershell
+npm run review:stories:migrate-variant -- --from-source-git-sha 5c92e7a75629d0d39e6edea676b4cf4ad44fb12c --confirm-archive
+```
+
+It archives every old database, verifies unique response cost against the ledger, carries `$0.1635525` as prior spend, applies only the authorized `$2.544` to `$5.088` cap transition, and makes zero provider requests.
 
 After a killed process, use only the run ID printed by the lock error and only after that process is dead:
 
@@ -70,7 +78,7 @@ After a killed process, use only the run ID printed by the lock error and only a
 npm run review:stories:recover -- --run-id <uuid>
 ```
 
-Recovery makes no provider request. It charges an unknown active request at its full reservation, releases the stale lock, and leaves less headroom for the same stable run. Because a hard-killed request has no failed-turn record, a resumed attempt for that chapter can take its lifetime exposure above `$0.0424`; the hard `$2.544` aggregate still cannot be exceeded. Preflight then shows the committed count for every viewpoint. Resume the exact paid command only while chapters remain.
+Recovery makes no provider request. It charges an unknown active request at its full reservation, releases the stale lock, and leaves less headroom for the same stable run. Because a hard-killed request has no failed-turn record, a resumed attempt for that chapter can take its lifetime exposure above `$0.0848`; the hard `$5.088` aggregate still cannot be exceeded. Preflight then shows the committed count for every viewpoint. Resume the exact paid command only while chapters remain.
 
 If all 60 chapters committed but the process stopped before both review files were written, finalize them without a key or provider request:
 

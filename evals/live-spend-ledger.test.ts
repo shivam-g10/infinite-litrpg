@@ -425,6 +425,29 @@ describe("durable live spend ledger", () => {
     ledger.close();
   });
 
+  it("applies the explicitly authorized story-review cap increase without changing exposure", () => {
+    const filename = temporaryLedgerPath();
+    const initial = new LiveSpendLedger(filename, 2.544);
+    const runId = randomUUID();
+    initial.acquireRunWithBaseline(runId, {
+      attemptCostUsd: 0,
+      priorSpendUsd: 0.1635525,
+      sourceReportSha256: "fresh:abcdef0",
+    });
+    initial.increaseTotalCap(runId, 5.088);
+    expect(initial.snapshot()).toMatchObject({
+      headroomUsd: 4.9244475,
+      totalCapUsd: 5.088,
+      totalExposureUsd: 0.1635525,
+    });
+    initial.releaseRun(runId);
+    initial.close();
+
+    const reopened = new LiveSpendLedger(filename, 5.088);
+    expect(reopened.snapshot().totalExposureUsd).toBe(0.1635525);
+    reopened.close();
+  });
+
   it("rejects a fresh suite that understates carried global exposure", () => {
     const ledger = new LiveSpendLedger(temporaryLedgerPath(), 3);
     const firstRun = randomUUID();

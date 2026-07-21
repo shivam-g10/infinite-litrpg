@@ -127,22 +127,67 @@ export function buildNarrationPrompt(
 ): string {
   if (prospective.lockedPovId === null) throw new Error("POV must be locked");
   const povId = prospective.lockedPovId;
+  const movement = narrationMovement(before, prospective, delta, povId);
+  const exhaustiveWhitelist = movement
+    ? "afterCanon, visibleEvents, currentEffects, movement, and world"
+    : "afterCanon, visibleEvents, currentEffects, and world";
   return JSON.stringify({
     afterCanon: compactPovContext(prospective, povId, currentEventIds(delta)),
     beforeValues: beforeTurnEffectValues(before, delta, povId),
     currentEffects: canonicalEffectsForPov(delta, povId),
+    movement,
     rules: [
       "No viewpoint action beyond playerAction and currentEffects; a background intent is never a viewpoint action.",
       "No unlisted skill or item use, resource or inventory change, clue, discovery, reward, injury, relationship change, or new named entity. Supplied names may be recalled, not acted on unless an effect.",
       "Remote characters act only in visibleEvents. Participants and observers witness only. Plans and goals permit intention only, never contact, delivery, awareness, response, or effect. A move permits arrival only, never notice by others. Another character event permits only its summary; any result requires afterCanon.allowedPovFactsByIdAsCertaintyClaim.",
       "No time beyond calendar. No durable fact beyond the whitelist. Sensory texture adds no canon. Never combine identity, threat, location, plan, belief, goal, history, names, or themes into an unlisted relationship, cause, mechanism, or memory.",
+      ...(movement
+        ? [
+            "movement is the authoritative route. Start in movement.departed, travel away, and end in movement.destination. The departed location stays behind and is never ahead or the destination.",
+          ]
+        : []),
     ],
-    instruction:
-      "Write only complete close-third chapter prose, 900 to 925 words. Never stop before 900; stop before 950. Valid range is 900 to 1300. Dramatize exactly playerAction and currentEffects. currentEffects and visibleEvents happen now; afterCanon includes their results; beforeValues are prior and must be compared for a new change. Show only supplied LitRPG changes. afterCanon, visibleEvents, currentEffects, and world are the exhaustive whitelist. Every world field is public canon and may be restated or paraphrased. POV-private afterCanon may appear internally in close third; reader access is not an in-world disclosure, but never reveal it to another character without an allowed currentEffects knowledge mutation or visibleEvent. Avoid character-sheet recap or repeated identity exposition; mention allowed identity, stats, skills, and inventory only when scene-relevant. Any relationship between people, threats, places, events, or history requires one exact whitelist field. Never infer causes, mechanisms, relationships, consequences, or remembered history from identities, plans, beliefs, goals, shared terms, or facts. Build depth only with immediate sensory texture, supplied beliefs, goals, and facts at face value. Append no choices or notes.",
+    instruction: `Write only complete close-third chapter prose, 900 to 925 words. Never stop before 900; stop before 950. Valid range is 900 to 1300. Dramatize exactly playerAction and currentEffects. currentEffects and visibleEvents happen now; afterCanon includes their results; beforeValues are prior and must be compared for a new change. Show only supplied LitRPG changes. ${exhaustiveWhitelist} are the exhaustive whitelist. Every world field is public canon and may be restated or paraphrased. POV-private afterCanon may appear internally in close third; reader access is not an in-world disclosure, but never reveal it to another character without an allowed currentEffects knowledge mutation or visibleEvent. Avoid character-sheet recap or repeated identity exposition; mention allowed identity, stats, skills, and inventory only when scene-relevant. Any relationship between people, threats, places, events, or history requires one exact whitelist field. Never infer causes, mechanisms, relationships, consequences, or remembered history from identities, plans, beliefs, goals, shared terms, or facts. Build depth only with immediate sensory texture, supplied beliefs, goals, and facts at face value. Append no choices or notes.`,
     playerAction: compactPlayerAction(playerAction),
     visibleEvents: visibleEventsForPov(delta, povId),
     world: localWorldContext(before, prospective, povId, delta),
   });
+}
+
+function narrationMovement(
+  before: WorldState,
+  prospective: WorldState,
+  delta: WorldDelta,
+  povId: string,
+) {
+  const mutation = delta.stateMutations.find(
+    (
+      candidate,
+    ): candidate is Extract<WorldDelta["stateMutations"][number], { type: "set_location" }> =>
+      candidate.type === "set_location" && candidate.characterId === povId,
+  );
+  if (!mutation) return undefined;
+  const destinationId = mutation.toLocationIds[0];
+  const beforePov = before.characters.find(({ id }) => id === povId);
+  const afterPov = prospective.characters.find(({ id }) => id === povId);
+  if (
+    mutation.toLocationIds.length !== 1 ||
+    destinationId === undefined ||
+    beforePov?.locationId !== mutation.fromLocationId ||
+    afterPov?.locationId !== destinationId
+  ) {
+    throw new Error("Narration movement does not match the staged viewpoint route");
+  }
+  const departed = before.locations.find(({ id }) => id === mutation.fromLocationId);
+  const destination = prospective.locations.find(({ id }) => id === destinationId);
+  if (!departed || !destination)
+    throw new Error("Narration movement references a missing location");
+  return {
+    departed: [departed.id, departed.name],
+    destination: [destination.id, destination.name],
+    direction:
+      "Start in departed; travel away from departed; end at destination; departed stays behind.",
+  };
 }
 
 export const MAX_NARRATION_RECOVERY_PROMPT_BYTES = 1_200;

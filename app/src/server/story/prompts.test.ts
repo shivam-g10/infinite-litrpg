@@ -34,7 +34,7 @@ const ROWAN_IDENTITY_PROSE = `Rowan knew he was Malachar reincarnated. ${"Ash ".
 
 describe("background actor selection", () => {
   it("versions and losslessly compacts every live agent and frame prompt", () => {
-    expect(PROMPT_VERSION).toBe("1.4.11");
+    expect(PROMPT_VERSION).toBe("1.4.12");
     const backgroundFormat = zodTextFormat(BackgroundIntentCandidateSchema, "background_intent");
     const frameFormat = zodTextFormat(ChapterFrameModelCandidateSchema, "chapter_frame_candidate");
     expect(JSON.stringify(frameFormat)).not.toMatch(/"items":\[/u);
@@ -175,6 +175,49 @@ describe("background actor selection", () => {
     expect(prompt.instruction).toContain("happen now");
   });
 
+  it("names the departed and destination locations for a viewpoint move", () => {
+    const before = seed();
+    before.lockedPovId = "elara-voss";
+    const prospective = structuredClone(before);
+    prospective.characters.find(({ id }) => id === "elara-voss")!.locationId = "capital-road";
+    const delta = emptyDelta(before);
+    delta.stateMutations.push({
+      characterId: "elara-voss",
+      fromLocationId: "capital",
+      toLocationIds: ["capital-road"],
+      type: "set_location",
+    });
+
+    const prompt = JSON.parse(
+      buildNarrationPrompt(
+        before,
+        prospective,
+        {
+          action: { destinationId: "capital-road", type: "move" },
+          actorId: "elara-voss",
+          description: "Travel from Aurelis Capital to Capital Road.",
+          milestoneId: null,
+          source: "suggested",
+          stateVersion: before.version,
+        },
+        delta,
+      ),
+    ) as Record<string, unknown>;
+
+    expect(prompt).toHaveProperty("movement.departed", ["capital", "Aurelis Capital"]);
+    expect(prompt).toHaveProperty("movement.destination", ["capital-road", "Capital Road"]);
+    expect(prompt).toHaveProperty(
+      "movement.direction",
+      "Start in departed; travel away from departed; end at destination; departed stays behind.",
+    );
+    expect(JSON.stringify(prompt)).toContain(
+      "movement is the authoritative route. Start in movement.departed, travel away, and end in movement.destination",
+    );
+    expect(prompt.instruction).toContain(
+      "afterCanon, visibleEvents, currentEffects, movement, and world",
+    );
+  });
+
   it("treats selected-POV private canon as narratable without transferring it", () => {
     const before = seed();
     before.lockedPovId = "rowan-ashborn";
@@ -267,7 +310,9 @@ describe("background actor selection", () => {
       "Cinder Survivors",
       "Rebuild Cinder Village.",
     ]);
+    expect(narration).not.toHaveProperty("movement");
     expect(narration.instruction).toContain("afterCanon, visibleEvents, currentEffects, and world");
+    expect(JSON.stringify(narration)).not.toContain("movement is the authoritative route");
     expect(narration.instruction).toContain("Every world field is public canon");
     expect(narration.instruction).toContain("POV-private afterCanon may appear internally");
     expect(narration.instruction).toContain("never reveal it to another character");

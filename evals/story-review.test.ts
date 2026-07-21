@@ -5,11 +5,13 @@ import { resolve } from "node:path";
 import { CHARACTER_IDS, PROMPT_VERSION } from "@infinite-litrpg/shared";
 import { describe, expect, it } from "vitest";
 
-import { createStoryReviewClient } from "./run-story-review";
+import { createStoryReviewClient, requireStoryReviewLedgerState } from "./run-story-review";
 
 import {
   STORY_REVIEW_CHAPTERS_PER_STORY,
+  STORY_REVIEW_BRANCH_POLICY,
   STORY_REVIEW_TOTAL_CAP_USD,
+  STORY_REVIEW_VARIANT_CONFIG_SHA256,
   StoryReviewEvidenceSchema,
   StoryReviewSourceEvidenceSchema,
   buildStoryReviewChapter,
@@ -21,7 +23,7 @@ import {
   parseStoryReviewArgs,
   splitStoryReviewGitLines,
   storyReviewMarkdownMatches,
-  validateFirstChoiceBranch,
+  validateStoryReviewBranch,
   validateStoryReviewGitBridge,
   validateStoryReviewPrefix,
   validateStoryReviewSourceIdentities,
@@ -32,18 +34,49 @@ describe("ten-chapter story review evidence", () => {
     expect(createStoryReviewClient("test-key").maxRetries).toBe(0);
   });
 
-  it("publishes only a committed, audited runtime chapter with response provenance", () => {
-    const demo = JSON.parse(
-      readFileSync(resolve("docs/evidence/rowan-chapter-1-demo.json"), "utf8"),
-    ) as {
-      readonly result: {
-        readonly canonicalNarrativeInput: {
-          readonly chapterRecord: unknown;
-          readonly stateAfter: unknown;
-        };
-        readonly trace: { readonly acceptedDelta: unknown };
-      };
+  it("prints recovery first, blocks orphaned active work, and permits charged uncertainty", () => {
+    const marker = {
+      archiveDirectory: `${"b".repeat(40)}-to-${"a".repeat(40)}`,
+      carriedExposureUsd: 0.05,
+      fromSourceGitSha: "b".repeat(40),
+      manifestSha256: "c".repeat(64),
+      markerSchemaVersion: "1.0.0-story-review-variant-marker" as const,
+      reason: "narration-route-reversal-and-repetitive-branching" as const,
+      toSourceGitSha: "a".repeat(40),
+      variantConfigSha256: STORY_REVIEW_VARIANT_CONFIG_SHA256,
     };
+    const snapshot = {
+      activeReservationCount: 0,
+      baselineAttemptCostUsd: 0,
+      headroomUsd: 5.018,
+      knownReservationCostUsd: 0,
+      priorSpendUsd: 0.05,
+      sourceReportSha256: `fresh:${"a".repeat(40)}:${"c".repeat(64)}`,
+      totalCapUsd: STORY_REVIEW_TOTAL_CAP_USD,
+      totalExposureUsd: 0.07,
+      uncertainReservationCostUsd: 0.02,
+    };
+
+    expect(() =>
+      requireStoryReviewLedgerState(
+        { runId: "00000000-0000-4000-8000-000000000610", snapshot },
+        marker,
+      ),
+    ).toThrow(/review:stories:recover/iu);
+    expect(
+      requireStoryReviewLedgerState({ runId: null, snapshot }, marker).uncertainReservationCostUsd,
+    ).toBe(0.02);
+    expect(() =>
+      requireStoryReviewLedgerState(
+        { runId: null, snapshot: { ...snapshot, activeReservationCount: 1 } },
+        marker,
+      ),
+    ).toThrow(/interruption reconciliation/iu);
+  });
+
+  it("publishes only a committed, audited runtime chapter with response provenance", () => {
+    const demo = readCurrentDemo();
+    const trace = demo.result.trace as { readonly acceptedDelta: unknown };
 
     const chapter = buildStoryReviewChapter(
       "rowan-ashborn",
@@ -68,7 +101,7 @@ describe("ten-chapter story review evidence", () => {
         [
           {
             chapter: demo.result.canonicalNarrativeInput.chapterRecord,
-            delta: demo.result.trace.acceptedDelta,
+            delta: trace.acceptedDelta,
             trace: demo.result.trace,
           },
         ],
@@ -82,7 +115,7 @@ describe("ten-chapter story review evidence", () => {
         [
           {
             chapter: demo.result.canonicalNarrativeInput.chapterRecord,
-            delta: demo.result.trace.acceptedDelta,
+            delta: trace.acceptedDelta,
             trace: demo.result.trace,
           },
         ],
@@ -92,14 +125,7 @@ describe("ten-chapter story review evidence", () => {
   });
 
   it("rejects chapter and trace usage totals that could not commit atomically", () => {
-    const demo = JSON.parse(
-      readFileSync(resolve("docs/evidence/rowan-chapter-1-demo.json"), "utf8"),
-    ) as {
-      readonly result: {
-        readonly canonicalNarrativeInput: { readonly chapterRecord: unknown };
-        readonly trace: unknown;
-      };
-    };
+    const demo = readCurrentDemo();
     const tampered = structuredClone(demo.result.canonicalNarrativeInput.chapterRecord) as {
       usage: { totalTokens: number };
     };
@@ -179,14 +205,7 @@ describe("ten-chapter story review evidence", () => {
   });
 
   it("accepts a complete product retry group without double-counting its final call", () => {
-    const demo = JSON.parse(
-      readFileSync(resolve("docs/evidence/rowan-chapter-1-demo.json"), "utf8"),
-    ) as {
-      readonly result: {
-        readonly canonicalNarrativeInput: { readonly chapterRecord: unknown };
-        readonly trace: unknown;
-      };
-    };
+    const demo = readCurrentDemo();
     const retriedTrace = structuredClone(demo.result.trace) as {
       attempts: {
         agentId: string | null;
@@ -227,14 +246,7 @@ describe("ten-chapter story review evidence", () => {
   });
 
   it("rejects a soft-zero narrative score even when the runtime audit marked it approved", () => {
-    const demo = JSON.parse(
-      readFileSync(resolve("docs/evidence/rowan-chapter-1-demo.json"), "utf8"),
-    ) as {
-      readonly result: {
-        readonly canonicalNarrativeInput: { readonly chapterRecord: unknown };
-        readonly trace: unknown;
-      };
-    };
+    const demo = readCurrentDemo();
     const chapter = structuredClone(demo.result.canonicalNarrativeInput.chapterRecord) as {
       narrativeAudit: {
         evidence: { dimension: string; issueCode: string }[];
@@ -351,14 +363,8 @@ describe("ten-chapter story review evidence", () => {
     ).toThrow(/renames and copies/iu);
   });
 
-  it("recomputes the first-offered-choice branch instead of trusting its label", () => {
-    const demo = JSON.parse(
-      readFileSync(resolve("docs/evidence/rowan-chapter-1-demo.json"), "utf8"),
-    ) as {
-      readonly result: {
-        readonly canonicalNarrativeInput: { readonly chapterRecord: unknown };
-      };
-    };
+  it("avoids repeating an action type when an offered alternative exists", () => {
+    const demo = readCurrentDemo();
     const first = structuredClone(demo.result.canonicalNarrativeInput.chapterRecord) as {
       choices: { action: unknown; description: string; milestoneId: string | null }[];
       playerAction: { source: string };
@@ -391,14 +397,29 @@ describe("ten-chapter story review evidence", () => {
     second.stateBeforeVersion = 2;
     second.stateAfterVersion = 3;
 
-    expect(validateFirstChoiceBranch("rowan-ashborn", [first, second])).toHaveLength(2);
+    const third = structuredClone(second) as typeof second;
+    const variedChoice = second.choices[1]!;
+    third.chapter = 3;
+    third.id = "chapter-003";
+    third.playerAction = {
+      action: variedChoice.action,
+      actorId: "rowan-ashborn",
+      description: variedChoice.description,
+      milestoneId: variedChoice.milestoneId,
+      source: "suggested",
+      stateVersion: 3,
+    };
+    third.stateBeforeVersion = 3;
+    third.stateAfterVersion = 4;
+
+    expect(validateStoryReviewBranch("rowan-ashborn", [first, second, third])).toHaveLength(3);
     second.playerAction.description = first.choices[1]!.description;
-    expect(() => validateFirstChoiceBranch("rowan-ashborn", [first, second])).toThrow(
-      /first offered choice/iu,
+    expect(() => validateStoryReviewBranch("rowan-ashborn", [first, second])).toThrow(
+      /least-used-action-type/iu,
     );
     first.playerAction.source = "custom";
-    expect(() => validateFirstChoiceBranch("rowan-ashborn", [first])).toThrow(
-      /first offered choice/iu,
+    expect(() => validateStoryReviewBranch("rowan-ashborn", [first])).toThrow(
+      /least-used-action-type/iu,
     );
   });
 
@@ -508,11 +529,21 @@ describe("ten-chapter story review evidence", () => {
         durableExposureUsd: evidence.committedChapterCostUsd - 0.01,
       }),
     ).toThrow(/durable exposure/iu);
+    expect(() =>
+      StoryReviewEvidenceSchema.parse({ ...evidence, priorVariantExposureUsd: 0.1 }),
+    ).toThrow(/prior variant exposure/iu);
+    expect(() =>
+      StoryReviewEvidenceSchema.parse({
+        ...evidence,
+        priorVariantExposureUsd: 0,
+        qualityVariantArchive: null,
+      }),
+    ).toThrow();
   });
 
   it("keeps the paid command on one exact 60-chapter ceiling", () => {
     expect(parseStoryReviewArgs(["--preflight-only"])).toMatchObject({
-      chapterCapUsd: 0.0424,
+      chapterCapUsd: 0.0848,
       confirmCost: false,
       preflightOnly: true,
       totalCapUsd: STORY_REVIEW_TOTAL_CAP_USD,
@@ -530,20 +561,20 @@ describe("ten-chapter story review evidence", () => {
       parseStoryReviewArgs([
         "--confirm-cost",
         "--chapter-cap-usd",
-        "0.0424",
+        "0.0848",
         "--total-cap-usd",
-        "2.5",
+        "5",
       ]),
-    ).toThrow(/2\.544/u);
+    ).toThrow(/5\.088/u);
     expect(() =>
       parseStoryReviewArgs([
         "--confirm-cost",
         "--chapter-cap-usd",
         "0.05",
         "--total-cap-usd",
-        "2.544",
+        "5.088",
       ]),
-    ).toThrow(/0\.0424/u);
+    ).toThrow(/0\.0848/u);
   });
 
   it("projects only the missing suffix while retaining the hard aggregate cap", () => {
@@ -557,22 +588,22 @@ describe("ten-chapter story review evidence", () => {
       byCharacter: emptyProgress,
       completedChapters: 0,
       durableExposureUsd: 0,
-      maximumAdditionalExposureUsd: 2.544,
-      projectedMaximumExposureUsd: 2.544,
+      maximumAdditionalExposureUsd: 5.088,
+      projectedMaximumExposureUsd: 5.088,
       remainingChapters: 60,
     });
     expect(buildStoryReviewPreflight(partialProgress, 0.2)).toEqual({
       byCharacter: partialProgress,
       completedChapters: 12,
       durableExposureUsd: 0.2,
-      maximumAdditionalExposureUsd: 2.0352,
-      projectedMaximumExposureUsd: 2.2352,
+      maximumAdditionalExposureUsd: 4.0704,
+      projectedMaximumExposureUsd: 4.2704,
       remainingChapters: 48,
     });
     expect(() =>
       buildStoryReviewPreflight({ ...emptyProgress, [CHARACTER_IDS[0]]: 11 }, 0),
     ).toThrow(/chapter count/u);
-    expect(() => buildStoryReviewPreflight(emptyProgress, 2.545)).toThrow(/exposure/u);
+    expect(() => buildStoryReviewPreflight(emptyProgress, 5.089)).toThrow(/exposure/u);
   });
 
   it("requires source ChapterRecord and TraceEnvelope payloads for tracked evidence", () => {
@@ -611,19 +642,53 @@ function fixtureEvidence() {
     characterId,
   }));
   return StoryReviewEvidenceSchema.parse({
-    branchPolicy: "first-offered-choice",
-    chapterCapUsd: 0.0424,
+    branchPolicy: STORY_REVIEW_BRANCH_POLICY,
+    chapterCapUsd: 0.0848,
     chaptersPerStory: STORY_REVIEW_CHAPTERS_PER_STORY,
     generatedAt: "2026-07-21T00:00:00.000Z",
+    priorVariantExposureUsd: 0.05,
     promptVersion: PROMPT_VERSION,
-    schemaVersion: "1.1.0-story-review",
+    qualityVariantArchive: {
+      archiveDirectory: `${"b".repeat(40)}-to-${"a".repeat(40)}`,
+      carriedExposureUsd: 0.05,
+      fromSourceGitSha: "b".repeat(40),
+      manifestSha256: "c".repeat(64),
+      reason: "narration-route-reversal-and-repetitive-branching",
+      toSourceGitSha: "a".repeat(40),
+      variantConfigSha256: STORY_REVIEW_VARIANT_CONFIG_SHA256,
+    },
+    schemaVersion: "1.2.0-story-review",
     serviceTier: "flex",
     sourceGitSha: "a".repeat(40),
     stories,
     committedChapterCostUsd: 0.6,
     durableExposureUsd: 0.65,
     totalCapUsd: STORY_REVIEW_TOTAL_CAP_USD,
+    variantConfigSha256: STORY_REVIEW_VARIANT_CONFIG_SHA256,
   });
+}
+
+function readCurrentDemo(): {
+  readonly result: {
+    readonly canonicalNarrativeInput: {
+      readonly chapterRecord: unknown;
+      readonly stateAfter: unknown;
+    };
+    readonly trace: unknown;
+  };
+} {
+  const demo = JSON.parse(
+    readFileSync(resolve("docs/evidence/rowan-chapter-1-demo.json"), "utf8"),
+  ) as ReturnType<typeof readCurrentDemo>;
+  const trace = demo.result.trace as {
+    acceptedDelta: { promptVersion: string };
+    intents: { promptVersion: string }[];
+    promptVersion: string;
+  };
+  trace.promptVersion = PROMPT_VERSION;
+  trace.acceptedDelta.promptVersion = PROMPT_VERSION;
+  for (const intent of trace.intents) intent.promptVersion = PROMPT_VERSION;
+  return demo;
 }
 
 function sha256(value: string): string {
