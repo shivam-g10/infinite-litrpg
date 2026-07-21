@@ -1,6 +1,5 @@
 import type { z } from "zod";
 
-import { CHARACTER_IDS } from "../characters";
 import {
   type CharacterState,
   type WorldIntent,
@@ -175,12 +174,14 @@ export function validateWorldState(input: unknown): ValidationResult<WorldState>
     );
   }
 
-  for (const expectedId of CHARACTER_IDS) {
-    if (!characterIds.has(expectedId)) {
-      issues.push(
-        issue("CHARACTER_MISSING", `Missing required character ${expectedId}`, "characters"),
-      );
-    }
+  if (state.characters.length !== 6) {
+    issues.push(
+      issue(
+        "CHARACTER_MISSING",
+        "World must contain one protagonist and five supporting characters",
+        "characters",
+      ),
+    );
   }
 
   if (state.lockedPovId !== null && !characterIds.has(state.lockedPovId)) {
@@ -267,9 +268,9 @@ export function validateWorldState(input: unknown): ValidationResult<WorldState>
     }
   }
 
-  for (const expectedId of CHARACTER_IDS) {
-    if (!ledgerIds.has(expectedId)) {
-      issues.push(issue("LEDGER_MISSING", `Missing ledger ${expectedId}`, "knowledgeLedgers"));
+  for (const characterId of characterIds) {
+    if (!ledgerIds.has(characterId)) {
+      issues.push(issue("LEDGER_MISSING", `Missing ledger ${characterId}`, "knowledgeLedgers"));
     }
   }
 
@@ -671,16 +672,21 @@ function validateIntentAction(
             event.participantIds.includes(actor.id) ||
             event.observerIds.includes(actor.id)),
       );
+      const subjectCharacter = state.characters.find(({ id }) => id === subjectId);
+      const localCharacter = subjectCharacter?.locationId === actor.locationId;
+      const publicFaction = state.factions.some(({ id }) => id === subjectId);
       const allowed =
         subjectId === actor.locationId ||
         visibleEvent ||
+        localCharacter ||
+        publicFaction ||
         knownFactIds.has(subjectId) ||
         subjectId === milestoneTargetId;
       if (!allowed) {
         const remoteLocation = state.locations.some(({ id }) => id === subjectId);
         issues.push(
           issue(
-            remoteLocation ? "LOCATION_MISMATCH" : "TARGET_MISSING",
+            remoteLocation || subjectCharacter ? "LOCATION_MISMATCH" : "TARGET_MISSING",
             `${actor.id} cannot investigate ${subjectId} from visible local canon`,
             "action.subjectId",
           ),

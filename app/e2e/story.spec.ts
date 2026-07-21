@@ -1,5 +1,5 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
-import { DEFAULT_STORY_SETUP } from "@infinite-litrpg/shared";
+import { DEFAULT_STORY_SETUP, GENERATED_PROTAGONIST_ID } from "@infinite-litrpg/shared";
 
 const baseStory = {
   chapter: {
@@ -60,6 +60,40 @@ const baseStory = {
     terminalReason: null,
     threat: "Ash raiders crossed the northern ridge",
     version: 2,
+  },
+};
+
+const generatedOpeningStory = {
+  ...baseStory,
+  chapter: {
+    ...baseStory.chapter,
+    choices: [{ description: "Read the bloodless signs of the coup", id: "choice-1" }],
+    prose:
+      "The naming rite failed inside the flooded Glass Palace. Rowan woke beneath a silent bell as the Covenant System offered one costly oath.",
+    title: "The Bell Without a Name",
+  },
+  chapterHistory: [{ chapter: 1, title: "The Bell Without a Name" }],
+  pov: {
+    ...baseStory.pov,
+    characterClass: "Oath Reader",
+    inventory: [],
+    location: "Glass Palace",
+    skills: [
+      { id: "skill-1", name: "Truth Sense", rank: 1 },
+      { id: "skill-2", name: "Oath Bind", rank: 1 },
+    ],
+  },
+  systemName: "Covenant System",
+  visibleEvents: [
+    {
+      id: "opening-event",
+      location: "Glass Palace",
+      summary: "The crown prince vanished during the naming rite.",
+    },
+  ],
+  world: {
+    ...baseStory.world,
+    threat: "A faction is rewriting the succession through System law.",
   },
 };
 
@@ -213,8 +247,9 @@ function expectFreshCreateBody(
   overrides: Partial<Pick<typeof DEFAULT_STORY_SETUP, "protagonistGender" | "startingLife">> = {},
 ): void {
   expect(body).toMatchObject({
-    povCharacterId: "rowan-ashborn",
+    povCharacterId: GENERATED_PROTAGONIST_ID,
     setup: {
+      version: 2,
       backgrounds: DEFAULT_STORY_SETUP.backgrounds,
       foundation: "reincarnation-system",
       genres: DEFAULT_STORY_SETUP.genres,
@@ -223,6 +258,7 @@ function expectFreshCreateBody(
       personalityTraits: DEFAULT_STORY_SETUP.personalityTraits,
       powerPath: DEFAULT_STORY_SETUP.powerPath,
       protagonistGender: overrides.protagonistGender ?? DEFAULT_STORY_SETUP.protagonistGender,
+      protagonistName: null,
       rebirthCause: DEFAULT_STORY_SETUP.rebirthCause,
       startingLife: overrides.startingLife ?? DEFAULT_STORY_SETUP.startingLife,
       systemFocus: DEFAULT_STORY_SETUP.systemFocus,
@@ -230,39 +266,56 @@ function expectFreshCreateBody(
     title,
     type: "create",
   });
+  expect((body as { requestId: string }).requestId).toMatch(/^[0-9a-f-]{36}$/u);
   const setup = (body as { setup: typeof DEFAULT_STORY_SETUP }).setup;
-  expect(setup.cast).not.toEqual(DEFAULT_STORY_SETUP.cast);
-  expect(setup.world).not.toEqual(DEFAULT_STORY_SETUP.world);
+  expect(setup).not.toHaveProperty("cast");
+  expect(setup).not.toHaveProperty("world");
 }
 
 test("configures a reincarnation story and creates chapter one automatically", async ({ page }) => {
   let createBody: unknown = null;
-  let openingBody: unknown = null;
+  let openingPostCount = 0;
+  let releaseCreation: () => void = () => undefined;
+  const creationGate = new Promise<void>((resolve) => {
+    releaseCreation = resolve;
+  });
   await page.route("**/api/story", async (route) => {
     if (route.request().method() === "GET") {
       await fulfillJson(route, storyEnvelope(null, [], null));
       return;
     }
-    openingBody = route.request().postDataJSON();
+    openingPostCount += 1;
+    await fulfillJson(route, { error: "Creation must not post a second opening command" }, 500);
+  });
+  await page.route("**/api/stories", async (route) => {
+    createBody = route.request().postDataJSON();
+    expect(route.request().headers().accept).toContain("application/x-ndjson");
+    await creationGate;
     await fulfillNdjson(route, [
-      { status: "generating", type: "status" },
+      {
+        generation: {
+          mode: "create",
+          phase: "world",
+          storyId: "second-life",
+          targetChapter: 1,
+        },
+        type: "status",
+      },
+      {
+        generation: {
+          mode: "create",
+          phase: "world-checking",
+          storyId: "second-life",
+          targetChapter: 1,
+        },
+        type: "status",
+      },
       storyEvent(
-        baseStory,
+        generatedOpeningStory,
         [storySummary("second-life", "The Child Beneath the Crown", 1)],
         "second-life",
       ),
     ]);
-  });
-  await page.route("**/api/stories", async (route) => {
-    createBody = route.request().postDataJSON();
-    await fulfillJson(
-      route,
-      storyEnvelope(
-        openingDraft(),
-        [storySummary("second-life", "The Child Beneath the Crown", 0)],
-        "second-life",
-      ),
-    );
   });
 
   await page.goto("/");
@@ -274,19 +327,22 @@ test("configures a reincarnation story and creates chapter one automatically", a
   await page.getByText("Born again", { exact: true }).click();
   await page.getByText("Female", { exact: true }).click();
   await page.getByRole("button", { name: "Create chapter one" }).click();
+  const preparingButton = page.getByRole("button", { name: "Preparing story genesis…" });
+  await expect(preparingButton).toBeVisible();
+  await expect(preparingButton).toBeDisabled();
+  await expect(page.locator("form.creator-form")).toHaveAttribute("aria-busy", "true");
+  releaseCreation();
 
   await expect(page.locator(".reader-context strong")).toContainText("Rowan Ashborn");
-  await expect(page.getByRole("heading", { level: 1, name: "Embers Remember" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { level: 1, name: "The Bell Without a Name" }),
+  ).toBeVisible();
   await expect(page.getByText("Viewpoint locked")).toBeAttached();
   expectFreshCreateBody(createBody, "The Child Beneath the Crown", {
     protagonistGender: "female",
     startingLife: "birth",
   });
-  expect(openingBody).toMatchObject({
-    choiceId: "choice-1",
-    expectedWorldVersion: 1,
-    type: "take_action",
-  });
+  expect(openingPostCount).toBe(0);
 });
 
 test("takes a suggested choice and renders the committed chapter", async ({ page }) => {

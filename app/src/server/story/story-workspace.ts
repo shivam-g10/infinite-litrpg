@@ -1,7 +1,12 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 
-import type { StorySetup, WorldState } from "@infinite-litrpg/shared";
+import {
+  GENERATED_PROTAGONIST_ID,
+  type StoryGenesisRecordV1,
+  type StorySetup,
+  type WorldState,
+} from "@infinite-litrpg/shared";
 import type OpenAI from "openai";
 
 import {
@@ -30,14 +35,17 @@ import {
   type TurnCommand,
 } from "./story-service";
 import { sanitizeReaderProse } from "./reader-safety";
+import { generateStoryGenesis, type StoryGenesisProgress } from "./genesis-service";
 
 const CANONICAL_WORLD_ID = "ashen-crown-v1";
 const MAX_ID_ATTEMPTS = 8;
+const MAX_GENERATION_EVENTS = 100;
 
 export interface CreateWorkspaceStoryInput {
   /** Optional deterministic ID for trusted local tooling such as review-pack generation. */
   readonly id?: string;
   readonly povCharacterId: string;
+  readonly requestId?: string;
   readonly setup?: StorySetup;
   readonly title: string;
 }
@@ -78,10 +86,23 @@ export interface WorkspaceStoryResult {
 }
 
 export interface StoryGenerationStatus {
-  readonly mode: "generate" | "rewrite";
+  readonly events: readonly StoryGenerationEvent[];
+  readonly mode: "create" | "generate" | "rewrite";
   readonly phase: StoryGenerationPhase;
+  readonly startedAt: string;
   readonly storyId: string;
   readonly targetChapter: number;
+  readonly updatedAt: string;
+}
+
+export interface StoryGenerationEvent {
+  readonly at: string;
+  readonly cycle: number | null;
+  readonly elapsedMs: number;
+  readonly level: "error" | "info" | "retry" | "success";
+  readonly message: string;
+  readonly phase: StoryGenerationPhase;
+  readonly sequence: number;
 }
 
 export interface RestartWorkspaceStoryResult {
@@ -100,6 +121,7 @@ export interface StoryWorkspaceService {
     onProgress?: (phase: StoryGenerationPhase) => void,
   ): Promise<StoryView>;
   selectPov(povCharacterId: string, setup?: StorySetup): StoryView;
+  initializeGenesis(genesis: StoryGenesisRecordV1): StoryView;
   takeTurn(
     command: TurnCommand,
     onNarrationChunk?: (chunk: string) => void | Promise<void>,
@@ -139,6 +161,11 @@ export interface StoryWorkspaceOptions {
   readonly seedLoader?: () => WorldState;
   /** Test seam. Production opens one StoryStore for each story database. */
   readonly storeFactory?: (databasePath: string) => StoryStore;
+  /** Test seam for provider-free genesis fixtures. */
+  readonly genesisFactory?: (
+    setup: StorySetup,
+    onProgress: (progress: StoryGenesisProgress) => void,
+  ) => Promise<StoryGenesisRecordV1>;
 }
 
 export class StoryWorkspaceValidationError extends TypeError {
@@ -175,6 +202,14 @@ export class StoryTurnInProgressError extends Error {
   }
 }
 
+export class LegacyStoryReadOnlyError extends Error {
+  readonly code = "LEGACY_STORY_READ_ONLY";
+  constructor() {
+    super("Legacy stories are read-only");
+    this.name = "LegacyStoryReadOnlyError";
+  }
+}
+
 interface StoryRuntime {
   readonly service: StoryWorkspaceService;
   readonly store: StoryStore;
@@ -200,6 +235,14 @@ export class StoryWorkspace {
   private readonly storeFactory: (databasePath: string) => StoryStore;
   private readonly storyQueues = new Map<string, Promise<void>>();
   private readonly generations = new Map<string, StoryGenerationStatus>();
+  private readonly generationRequestIds = new Map<string, string>();
+  private readonly mutableLegacyStoryIds = new Set<string>();
+  private readonly creationRequests = new Map<
+    string,
+    { inputHash: string; result: Promise<WorkspaceStoryResult> }
+  >();
+  private readonly genesisFactory: NonNullable<StoryWorkspaceOptions["genesisFactory"]>;
+  private readonly now: () => Date;
   private closed = false;
 
   constructor(options: StoryWorkspaceOptions) {
@@ -221,6 +264,7 @@ export class StoryWorkspace {
       ...(options.rootDirectory === undefined ? {} : { rootDirectory: options.rootDirectory }),
     });
     this.rootDirectory = this.library.rootDirectory;
+    this.now = options.now ?? (() => new Date());
     this.client = options.client;
     this.idGenerator = options.idGenerator ?? randomUUID;
     this.projectionStore =
@@ -228,6 +272,9 @@ export class StoryWorkspace {
     this.seedLoader = options.seedLoader;
     this.serviceOptions = options.serviceOptions;
     this.storeFactory = options.storeFactory ?? ((databasePath) => new StoryStore(databasePath));
+    this.genesisFactory =
+      options.genesisFactory ??
+      ((setup, onProgress) => generateStoryGenesis(this.client, setup, { onProgress }));
     this.serviceFactory =
       options.serviceFactory ??
       ((input) => new StoryService(input.store, input.client, input.options, input.seedLoader));
@@ -268,27 +315,119 @@ export class StoryWorkspace {
     return active === null ? null : this.getStory(active.id);
   }
 
-  async createStory(input: CreateWorkspaceStoryInput): Promise<WorkspaceStoryResult> {
+  async createStory(
+    input: CreateWorkspaceStoryInput,
+    onNarrationChunk?: (chunk: string) => void | Promise<void>,
+    onProgress?: (status: StoryGenerationStatus) => void,
+  ): Promise<WorkspaceStoryResult> {
     this.assertOpen();
-    const priorActiveStoryId = this.library.getActiveStory()?.id ?? null;
-    const metadata = this.createMetadata(input);
-
-    return this.enqueue(metadata.id, async () => {
-      try {
-        const runtime = this.openRuntime(metadata, true, input.setup);
-        const story = requireStoryView(metadata.id, runtime.service.getStory());
-        return { metadata, story, warnings: [] };
-      } catch (error) {
-        this.closeRuntime(metadata.id);
+    if (input.requestId === undefined) {
+      const priorActiveStoryId = this.library.getActiveStory()?.id ?? null;
+      const metadata = this.createMetadata(input);
+      this.mutableLegacyStoryIds.add(metadata.id);
+      return this.enqueue(metadata.id, async () => {
         try {
-          this.library.rejectStory(metadata.id);
-          if (priorActiveStoryId !== null) this.library.activateStory(priorActiveStoryId);
-        } catch {
-          // Preserve the initialization failure. Library data remains on disk for recovery.
+          const runtime = this.openRuntime(metadata, true, input.setup);
+          const story = requireStoryView(metadata.id, runtime.service.getStory());
+          return { metadata, story, warnings: [] };
+        } catch (error) {
+          this.closeRuntime(metadata.id);
+          try {
+            this.library.rejectStory(metadata.id);
+            if (priorActiveStoryId !== null) this.library.activateStory(priorActiveStoryId);
+          } catch {}
+          throw error;
+        }
+      });
+    }
+    if (!input.setup)
+      throw new StoryWorkspaceValidationError("Generated stories require setup version two");
+    const requestId = input.requestId;
+    const inputHash = createHash("sha256")
+      .update(JSON.stringify({ ...input, requestId: undefined }))
+      .digest("hex");
+    const duplicate = this.creationRequests.get(requestId);
+    if (duplicate) {
+      if (duplicate.inputHash !== inputHash)
+        throw new StoryWorkspaceValidationError(
+          "requestId was already used with different story input",
+        );
+      return duplicate.result;
+    }
+    const metadata = this.createMetadata(
+      { ...input, povCharacterId: GENERATED_PROTAGONIST_ID },
+      true,
+    );
+    const result = this.enqueue(metadata.id, async () => {
+      let genesisAccepted = false;
+      const generation = this.startGeneration(
+        metadata.id,
+        "create",
+        "world",
+        1,
+        requestId,
+        "Story creation accepted. World generation is starting.",
+      );
+      onProgress?.(generation);
+      try {
+        const genesis = await this.genesisFactory(input.setup!, (progress) => {
+          const updated = this.updateGeneration(generation, progress.phase, {
+            cycle: progress.cycle,
+            level: progress.level,
+            message: progress.message,
+          });
+          onProgress?.(updated);
+        });
+        const runtime = this.openRuntime(metadata, false, undefined, genesis);
+        this.library.activateStory(metadata.id);
+        genesisAccepted = true;
+        const story = await runtime.service.takeTurn(
+          {
+            choiceId: "choice-1",
+            expectedWorldVersion: genesis.initialWorld.version,
+            requestId,
+            type: "take_action",
+          },
+          onNarrationChunk,
+          (phase) => {
+            const updated = this.updateGeneration(generation, phase, {
+              message: chapterPhaseMessage(phase, 1),
+            });
+            onProgress?.(updated);
+          },
+        );
+        const reconciliation = await this.reconcileWithoutHidingStory(runtime, metadata.id, story);
+        const completed = this.updateGeneration(generation, "saving", {
+          level: "success",
+          message: "World and chapter one committed successfully.",
+        });
+        onProgress?.(completed);
+        return {
+          metadata: requireMetadata(this.library, metadata.id),
+          story,
+          warnings: reconciliation.warnings,
+        };
+      } catch (error) {
+        const failed = this.updateGeneration(generation, this.currentGeneration(generation).phase, {
+          level: "error",
+          message: generationFailureMessage(error),
+        });
+        onProgress?.(failed);
+        if (!genesisAccepted) {
+          this.closeRuntime(metadata.id);
+          try {
+            this.library.removeCreatingStory(metadata.id);
+          } catch {
+            // Preserve the genesis failure if cleanup itself cannot complete.
+          }
         }
         throw error;
+      } finally {
+        this.endGeneration(generation);
       }
     });
+    this.creationRequests.set(requestId, { inputHash, result });
+    return result;
   }
 
   async getStory(storyId: string): Promise<WorkspaceStoryResult | null> {
@@ -347,11 +486,13 @@ export class StoryWorkspace {
   ): Promise<RestartWorkspaceStoryResult> {
     this.assertOpen();
     const id = validateStoryId(storyId);
+    this.assertStoryMutable(id);
     return this.enqueue(id, async () => {
       const current = requireMetadata(this.library, id);
       const setup = this.openRuntime(current, false).store.loadStorySetup(CANONICAL_WORLD_ID);
       const replacement = await this.createStory({
         povCharacterId: input.povCharacterId ?? current.povCharacterId,
+        ...(this.mutableLegacyStoryIds.has(id) ? {} : { requestId: randomUUID() }),
         ...(setup === null ? {} : { setup }),
         title: input.title ?? restartTitle(current.title),
       });
@@ -376,7 +517,9 @@ export class StoryWorkspace {
   ): Promise<WorkspaceStoryResult> {
     this.assertOpen();
     const id = validateStoryId(storyId);
+    this.assertStoryMutable(id);
     const generation = this.beginGeneration(id, "generate");
+    onProgress?.(generation);
     return this.enqueue(id, async () => {
       const metadataBefore = requireMetadata(this.library, id);
       if (metadataBefore.status === "rejected") throw new RejectedStoryError(id);
@@ -390,7 +533,26 @@ export class StoryWorkspace {
         story,
         warnings: reconciliation.warnings,
       };
-    }).finally(() => this.endGeneration(generation));
+    })
+      .then((result) => {
+        onProgress?.(
+          this.updateGeneration(generation, "saving", {
+            level: "success",
+            message: `Chapter ${generation.targetChapter} committed successfully.`,
+          }),
+        );
+        return result;
+      })
+      .catch((error: unknown) => {
+        onProgress?.(
+          this.updateGeneration(generation, this.currentGeneration(generation).phase, {
+            level: "error",
+            message: generationFailureMessage(error),
+          }),
+        );
+        throw error;
+      })
+      .finally(() => this.endGeneration(generation));
   }
 
   async rerollLatest(
@@ -401,7 +563,9 @@ export class StoryWorkspace {
   ): Promise<WorkspaceStoryResult> {
     this.assertOpen();
     const id = validateStoryId(storyId);
+    this.assertStoryMutable(id);
     const generation = this.beginGeneration(id, "rewrite");
+    onProgress?.(generation);
     return this.enqueue(id, async () => {
       const metadataBefore = requireMetadata(this.library, id);
       if (metadataBefore.status === "rejected") throw new RejectedStoryError(id);
@@ -415,7 +579,26 @@ export class StoryWorkspace {
         story,
         warnings: reconciliation.warnings,
       };
-    }).finally(() => this.endGeneration(generation));
+    })
+      .then((result) => {
+        onProgress?.(
+          this.updateGeneration(generation, "saving", {
+            level: "success",
+            message: `Chapter ${generation.targetChapter} rewrite committed successfully.`,
+          }),
+        );
+        return result;
+      })
+      .catch((error: unknown) => {
+        onProgress?.(
+          this.updateGeneration(generation, this.currentGeneration(generation).phase, {
+            level: "error",
+            message: generationFailureMessage(error),
+          }),
+        );
+        throw error;
+      })
+      .finally(() => this.endGeneration(generation));
   }
 
   async exportJson(storyId: string): Promise<string> {
@@ -457,9 +640,11 @@ export class StoryWorkspace {
     this.generations.clear();
   }
 
-  private createMetadata(input: CreateWorkspaceStoryInput): StoryMetadata {
+  private createMetadata(input: CreateWorkspaceStoryInput, pending = false): StoryMetadata {
+    const create = (story: { id: string; povCharacterId: string; title: string }) =>
+      pending ? this.library.createPendingStory(story) : this.library.createStory(story);
     if (input.id !== undefined) {
-      return this.library.createStory({
+      return create({
         id: validateStoryId(input.id),
         povCharacterId: input.povCharacterId,
         title: input.title,
@@ -468,7 +653,7 @@ export class StoryWorkspace {
     for (let attempt = 0; attempt < MAX_ID_ATTEMPTS; attempt += 1) {
       const id = generateStoryId(input.title, this.idGenerator());
       try {
-        return this.library.createStory({
+        return create({
           id,
           povCharacterId: input.povCharacterId,
           title: input.title,
@@ -488,12 +673,13 @@ export class StoryWorkspace {
     metadata: StoryMetadata,
     initialize: boolean,
     setup?: StorySetup,
+    genesis?: StoryGenesisRecordV1,
   ): StoryRuntime {
     const cached = this.runtimes.get(metadata.id);
     if (cached !== undefined) return cached;
 
     const databasePath = this.library.storyDatabasePath(metadata.id);
-    if (!initialize && !existsSync(databasePath)) {
+    if (!initialize && genesis === undefined && !existsSync(databasePath)) {
       throw new StoryWorkspaceDataError(metadata.id, "Canonical story database is missing");
     }
 
@@ -509,7 +695,8 @@ export class StoryWorkspace {
         seedLoader: this.seedLoader,
         store,
       });
-      if (initialize) service.selectPov(metadata.povCharacterId, setup);
+      if (genesis !== undefined) service.initializeGenesis(genesis);
+      else if (initialize) service.selectPov(metadata.povCharacterId, setup);
       const story = service.getStory();
       if (story === null) {
         throw new StoryWorkspaceDataError(metadata.id, "Canonical story world is missing");
@@ -690,20 +877,46 @@ export class StoryWorkspace {
     const currentChapter = readStoryChapter(story);
     const generation = {
       mode,
-      phase: "preparing",
-      storyId,
       targetChapter: mode === "rewrite" ? Math.max(1, currentChapter) : currentChapter + 1,
     } as const;
-    this.generations.set(storyId, generation);
-    return generation;
+    return this.startGeneration(
+      storyId,
+      generation.mode,
+      "preparing",
+      generation.targetChapter,
+      undefined,
+      chapterPhaseMessage("preparing", generation.targetChapter),
+    );
   }
 
   private updateGeneration(
     generation: StoryGenerationStatus,
     phase: StoryGenerationPhase,
+    detail: {
+      readonly cycle?: number | null;
+      readonly level?: StoryGenerationEvent["level"];
+      readonly message?: string;
+    } = {},
   ): StoryGenerationStatus {
-    const updated = { ...generation, phase };
+    const current = this.currentGeneration(generation);
+    const at = this.currentTimestamp();
+    const event: StoryGenerationEvent = {
+      at,
+      cycle: detail.cycle ?? null,
+      elapsedMs: Math.max(0, Date.parse(at) - Date.parse(current.startedAt)),
+      level: detail.level ?? "info",
+      message: detail.message ?? chapterPhaseMessage(phase, current.targetChapter),
+      phase,
+      sequence: (current.events.at(-1)?.sequence ?? 0) + 1,
+    };
+    const updated = {
+      ...current,
+      events: [...current.events, event].slice(-MAX_GENERATION_EVENTS),
+      phase,
+      updatedAt: at,
+    };
     this.generations.set(generation.storyId, updated);
+    this.logGeneration(updated, event);
     return updated;
   }
 
@@ -711,6 +924,63 @@ export class StoryWorkspace {
     if (this.generations.has(generation.storyId)) {
       this.generations.delete(generation.storyId);
     }
+    this.generationRequestIds.delete(generation.storyId);
+  }
+
+  private startGeneration(
+    storyId: string,
+    mode: StoryGenerationStatus["mode"],
+    phase: StoryGenerationPhase,
+    targetChapter: number,
+    requestId: string | undefined,
+    message: string,
+  ): StoryGenerationStatus {
+    const startedAt = this.currentTimestamp();
+    const event: StoryGenerationEvent = {
+      at: startedAt,
+      cycle: null,
+      elapsedMs: 0,
+      level: "info",
+      message,
+      phase,
+      sequence: 1,
+    };
+    const generation: StoryGenerationStatus = {
+      events: [event],
+      mode,
+      phase,
+      startedAt,
+      storyId,
+      targetChapter,
+      updatedAt: startedAt,
+    };
+    this.generations.set(storyId, generation);
+    if (requestId !== undefined) this.generationRequestIds.set(storyId, requestId);
+    this.logGeneration(generation, event);
+    return generation;
+  }
+
+  private currentGeneration(generation: StoryGenerationStatus): StoryGenerationStatus {
+    return this.generations.get(generation.storyId) ?? generation;
+  }
+
+  private currentTimestamp(): string {
+    const value = this.now();
+    return Number.isFinite(value.getTime()) ? value.toISOString() : new Date().toISOString();
+  }
+
+  private logGeneration(generation: StoryGenerationStatus, event: StoryGenerationEvent): void {
+    const entry = {
+      ...event,
+      mode: generation.mode,
+      requestId: this.generationRequestIds.get(generation.storyId) ?? null,
+      scope: "story-generation",
+      storyId: generation.storyId,
+      targetChapter: generation.targetChapter,
+    };
+    const line = JSON.stringify(entry);
+    if (event.level === "error") console.error(line);
+    else console.info(line);
   }
 
   private closeRuntime(storyId: string): void {
@@ -722,6 +992,15 @@ export class StoryWorkspace {
 
   private assertOpen(): void {
     if (this.closed) throw new StoryWorkspaceClosedError();
+  }
+
+  private assertStoryMutable(storyId: string): void {
+    if (this.mutableLegacyStoryIds.has(storyId)) return;
+    const metadata = requireMetadata(this.library, storyId);
+    const runtime = this.openRuntime(metadata, false);
+    if (runtime.store.loadStoryGenesis(CANONICAL_WORLD_ID) === null) {
+      throw new LegacyStoryReadOnlyError();
+    }
   }
 }
 
@@ -807,4 +1086,54 @@ function warning(
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function chapterPhaseMessage(phase: StoryGenerationPhase, chapter: number): string {
+  switch (phase) {
+    case "world":
+      return "Generating the canonical world.";
+    case "world-checking":
+      return "Auditing world coherence and setup coverage.";
+    case "preparing":
+      return `Planning chapter ${chapter}.`;
+    case "characters":
+      return "Background characters are producing intents.";
+    case "writing":
+      return `Writing chapter ${chapter}.`;
+    case "checking":
+      return `Auditing chapter ${chapter}.`;
+    case "saving":
+      return `Saving chapter ${chapter} and accepted canon.`;
+  }
+}
+
+function generationFailureMessage(error: unknown): string {
+  const details: string[] = [];
+  const visited = new Set<unknown>();
+  let current: unknown = error;
+  for (let depth = 0; depth < 5 && current !== null && current !== undefined; depth += 1) {
+    if (visited.has(current)) break;
+    visited.add(current);
+    if (current instanceof Error) {
+      const code = readErrorCode(current);
+      details.push(`${current.name}${code === null ? "" : ` [${code}]`}: ${current.message}`);
+      current = current.cause;
+      continue;
+    }
+    details.push(String(current));
+    break;
+  }
+  const message = details.join(" <- ") || "Unknown generation failure";
+  return redactGenerationSecret(message).slice(0, 4_000);
+}
+
+function readErrorCode(error: Error): string | null {
+  if (!("code" in error)) return null;
+  const code = error.code;
+  return typeof code === "string" && code.length > 0 ? code : null;
+}
+
+function redactGenerationSecret(value: string): string {
+  const secret = process.env.OPENAI_API_KEY;
+  return secret ? value.split(secret).join("[REDACTED]") : value;
 }

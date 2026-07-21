@@ -26,7 +26,7 @@
     "security:secrets": "tsx scripts/secret-scan.ts",
     "security:bundle": "tsx scripts/bundle-scan.ts",
     "licenses": "tsx scripts/license-check.ts",
-    "audit": "npm audit --audit-level=low",
+    "audit": "npm audit --omit=optional --audit-level=low",
     "diff:check": "git diff --check",
     "verify:clean-clone": "tsx scripts/verify-clean-clone.ts",
     "check": "npm run format:check && npm run lint && npm run typecheck && npm run test && npm run evals && npm run build && npm run test:e2e && npm run security:secrets && npm run security:bundle && npm run licenses && npm run audit && npm run diff:check"

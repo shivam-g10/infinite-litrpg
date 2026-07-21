@@ -4,8 +4,6 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   buildStoryPremise,
-  createStoryCast,
-  createStoryWorld,
   createStorySetupSubmission,
   StorySetupCreator,
   toggleLimitedSelection,
@@ -39,15 +37,19 @@ describe("StorySetupCreator", () => {
     expect(markup).toContain("Chapter 7");
   });
 
+  it("announces the server-owned world phase", () => {
+    const markup = renderToStaticMarkup(
+      <StorySetupCreator busy creationPhase="world-checking" onCreate={vi.fn()} />,
+    );
+    expect(markup).toContain("Checking the world…");
+  });
+
   it("builds a trimmed, schema-checked integration payload", () => {
-    const cast = createStoryCast("new-dawn-seed", "female");
-    expect(
-      createStorySetupSubmission("  New Dawn  ", DEFAULT_STORY_SETUP, "Ilyra Venn", cast),
-    ).toEqual({
-      povCharacterId: "rowan-ashborn",
+    expect(createStorySetupSubmission("  New Dawn  ", DEFAULT_STORY_SETUP, "Ilyra Venn")).toEqual({
+      povCharacterId: "actor-protagonist",
       setup: {
         ...DEFAULT_STORY_SETUP,
-        cast: { ...cast, protagonist: "Ilyra Venn" },
+        protagonistName: "Ilyra Venn",
       },
       title: "New Dawn",
     });
@@ -61,26 +63,11 @@ describe("StorySetupCreator", () => {
     ).toBe("Keep the System dangerous.");
   });
 
-  it("creates a fresh unique cast and accepts an optional protagonist name", () => {
-    const first = createStoryCast("first-story", "male");
-    const second = createStoryCast("second-story", "male");
-
-    expect(first).not.toEqual(second);
-    expect(
-      new Set([first.protagonist, first.pastLife, ...Object.values(first.supporting)]).size,
-    ).toBe(7);
-    expect(createStorySetupSubmission("First", DEFAULT_STORY_SETUP, "", first)?.setup.cast).toEqual(
-      first,
-    );
-  });
-
-  it("generates fresh non-Ash world flavor", () => {
-    const world = createStoryWorld("new-world");
-
-    expect(JSON.stringify(world)).not.toMatch(/ash|ember|cinder/iu);
-    expect(world.systemName).toBeTruthy();
-    expect(world.protagonistClassName).toBeTruthy();
-    expect(world.primarySkillName).toBeTruthy();
+  it("sends only preferences and an optional protagonist name", () => {
+    const submission = createStorySetupSubmission("First", DEFAULT_STORY_SETUP, "");
+    expect(submission?.setup.protagonistName).toBeNull();
+    expect(submission?.setup).not.toHaveProperty("cast");
+    expect(submission?.setup).not.toHaveProperty("world");
   });
 
   it("keeps multi-select values inside their stated bounds without mutation", () => {

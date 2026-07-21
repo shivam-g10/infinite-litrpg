@@ -28,13 +28,13 @@ import {
   type TraceEnvelope,
   type RuntimeServiceTier,
   type StorySetup,
+  type StoryGenesisRecordV1,
   type ValidationIssue,
   type WorldDelta,
   type WorldState,
   buildChapterChoiceOptions,
   buildPovContext,
   buildTenChapterQualityPlan,
-  applyStorySetup,
   canonicalizeChapterFrameCandidate,
   decodeChapterFrameModelCandidate,
   getClockPolicy,
@@ -269,7 +269,8 @@ export interface RerollLatestCommand {
 }
 
 export type TurnCommand = TakeChoiceCommand | CustomActionCommand | ContinueStoryCommand;
-export type StoryGenerationPhase = "preparing" | "characters" | "writing" | "checking" | "saving";
+export type StoryGenerationPhase =
+  "world" | "world-checking" | "preparing" | "characters" | "writing" | "checking" | "saving";
 
 export class StoryServiceError extends Error {
   readonly status: number;
@@ -328,7 +329,7 @@ export class StoryService {
       return this.toView(existing);
     }
 
-    const seed = setup ? applyStorySetup(this.seedLoader(), setup) : this.seedLoader();
+    const seed = this.seedLoader();
     if (!seed.characters.some(({ id }) => id === povCharacterId)) {
       throw new StoryServiceError("Unknown viewpoint character");
     }
@@ -342,6 +343,13 @@ export class StoryService {
     }
     this.store.createWorld(validated.data, setup);
     return this.toView(validated.data);
+  }
+
+  initializeGenesis(genesis: StoryGenesisRecordV1): StoryView {
+    const existing = this.store.loadWorldState(WORLD_ID);
+    if (existing) return this.toView(existing);
+    this.store.createWorld(genesis.initialWorld, genesis.setup, genesis);
+    return this.toView(genesis.initialWorld);
   }
 
   async takeTurn(
@@ -706,6 +714,14 @@ export class StoryService {
         }
       }
 
+      const actionPreflight = resolveTurn(before, playerAction, []);
+      if (!actionPreflight.ok) {
+        throw new StoryServiceError(
+          `Action rejected: ${formatIssues(actionPreflight.issues)}`,
+          422,
+        );
+      }
+
       const actors = selectBackgroundActors(before).slice(0, this.options.maxBackgroundAgents);
       let backgroundIntents: Parameters<typeof resolveTurn>[2] = [];
       let adapterMode: TraceEnvelope["adapterMode"] = "application-parallel";
@@ -861,7 +877,7 @@ export class StoryService {
               prose,
               ...(promptPreferences.setup === null || promptPreferences.setup === undefined
                 ? {}
-                : { systemName: promptPreferences.setup.world.systemName }),
+                : { systemName: prospective.system?.name ?? "System" }),
               systemNoticeRequired:
                 (prospective.chapter === 1 && promptPreferences.setup !== null) ||
                 hasPovMechanicalChange(resolved.data.delta, turnIdentity.povId),
@@ -949,8 +965,10 @@ export class StoryService {
           const draft = validateDraft(auditedProse);
           if (!draft.ok) this.options.onNarrativeDraftRejected?.(draft.issues);
           if (!draft.ok) {
-            const safeIssueCodes = [...new Set(draft.issues.map(({ code }) => code))].sort();
-            retryDirective = `The prior draft failed deterministic validation with issue codes: ${safeIssueCodes.join(", ")}. Return one complete scene with a consequence and forward hook. Remove every unsupported fact or action. Never repeat prior text that is absent from the supplied POV canon.`;
+            retryDirective = buildDeterministicNarrationRetryDirective(
+              draft.issues,
+              prospective.system?.name ?? "System",
+            );
             emitCandidate({
               accepted: false,
               audit: null,
@@ -1287,7 +1305,10 @@ export class StoryService {
   private currentChoices(state: WorldState): readonly Choice[] {
     if (state.terminal) return [];
     if (state.chapter === 0) {
-      return initialChoices(state, this.store.loadStorySetup(WORLD_ID) !== null);
+      return (
+        this.genesisOpeningChoices(state) ??
+        initialChoices(state, this.store.loadStorySetup(WORLD_ID) !== null)
+      );
     }
     return this.store.loadChapter(state.id, state.chapter)?.choices ?? [];
   }
@@ -1308,7 +1329,10 @@ export class StoryService {
     const locationNames = new Map(state.locations.map(({ id, name }) => [id, name]));
     const characterNames = new Map(state.characters.map(({ id, name }) => [id, name]));
     const setup = this.store.loadStorySetup(WORLD_ID);
-    const initial = state.chapter === 0 ? initialChoices(state, setup !== null) : [];
+    const initial =
+      state.chapter === 0
+        ? (this.genesisOpeningChoices(state) ?? initialChoices(state, setup !== null))
+        : [];
 
     return {
       chapterHistory: chapters.map(({ chapter, title }) => ({ chapter, title })),
@@ -1324,7 +1348,7 @@ export class StoryService {
             prose: "",
             title: "",
           },
-      systemName: setup?.world.systemName ?? "System",
+      systemName: state.system?.name ?? "System",
       pov: {
         ...pov,
         characterClass: pov.characterClassName,
@@ -1340,7 +1364,7 @@ export class StoryService {
       visibleEvents: context.observedEvents.map((event) => ({
         id: event.id,
         location: locationNames.get(event.locationId) ?? event.locationId,
-        summary: event.summary,
+        summary: readerEventSummary(state, event.summary),
       })),
       world: {
         act: state.act,
@@ -1353,6 +1377,19 @@ export class StoryService {
         version: state.version,
       },
     };
+  }
+
+  private genesisOpeningChoices(state: WorldState): readonly Choice[] | null {
+    const genesis = this.store.loadStoryGenesis(state.id);
+    if (!genesis) return null;
+    return [
+      {
+        action: genesis.openingAction,
+        description: genesis.openingActionDescription,
+        id: "choice-1",
+        milestoneId: null,
+      },
+    ];
   }
 }
 
@@ -1419,8 +1456,7 @@ function reconstructLatestCanonicalTurn(
   currentChapter: ChapterRecord,
   currentTrace: PersistedTraceEnvelope,
 ): CanonicalNarrationSource {
-  const setup = store.loadStorySetup(WORLD_ID);
-  const seeded = setup ? applyStorySetup(seedLoader(), setup) : seedLoader();
+  const seeded = store.loadStoryGenesis(WORLD_ID)?.initialWorld ?? seedLoader();
   seeded.lockedPovId = currentWorld.lockedPovId;
   const validatedSeed = validateWorldState(seeded);
   if (!validatedSeed.ok) throw new StoryServiceError("Seed world cannot replay this story", 500);
@@ -1609,7 +1645,7 @@ async function generateAuditedCanonicalNarration(
           ...(options.promptPreferences.setup === null ||
           options.promptPreferences.setup === undefined
             ? {}
-            : { systemName: options.promptPreferences.setup.world.systemName }),
+            : { systemName: source.stateAfter.system?.name ?? "System" }),
           systemNoticeRequired:
             hasPovMechanicalChange(source.delta, source.stateBefore.lockedPovId!) ||
             (source.stateAfter.chapter === 1 && options.promptPreferences.setup !== null),
@@ -1693,9 +1729,11 @@ async function generateAuditedCanonicalNarration(
       const draft = validateDraft(auditedProse);
       if (!draft.ok) options.onNarrativeDraftRejected?.(draft.issues);
       if (!draft.ok) {
-        const safeIssueCodes = [...new Set(draft.issues.map(({ code }) => code))].sort();
         updateRetryDirective(
-          `The prior draft failed deterministic validation with issue codes: ${safeIssueCodes.join(", ")}. Return one complete scene with a consequence and forward hook. Remove every unsupported fact or action. Never repeat prior text that is absent from the supplied POV canon.`,
+          buildDeterministicNarrationRetryDirective(
+            draft.issues,
+            source.stateAfter.system?.name ?? "System",
+          ),
         );
         emitCandidate({
           accepted: false,
@@ -2156,8 +2194,52 @@ function formatIssues(
   return issues.map(({ code, message }) => `${code}: ${message}`).join("; ");
 }
 
+function buildDeterministicNarrationRetryDirective(
+  issues: readonly ValidationIssue[],
+  systemName: string,
+): string {
+  const issueCodes = [...new Set(issues.map(({ code }) => code))].sort();
+  const corrections: string[] = [];
+  if (issueCodes.includes("SYSTEM_NOTICE_MISSING")) {
+    corrections.push(
+      `Print one concise bracketed notice beginning [${systemName} Notice: and containing only supplied quest, stat, resource, skill, class, title, or progression information.`,
+    );
+  }
+  if (issueCodes.includes("OPENING_ORIGIN_MISSING")) {
+    corrections.push(
+      "Start in-scene with the prior-life ending or its immediate remembered aftermath. Explicitly use prior life, previous life, last breath, death, execution, reborn, or reincarnated. Then explicitly show the viewpoint awoke, awakened, opened their eyes, or recognized a new body before the first System pressure.",
+    );
+  }
+  if (issueCodes.includes("OPENING_WORLD_MISSING")) {
+    corrections.push(
+      "Ground the awakening in immediate sensory danger from the supplied location and world canon.",
+    );
+  }
+  return `The prior draft failed deterministic validation with issue codes: ${issueCodes.join(", ")}. ${corrections.join(" ")} Return one complete scene with a consequence and forward hook. Remove every unsupported fact or action. Never repeat prior text that is absent from the supplied POV canon.`;
+}
+
 function countWords(value: string): number {
   return value.trim().split(/\s+/u).filter(Boolean).length;
+}
+
+function readerEventSummary(state: WorldState, summary: string): string {
+  const labels = [
+    ...state.characters.map(({ id, name }) => [id, name] as const),
+    ...state.locations.map(({ id, name }) => [id, name] as const),
+    ...state.factions.map(({ id, name }) => [id, name] as const),
+    ...state.characters.flatMap(({ inventory, skills }) => [
+      ...inventory.map(({ itemId, name }) => [itemId, name] as const),
+      ...skills.map(({ id, name }) => [id, name] as const),
+    ]),
+  ].sort(([left], [right]) => right.length - left.length);
+  const withoutNamePunctuation = labels.reduce(
+    (text, [, name]) => text.replaceAll(name, name.replace(/[.!?]+$/u, "").trimEnd()),
+    summary,
+  );
+  return labels.reduce(
+    (text, [id, name]) => text.replaceAll(id, name.replace(/[.!?]+$/u, "").trimEnd()),
+    withoutNamePunctuation,
+  );
 }
 
 function locationNames(state: WorldState): Map<string, string> {

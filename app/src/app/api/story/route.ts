@@ -1,18 +1,13 @@
-import { CHARACTER_IDS, DEFAULT_STORY_SETUP, DEMO_CHAPTER_LIMIT } from "@infinite-litrpg/shared";
+import { CHARACTER_IDS, DEMO_CHAPTER_LIMIT } from "@infinite-litrpg/shared";
 
 import { getStoryRuntime, type StoryRuntime } from "@/server/story/runtime";
-import {
-  defaultStoryTitle,
-  describeStoryError,
-  storyEnvelope,
-  storyErrorResponse,
-} from "@/server/story/story-http";
+import { describeStoryError, storyEnvelope, storyErrorResponse } from "@/server/story/story-http";
 import {
   StoryServiceError,
   type RerollLatestCommand,
   type TurnCommand,
 } from "@/server/story/story-service";
-import type { WorkspaceStoryResult } from "@/server/story/story-workspace";
+import type { StoryGenerationStatus, WorkspaceStoryResult } from "@/server/story/story-workspace";
 
 export const dynamic = "force-dynamic";
 
@@ -43,21 +38,12 @@ export async function POST(request: Request) {
     const runtime = await getStoryRuntime();
     if (command.type === "select_pov") {
       const active = runtime.workspace.getActiveStoryMetadata();
-      const result =
-        active === null
-          ? await runtime.workspace.createStory({
-              povCharacterId: command.povCharacterId,
-              title: defaultStoryTitle(
-                command.povCharacterId,
-                runtime.workspace.listStories().length,
-              ),
-              setup: DEFAULT_STORY_SETUP,
-            })
-          : await requireMatchingActiveStory(
-              runtime,
-              active.povCharacterId,
-              command.povCharacterId,
-            );
+      if (active === null) throw new StoryServiceError("Create a generated story first", 409);
+      const result = await requireMatchingActiveStory(
+        runtime,
+        active.povCharacterId,
+        command.povCharacterId,
+      );
       return Response.json(storyEnvelope(runtime, result));
     }
     requireApiKey(runtime.environment.openAiApiKey);
@@ -84,6 +70,18 @@ export function streamTurn(
   runtime: StoryRuntime,
   storyId: string,
   command: StoryMutationCommand,
+): Response {
+  return streamStoryOperation(runtime, (onChunk, onProgress) =>
+    dispatchStoryCommand(runtime, storyId, command, onChunk, onProgress),
+  );
+}
+
+export function streamStoryOperation(
+  runtime: StoryRuntime,
+  operation: (
+    onChunk: (text: string) => void,
+    onProgress: (generation: StoryGenerationStatus) => void,
+  ) => Promise<WorkspaceStoryResult>,
 ): Response {
   const encoder = new TextEncoder();
   let cancelled = false;
@@ -112,10 +110,7 @@ export function streamTurn(
       }
       void (async () => {
         try {
-          const result = await dispatchStoryCommand(
-            runtime,
-            storyId,
-            command,
+          const result = await operation(
             (text) => {
               if (!cancelled && !enqueue(controller, encoder, { text, type: "chunk" })) {
                 cancelled = true;

@@ -11,11 +11,14 @@
 ## Untrusted model output
 
 - Parse structured output with strict Zod schemas.
+- Treat genesis names and reference keys as untrusted. Deterministic code assigns every canonical ID.
+- Compile and audit genesis before storing any canonical database.
 - Reject unknown fields, incomplete responses, refusals, invalid actions, and illegal mutations.
 - Agents emit intent only. Deterministic code builds the accepted delta.
 - Buffer narration until deterministic checks and the independent audit pass.
 - Commit the world version, delta, knowledge, chapter, trace, and usage in one SQLite transaction.
 - A failed request makes no canonical mutation.
+- A failed genesis removes temporary library metadata. A Chapter 1 failure after accepted genesis preserves retryable Chapter 0.
 
 ## Reader boundary
 
@@ -40,6 +43,6 @@
 
 - Secret scan clean.
 - Client bundle scan clean.
-- Dependency audit clean.
+- Non-optional dependency audit clean. The app does not use `next/image`; Next.js's unused optional `sharp` package is excluded until Next.js accepts the patched `sharp` release.
 - License inventory contains no blocked license.
 - Browser error paths do not echo private inputs.

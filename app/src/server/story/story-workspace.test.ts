@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 import {
   CONTRACT_VERSION,
+  DEFAULT_STORY_SETUP,
   NARRATIVE_AUDIT_DIMENSIONS,
   RUNTIME_SCHEMA_VERSION,
   resolveTurn,
@@ -25,6 +26,7 @@ import {
   StoryWorkspace,
   StoryWorkspaceClosedError,
   StoryWorkspaceDataError,
+  LegacyStoryReadOnlyError,
   StoryTurnInProgressError,
   type StoryWorkspaceOptions,
   type StoryWorkspaceService,
@@ -45,6 +47,55 @@ afterEach(async () => {
 });
 
 describe("StoryWorkspace library lifecycle", () => {
+  it("logs the real genesis failure to the server console", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const workspace = openWorkspace({
+      genesisFactory: async (_setup, onProgress) => {
+        onProgress({
+          cycle: 3,
+          level: "retry",
+          message: "Candidate map is disconnected at palace-gate.",
+          phase: "world",
+        });
+        throw new Error("Candidate map is disconnected at palace-gate.");
+      },
+      idGenerator: sequence("broken1"),
+    });
+
+    await expect(
+      workspace.createStory({
+        povCharacterId: "rowan-ashborn",
+        requestId: "request-console-log",
+        setup: DEFAULT_STORY_SETUP,
+        title: "Broken Genesis",
+      }),
+    ).rejects.toThrow("Candidate map is disconnected at palace-gate.");
+
+    const logged = consoleError.mock.calls.map(([line]) => String(line)).join("\n");
+    expect(logged).toContain('"scope":"story-generation"');
+    expect(logged).toContain('"requestId":"request-console-log"');
+    expect(logged).toContain("Candidate map is disconnected at palace-gate.");
+    expect(workspace.listStories()).toEqual([]);
+    consoleError.mockRestore();
+  });
+
+  it("opens missing-genesis stories read-only after restart", async () => {
+    const first = openWorkspace();
+    const created = await first.createStory({
+      povCharacterId: "rowan-ashborn",
+      title: "Legacy Draft",
+    });
+    await first.close();
+
+    const reopened = openWorkspace();
+    expect(await reopened.exportMarkdown(created.metadata.id)).toContain("# Legacy Draft");
+    await expect(
+      reopened.takeTurn(created.metadata.id, command(created.story.world.version as number)),
+    ).rejects.toBeInstanceOf(LegacyStoryReadOnlyError);
+    await expect(reopened.restartStory(created.metadata.id)).rejects.toBeInstanceOf(
+      LegacyStoryReadOnlyError,
+    );
+  });
   it("creates a safe generated ID, locks POV, and exposes active story metadata", async () => {
     const workspace = openWorkspace({ idGenerator: sequence("A1B2C3D4") });
 
@@ -499,6 +550,7 @@ function gatedServiceFactory(
       exportMarkdown: () => base.exportMarkdown(),
       getReaderChapter: (chapter) => base.getReaderChapter(chapter),
       getStory: () => base.getStory(),
+      initializeGenesis: (genesis) => base.initializeGenesis(genesis),
       rerollLatest: (rerollCommand, onChunk) => base.rerollLatest(rerollCommand, onChunk),
       selectPov: (pov, setup) => base.selectPov(pov, setup),
       takeTurn: async () => {
@@ -546,6 +598,7 @@ function committingServiceFactory(
       exportMarkdown: () => base.exportMarkdown(),
       getReaderChapter: (chapter) => base.getReaderChapter(chapter),
       getStory: () => base.getStory(),
+      initializeGenesis: (genesis) => base.initializeGenesis(genesis),
       rerollLatest: async (rerollCommand) => {
         rerollCalls(rerollCommand);
         return requireView(base.getStory());
@@ -577,6 +630,7 @@ function delayedServiceFactory(
       exportMarkdown: () => base.exportMarkdown(),
       getReaderChapter: (chapter) => base.getReaderChapter(chapter),
       getStory: () => base.getStory(),
+      initializeGenesis: (genesis) => base.initializeGenesis(genesis),
       rerollLatest: (rerollCommand, onChunk) => base.rerollLatest(rerollCommand, onChunk),
       selectPov: (pov) => base.selectPov(pov),
       takeTurn: async () => {

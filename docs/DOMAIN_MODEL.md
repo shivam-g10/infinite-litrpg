@@ -2,6 +2,26 @@
 
 ## Core Records
 
+### StorySetupV2
+
+- creator selections, optional protagonist name, guidance
+- no client-provided world, cast, inventory, topology, or opening canon
+
+### StoryGenesisCandidateV1
+
+- protagonist, past life, five supporting actors
+- System rules, class, two skills, zero to six starting items
+- five to nine connected locations, three to six factions
+- incident, pressure, opening action, relationships, threat, discoverable facts
+- seven milestones, ending constraints, concrete guidance coverage
+
+### StoryGenesisRecordV1
+
+- accepted candidate and audit
+- exact compiled initial world and legal opening action
+- setup and world hashes
+- Sol and Terra response, usage, latency, and cost evidence
+
 ### WorldState
 
 - `version`
@@ -10,6 +30,7 @@
 - `calendar`
 - `threat`
 - locations, factions, active events
+- generated System and origin metadata
 - terminal status and ending constraints
 
 ### CharacterState

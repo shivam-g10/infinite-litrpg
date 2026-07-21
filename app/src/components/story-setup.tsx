@@ -2,6 +2,7 @@
 
 import {
   DEFAULT_STORY_SETUP,
+  GENERATED_PROTAGONIST_ID,
   STORY_BACKGROUNDS,
   STORY_GENDERS,
   STORY_GENRES,
@@ -12,38 +13,15 @@ import {
   STORY_STARTING_LIVES,
   STORY_SYSTEM_FOCUSES,
   StorySetupSchema,
-  type StoryCast,
   type StorySetup,
-  type StoryWorld,
 } from "@infinite-litrpg/shared";
-import { useId, useState, type FormEvent } from "react";
+import { useEffect, useId, useState, type FormEvent } from "react";
+
+import type { StoryGenerationEventView } from "./story-types";
 
 const DEFAULT_TITLE = "A Second Life, A Stronger Path";
 const TITLE_LIMIT = 100;
 const GUIDANCE_LIMIT = 500;
-
-const MALE_NAMES = ["Kael", "Orin", "Dain", "Riven", "Tarin", "Aren", "Corin", "Soren"] as const;
-const FEMALE_NAMES = [
-  "Ilyra",
-  "Selene",
-  "Mira",
-  "Neris",
-  "Lyra",
-  "Veya",
-  "Talia",
-  "Elowen",
-] as const;
-const FAMILY_NAMES = ["Venn", "Kest", "Marr", "Oris", "Vale", "Thorne", "Dusk", "Rook"] as const;
-const OLD_NAMES = [
-  "Azrath",
-  "Vaelor",
-  "Mordren",
-  "Serath",
-  "Kaivar",
-  "Orvath",
-  "Zareth",
-  "Malvek",
-] as const;
 
 interface Choice<T extends string> {
   readonly label: string;
@@ -121,13 +99,17 @@ const STARTING_LIFE_PREMISE: Readonly<Record<StorySetup["startingLife"], string>
 };
 
 export interface StorySetupSubmission {
-  readonly povCharacterId: "rowan-ashborn";
+  readonly povCharacterId: typeof GENERATED_PROTAGONIST_ID;
   readonly setup: StorySetup;
   readonly title: string;
 }
 
 interface StorySetupCreatorProps {
   readonly busy?: boolean;
+  readonly creationEvents?: readonly StoryGenerationEventView[];
+  readonly creationPhase?:
+    "world" | "world-checking" | "preparing" | "characters" | "writing" | "checking" | "saving";
+  readonly creationStartedAt?: string | null;
   readonly error?: string | null;
   readonly initialSetup?: StorySetup;
   readonly initialTitle?: string;
@@ -193,15 +175,14 @@ export function toggleLimitedSelection<T extends string>(
 export function createStorySetupSubmission(
   title: string,
   setup: StorySetup,
-  protagonistName = setup.cast.protagonist,
-  cast = setup.cast,
+  protagonistName = setup.protagonistName ?? "",
 ): StorySetupSubmission | null {
   const normalizedTitle = title.trim();
-  const normalizedName = protagonistName.trim() || cast.protagonist;
+  const normalizedName = protagonistName.trim();
   const parsedSetup = StorySetupSchema.safeParse({
     ...setup,
-    cast: { ...cast, protagonist: normalizedName },
     guidance: setup.guidance.trim(),
+    protagonistName: normalizedName || null,
   });
 
   if (
@@ -213,124 +194,10 @@ export function createStorySetupSubmission(
   }
 
   return {
-    povCharacterId: "rowan-ashborn",
+    povCharacterId: GENERATED_PROTAGONIST_ID,
     setup: parsedSetup.data,
     title: normalizedTitle,
   };
-}
-
-export function createStoryCast(seed: string, gender: StorySetup["protagonistGender"]): StoryCast {
-  let state = [...seed].reduce(
-    (value, character) => (value * 33 + character.codePointAt(0)!) >>> 0,
-    5381,
-  );
-  const pick = <T,>(values: readonly T[]): T => {
-    state = (Math.imul(state, 1_664_525) + 1_013_904_223) >>> 0;
-    return values[state % values.length]!;
-  };
-  const used = new Set<string>();
-  const fullName = (firstNames: readonly string[]): string => {
-    let name = "";
-    do name = `${pick(firstNames)} ${pick(FAMILY_NAMES)}`;
-    while (used.has(name));
-    used.add(name);
-    return name;
-  };
-  const protagonist = fullName(gender === "female" ? FEMALE_NAMES : MALE_NAMES);
-  return {
-    pastLife: pick(OLD_NAMES),
-    protagonist,
-    supporting: {
-      general: fullName(MALE_NAMES),
-      hero: fullName(FEMALE_NAMES),
-      prince: fullName(MALE_NAMES),
-      rival: fullName(FEMALE_NAMES),
-      saint: fullName(FEMALE_NAMES),
-    },
-  };
-}
-
-const STORY_WORLDS: readonly StoryWorld[] = [
-  {
-    calendarName: "Stormwake",
-    crownName: "Tempest Crown",
-    legionName: "Gale Legion",
-    primarySkillName: "Pulse Reading",
-    protagonistClassName: "Stormmarked",
-    raiderName: "Gale Reavers",
-    roadName: "Thunder Road",
-    secondarySkillName: "Tyrant's Resonance",
-    settlementName: "Havenreach",
-    systemName: "Throne Protocol",
-  },
-  {
-    calendarName: "Moonturn",
-    crownName: "Eclipse Crown",
-    legionName: "Silver Legion",
-    primarySkillName: "Night Sight",
-    protagonistClassName: "Moonbound",
-    raiderName: "Veil Raiders",
-    roadName: "Moonlit Way",
-    secondarySkillName: "Monarch's Recall",
-    settlementName: "Starhaven",
-    systemName: "Celestial Ledger",
-  },
-  {
-    calendarName: "Bloomtide",
-    crownName: "Briar Crown",
-    legionName: "Verdant Guard",
-    primarySkillName: "Life Thread",
-    protagonistClassName: "Rootsworn",
-    raiderName: "Thorn Marauders",
-    roadName: "Rootway",
-    secondarySkillName: "Ancient Dominion",
-    settlementName: "Greenhold",
-    systemName: "World Loom",
-  },
-  {
-    calendarName: "Highwater",
-    crownName: "Pearl Crown",
-    legionName: "Deep Legion",
-    primarySkillName: "Current Sense",
-    protagonistClassName: "Tideborn",
-    raiderName: "Salt Reavers",
-    roadName: "Tideway",
-    secondarySkillName: "Abyssal Command",
-    settlementName: "Breakwater",
-    systemName: "Abyssal Interface",
-  },
-  {
-    calendarName: "Runecycle",
-    crownName: "Sigil Crown",
-    legionName: "Iron Legion",
-    primarySkillName: "Rune Sight",
-    protagonistClassName: "Glyphbound",
-    raiderName: "Rune Breakers",
-    roadName: "Glyph Road",
-    secondarySkillName: "Sovereign Script",
-    settlementName: "Stonegate",
-    systemName: "Pathfinder Matrix",
-  },
-  {
-    calendarName: "Sunreach",
-    crownName: "Radiant Crown",
-    legionName: "Dawn Guard",
-    primarySkillName: "Aura Reading",
-    protagonistClassName: "Dawnmarked",
-    raiderName: "Dusk Raiders",
-    roadName: "Sunward Road",
-    secondarySkillName: "Imperial Radiance",
-    settlementName: "Brightwater",
-    systemName: "Ascendant Record",
-  },
-] as const;
-
-export function createStoryWorld(seed: string): StoryWorld {
-  const index = [...seed].reduce(
-    (value, character) => (Math.imul(value, 31) + character.codePointAt(0)!) >>> 0,
-    17,
-  );
-  return structuredClone(STORY_WORLDS[index % STORY_WORLDS.length]!);
 }
 
 export function buildStoryPremise(setup: StorySetup): string {
@@ -469,6 +336,9 @@ function MultiChoiceGroup<T extends string>({
 
 export function StorySetupCreator({
   busy = false,
+  creationEvents = [],
+  creationPhase,
+  creationStartedAt = null,
   error = null,
   initialSetup = DEFAULT_STORY_SETUP,
   initialTitle = DEFAULT_TITLE,
@@ -492,12 +362,7 @@ export function StorySetupCreator({
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const submission = createStorySetupSubmission(
-      title,
-      { ...setup, world: createStoryWorld(crypto.randomUUID()) },
-      protagonistName,
-      createStoryCast(crypto.randomUUID(), setup.protagonistGender),
-    );
+    const submission = createStorySetupSubmission(title, setup, protagonistName);
 
     if (!submission) {
       setFormError("Add a title and keep every selection within its stated limit.");
@@ -559,7 +424,7 @@ export function StorySetupCreator({
         </section>
       ) : null}
 
-      <form className="creator-form" onSubmit={handleSubmit}>
+      <form aria-busy={busy} className="creator-form" onSubmit={handleSubmit}>
         <div className="creator-fields">
           <label className="creator-text-field" htmlFor={`${formId}-title`}>
             <span>Story title</span>
@@ -803,9 +668,17 @@ export function StorySetupCreator({
           </p>
         ) : null}
 
+        {busy ? (
+          <StoryCreationProgress
+            events={creationEvents}
+            phase={creationPhase}
+            startedAt={creationStartedAt}
+          />
+        ) : null}
+
         <div className="creator-actions">
           <button className="creator-submit" disabled={busy} type="submit">
-            {busy ? "Creating chapter one…" : "Create chapter one"}
+            {busy ? creationPhaseLabel(creationPhase) : "Create chapter one"}
           </button>
           {onCancel ? (
             <button className="creator-cancel" disabled={busy} onClick={onCancel} type="button">
@@ -816,4 +689,74 @@ export function StorySetupCreator({
       </form>
     </main>
   );
+}
+
+function StoryCreationProgress({
+  events,
+  phase,
+  startedAt,
+}: {
+  readonly events: readonly StoryGenerationEventView[];
+  readonly phase: StorySetupCreatorProps["creationPhase"];
+  readonly startedAt: string | null;
+}) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1_000);
+    return () => clearInterval(timer);
+  }, []);
+  const elapsedMs = startedAt === null ? 0 : Math.max(0, now - Date.parse(startedAt));
+  const visibleEvents = events.slice(-8);
+  return (
+    <section aria-live="polite" className="creator-progress" role="status">
+      <div className="creator-progress__heading">
+        <span aria-hidden="true" className="generation-mark" />
+        <div>
+          <h2>{creationPhaseLabel(phase)}</h2>
+          <p>
+            Elapsed {formatElapsed(elapsedMs)}. The server keeps working if this tab disconnects.
+          </p>
+        </div>
+      </div>
+      <ol className="creator-progress__events">
+        {visibleEvents.length > 0 ? (
+          visibleEvents.map((event) => (
+            <li data-level={event.level} key={event.sequence}>
+              <time dateTime={event.at}>{formatElapsed(event.elapsedMs)}</time>
+              <span>{event.message}</span>
+            </li>
+          ))
+        ) : (
+          <li>
+            <time>0:00</time>
+            <span>Request sent. Waiting for the story server.</span>
+          </li>
+        )}
+      </ol>
+    </section>
+  );
+}
+
+function formatElapsed(milliseconds: number): string {
+  const seconds = Math.max(0, Math.floor(milliseconds / 1_000));
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+function creationPhaseLabel(phase: StorySetupCreatorProps["creationPhase"]): string {
+  switch (phase) {
+    case "world":
+      return "Building the world…";
+    case "world-checking":
+      return "Checking the world…";
+    case "characters":
+      return "Creating the cast…";
+    case "writing":
+      return "Writing chapter one…";
+    case "checking":
+      return "Checking chapter one…";
+    case "saving":
+      return "Saving chapter one…";
+    default:
+      return "Preparing story genesis…";
+  }
 }

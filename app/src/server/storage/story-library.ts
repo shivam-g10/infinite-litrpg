@@ -13,13 +13,13 @@ import {
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 
-import { CHARACTER_IDS } from "@infinite-litrpg/shared";
+import { CHARACTER_IDS, GENERATED_PROTAGONIST_ID } from "@infinite-litrpg/shared";
 
 import { isSafeStoryId, storyChapterFilename } from "./story-files";
 
 const LIBRARY_SCHEMA_VERSION = 1 as const;
 const MAX_CHAPTER_COUNT = 350;
-const CHARACTER_ID_SET = new Set<string>(CHARACTER_IDS);
+const CHARACTER_ID_SET = new Set<string>([...CHARACTER_IDS, GENERATED_PROTAGONIST_ID]);
 const CREATE_STORY_KEYS = new Set(["id", "povCharacterId", "title"]);
 const UPDATE_STORY_KEYS = new Set(["chapterCount", "title"]);
 const STORY_METADATA_KEYS = new Set([
@@ -33,7 +33,7 @@ const STORY_METADATA_KEYS = new Set([
 ]);
 const LIBRARY_INDEX_KEYS = new Set(["activeStoryId", "schemaVersion", "stories"]);
 
-type StoryStatus = "active" | "rejected";
+type StoryStatus = "active" | "creating" | "rejected";
 
 export interface StoryMetadata {
   readonly chapterCount: number;
@@ -222,6 +222,35 @@ export class StoryLibrary {
       throw error;
     }
     return cloneStory(story);
+  }
+
+  createPendingStory(input: CreateStoryInput): StoryMetadata {
+    const priorActiveStoryId = this.getActiveStory()?.id ?? null;
+    const created = this.createStory(input);
+    const index = this.readIndex();
+    const storyIndex = findStoryIndex(index, created.id);
+    const pending: StoryMetadata = { ...created, status: "creating" };
+    this.writeIndex({
+      ...index,
+      activeStoryId: priorActiveStoryId,
+      stories: replaceStory(index.stories, storyIndex, pending),
+    });
+    return cloneStory(pending);
+  }
+
+  removeCreatingStory(storyId: string): void {
+    const id = validateIdentifier(storyId, "storyId");
+    const index = this.readIndex();
+    const storyIndex = findStoryIndex(index, id);
+    const story = index.stories[storyIndex];
+    if (!story || story.status !== "creating") {
+      throw new StoryLibraryValidationError("Only creating stories can be removed");
+    }
+    this.writeIndex({
+      ...index,
+      stories: index.stories.filter(({ id: candidateId }) => candidateId !== id),
+    });
+    rmSync(this.storyDirectoryPath(id), { force: true, recursive: true });
   }
 
   activateStory(storyId: string): StoryMetadata {
@@ -436,8 +465,8 @@ function validateStoryMetadata(input: unknown, index: number): StoryMetadata {
     `Library story metadata at index ${index}`,
   );
   const status = record.status;
-  if (status !== "active" && status !== "rejected") {
-    throw new StoryLibraryValidationError("Story status must be active or rejected");
+  if (status !== "active" && status !== "creating" && status !== "rejected") {
+    throw new StoryLibraryValidationError("Story status must be active, creating, or rejected");
   }
   const createdAt = validateTimestamp(record.createdAt, "createdAt");
   const updatedAt = validateTimestamp(record.updatedAt, "updatedAt");
@@ -494,7 +523,7 @@ function validateIdentifier(value: unknown, field: string): string {
 function validatePovCharacterId(value: unknown): string {
   if (typeof value !== "string" || !CHARACTER_ID_SET.has(value)) {
     throw new StoryLibraryValidationError(
-      "povCharacterId must identify one of the six selectable characters",
+      "povCharacterId must identify a generated protagonist or legacy selectable character",
     );
   }
   return value;

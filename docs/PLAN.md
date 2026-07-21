@@ -1,35 +1,42 @@
 # Living Plan
 
-Updated: 2026-07-21
+Updated: 2026-07-22
 
 ## Current goal
 
-Prepare the local app for direct human demo and chapter-by-chapter review.
+Verify generated story genesis and complete the human diversity review.
 
-## Done
+## Correction
 
-- Click-based reincarnation and System creator with sensible defaults.
-- Optional user protagonist name plus fresh generated cast and world vocabulary.
-- Origin-focused Chapter 1 prompt and audit.
-- Per-story background generation state and library switching.
-- NDJSON phase progress, reload recovery, latest-chapter reroll, reject, restart, and reader-safe exports.
-- One SQLite database and one Markdown file per chapter under ignored `stories/`.
-- Concurrent Luna fallback plus optional native Multi-agent adapter.
-- Clean Reader with developer telemetry removed.
-- Obsolete paid eval, cost-ledger, review-packet, demo-seed, migration, and old screenshot code removed.
-- README, architecture, product, security, demo, review, and status docs rebuilt around the current app.
+The prior “generated world terms” implementation was a cosmetic reskin. Six client presets renamed one legacy fixture while topology, inventory, incident, threat, clues, and opening action stayed fixed. That path is removed from production.
+
+## Implemented
+
+- `StorySetupV2` contains preferences, optional protagonist name, and guidance only.
+- Strict `StoryGenesisCandidateV1` owns cast, System, inventory, topology, factions, incident, threat, facts, relationships, milestones, ending constraints, and opening action.
+- Terra medium proposes genesis. Deterministic code compiles stable IDs and validates it. Terra low audits it. Three cycles are allowed.
+- Accepted genesis, exact initial world, opening action, setup and world hashes, model provenance, usage, latency, and cost persist atomically.
+- One NDJSON creation request covers world generation, world checking, Chapter 1 generation, audit, commit, and activation.
+- Browser disconnect does not cancel work. Creation request IDs deduplicate work in the active server process.
+- Genesis failure removes temporary metadata. Chapter failure preserves accepted Chapter 0 for retry.
+- Replay and re-narration use stored initial canon. Genesis never reruns.
+- Missing genesis means legacy read-only. Read, activate, and export remain available. Mutation and restart return `LEGACY_STORY_READ_ONLY`.
+- Generated discoverable facts replace production Ash Road clues.
+- Provider-free evals cover palace, wilderness, dungeon, settlement, structural rejection, age and inventory, exact guidance, and ten-chapter trajectory.
 
 ## Acceptance gates
 
-- [x] All provider-free gate components pass: format, lint, strict typecheck, unit tests, offline evals, build, E2E, scans, licenses, audit, and diff check.
-- [x] Desktop and mobile creator paths pass without browser errors.
-- [x] Story library API returns 200 on a clean server start.
-- [x] Create, open, switch, generate, progress, reroll, reject, and export work in browser.
-- [x] Generation in one story does not block another story.
-- [ ] Clean clone setup works.
-- [ ] Human reviews at least ten contiguous chapters from a fresh story.
-- [ ] User approves the demo experience.
+- [x] Fixed `STORY_WORLDS`, client name pools, `applyWorldFlavor`, fixed production opening, and Ash Road clue constants removed from production.
+- [x] Provider-free unit and offline genesis gates pass.
+- [x] Creator sends no world or supporting cast canon.
+- [x] Browser creator path uses one creation stream and no second opening POST.
+- [x] Full `npm run check` passes on the final tree.
+- [x] Clean-clone verification passes on the full working tree, including new untracked files.
+- [ ] Human creates three books with different ages and compares structure.
+- [ ] Human continues one book for ten chapters and approves progression.
+- [x] User supplied the final 2:48 demo URL.
+- [ ] User authorizes push and final Devpost submission.
 
 ## Stop condition
 
-Stop after one verification stretch and browser smoke test. Human story judgment and release publication remain user gates. Do not restart live eval loops.
+Stop only for the human story judgment and user-owned release gates. Do not add paid eval loops.

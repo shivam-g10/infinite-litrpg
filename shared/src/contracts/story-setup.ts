@@ -37,7 +37,7 @@ export const STORY_SYSTEM_FOCUSES = [
   "territory",
 ] as const;
 
-const CharacterNameSchema = z
+export const CharacterNameSchema = z
   .string()
   .min(2)
   .max(60)
@@ -124,7 +124,7 @@ const uniqueSelection = <T extends z.ZodTypeAny>(item: T, minimum: number, maxim
     .max(maximum)
     .refine((values) => new Set(values).size === values.length, "Selections must be unique");
 
-export const StorySetupSchema = z
+export const LegacyStorySetupSchema = z
   .object({
     backgrounds: uniqueSelection(z.enum(STORY_BACKGROUNDS), 1, 2),
     cast: StoryCastSchema.default(DEFAULT_STORY_CAST),
@@ -145,11 +145,37 @@ export const StorySetupSchema = z
   })
   .strict();
 
+export type LegacyStorySetup = z.infer<typeof LegacyStorySetupSchema>;
+
+export const StorySetupSchema = z
+  .object({
+    version: z.literal(2),
+    backgrounds: uniqueSelection(z.enum(STORY_BACKGROUNDS), 1, 2),
+    foundation: z.literal("reincarnation-system"),
+    genres: uniqueSelection(z.enum(STORY_GENRES), 1, 3),
+    guidance: z
+      .string()
+      .max(500)
+      .refine((value) => value === value.trim(), "Guidance must be trimmed"),
+    memory: z.enum(STORY_MEMORIES),
+    personalityTraits: uniqueSelection(z.enum(STORY_PERSONALITIES), 1, 3),
+    powerPath: z.enum(STORY_POWER_PATHS),
+    protagonistGender: z.enum(STORY_GENDERS),
+    protagonistName: CharacterNameSchema.nullable(),
+    rebirthCause: z.enum(STORY_REBIRTH_CAUSES),
+    startingLife: z.enum(STORY_STARTING_LIVES),
+    systemFocus: z.enum(STORY_SYSTEM_FOCUSES),
+  })
+  .strict();
+
 export type StorySetup = z.infer<typeof StorySetupSchema>;
 
+export const PersistedStorySetupSchema = z.union([StorySetupSchema, LegacyStorySetupSchema]);
+export type PersistedStorySetup = z.infer<typeof PersistedStorySetupSchema>;
+
 export const DEFAULT_STORY_SETUP: StorySetup = StorySetupSchema.parse({
+  version: 2,
   backgrounds: ["outcast", "former-ruler"],
-  cast: DEFAULT_STORY_CAST,
   foundation: "reincarnation-system",
   genres: ["adventure", "action", "drama"],
   guidance: "",
@@ -157,8 +183,8 @@ export const DEFAULT_STORY_SETUP: StorySetup = StorySetupSchema.parse({
   personalityTraits: ["pragmatic", "protective"],
   powerPath: "weak-to-strong",
   protagonistGender: "male",
+  protagonistName: null,
   rebirthCause: "betrayal",
   startingLife: "adult",
   systemFocus: "titles-and-oaths",
-  world: DEFAULT_STORY_WORLD,
 });

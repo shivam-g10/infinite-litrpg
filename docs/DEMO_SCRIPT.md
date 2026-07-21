@@ -13,11 +13,13 @@ Target: 2 minutes 45 seconds.
 
 Show the fixed Reincarnation and System foundation. Change starting life, power path, genres, background, personality, and System focus. Leave the protagonist name blank.
 
-Say: “I choose the story shape. The app creates fresh character names and world terms, then writes an origin chapter for that setup.”
+Say: “I choose the story shape. Terra creates the full starting world, deterministic code validates it, Terra checks it, and the app saves that canon before writing Chapter 1.”
 
 ## 0:40 to 1:15 — Chapter 1
 
 Create the story. Point out the current phase. Read a short section showing the prior-life ending, arrival, world, and System.
+
+For the recorded Cael story, use the hidden oath dais, Covenant Ledger, three witnesses, and dawn succession purge. End on the concrete next action involving Ilyra Voss. These beats show System pressure, relationship conflict, and forward motion in one screen.
 
 Say: “Sol writes the chapter. Terra checks continuity and reader safety. Deterministic code owns every state change.”
 
@@ -44,8 +46,9 @@ End on the Reader.
 ## Checklist
 
 - Video below 2:55 with English voice.
+- YouTube link opens without sign-in and is publicly visible.
 - No secret or private provider data shown.
-- Fresh cast and world terms visible.
+- Different topology, incident, inventory, System mechanics, cast roles, and opening action visible.
 - Real Chapter 1 visible.
 - Library switching works during generation.
 - No developer telemetry in Reader.

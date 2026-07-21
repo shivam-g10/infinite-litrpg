@@ -3,6 +3,7 @@
 import { DEMO_CHAPTER_LIMIT } from "@infinite-litrpg/shared";
 import { forwardRef, useEffect, useRef, useState } from "react";
 
+import { ChapterMarkdown } from "./chapter-markdown";
 import { ChapterHistory } from "./chapter-history";
 import { StoryLibrary } from "./story-library";
 import type {
@@ -40,7 +41,8 @@ interface StoryShellProps {
   readonly error: string | null;
   readonly generationChapter: number | null;
   readonly generationMode: "generate" | "rewrite";
-  readonly generationPhase: "preparing" | "characters" | "writing" | "checking" | "saving";
+  readonly generationPhase:
+    "world" | "world-checking" | "preparing" | "characters" | "writing" | "checking" | "saving";
   readonly generations: readonly StoryGenerationView[];
   readonly libraryBusy: boolean;
   readonly libraryError: string | null;
@@ -672,15 +674,19 @@ const GenerationStatus = forwardRef<
         <p>
           {receivedProse || generationPhase === "saving"
             ? "Saving the finished chapter."
-            : generationPhase === "checking"
-              ? "Checking story continuity and quality."
-              : generationPhase === "writing"
-                ? generationMode === "rewrite"
-                  ? "Writing a new version."
-                  : "Writing the chapter."
-                : generationPhase === "characters"
-                  ? "Resolving character actions."
-                  : "Preparing the next scene."}
+            : generationPhase === "world"
+              ? "Building the world and opening situation."
+              : generationPhase === "world-checking"
+                ? "Checking the world, cast, System, and opening action."
+                : generationPhase === "checking"
+                  ? "Checking story continuity and quality."
+                  : generationPhase === "writing"
+                    ? generationMode === "rewrite"
+                      ? "Writing a new version."
+                      : "Writing the chapter."
+                    : generationPhase === "characters"
+                      ? "Resolving character actions."
+                      : "Preparing the next scene."}
         </p>
       </div>
       {automaticRun ? (
@@ -717,7 +723,6 @@ function ReaderView(props: StoryShellProps) {
   const reviewingSavedChapter = activeChapter !== story.world.chapter;
   const chapterSignature = `${activeChapter}:${displayedChapter?.title ?? ""}:${displayedChapter?.prose ?? ""}`;
   const previousChapterSignature = useRef(chapterSignature);
-  const paragraphs = (displayedChapter?.prose ?? "").split(/\n\s*\n/gu).filter(Boolean);
 
   useEffect(() => {
     if (previousChapterSignature.current !== chapterSignature) chapterHeading.current?.focus();
@@ -746,9 +751,7 @@ function ReaderView(props: StoryShellProps) {
             <h1 ref={chapterHeading} tabIndex={-1}>
               {displayedChapter.title}
             </h1>
-            {paragraphs.map((paragraph, index) => (
-              <p key={`${index}-${paragraph.slice(0, 28)}`}>{paragraph}</p>
-            ))}
+            <ChapterMarkdown prose={displayedChapter.prose} />
           </div>
         ) : null}
         {!reviewingSavedChapter && displayedChapter && activeChapter > 0 ? (

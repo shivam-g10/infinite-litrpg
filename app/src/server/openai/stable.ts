@@ -63,7 +63,7 @@ export async function runStructuredResponse<T>(
   const serviceTier = parseRuntimeServiceTier(request.policy.serviceTier ?? "standard");
   validateGenerationSettings(request.schemaName, request.maxOutputTokens);
   validatePromptCacheKey(request.promptCacheKey);
-  const format = zodTextFormat(request.schema, request.schemaName);
+  const format = providerSafeZodTextFormat(request.schema, request.schemaName);
   const maximumCostUsd = createStableMaximumCostResolver(client, {
     format,
     inputForAttempt: () => request.input,
@@ -155,6 +155,32 @@ export async function runStructuredResponse<T>(
     },
     policy: request.policy,
   });
+}
+
+function providerSafeZodTextFormat<T>(schema: z.ZodType<T>, schemaName: string) {
+  const format = zodTextFormat(schema, schemaName);
+  stripUnsupportedUnicodePatterns(format.schema);
+  return format;
+}
+
+function stripUnsupportedUnicodePatterns(value: unknown): void {
+  if (Array.isArray(value)) {
+    for (const entry of value) stripUnsupportedUnicodePatterns(entry);
+    return;
+  }
+  if (typeof value !== "object" || value === null) return;
+  const record = value as Record<string, unknown>;
+  for (const [key, entry] of Object.entries(record)) {
+    if (
+      key === "pattern" &&
+      typeof entry === "string" &&
+      (entry.includes("\\p{") || entry.includes("\\P{"))
+    ) {
+      delete record[key];
+      continue;
+    }
+    stripUnsupportedUnicodePatterns(entry);
+  }
 }
 
 function invokeEvidenceHook(callback: () => void, message: string): void {

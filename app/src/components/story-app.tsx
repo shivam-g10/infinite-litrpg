@@ -7,6 +7,7 @@ import { StorySetupCreator, type StorySetupSubmission } from "./story-setup";
 import { StoryShell, type StoryCommand } from "./story-shell";
 import {
   errorMessageFromPayload,
+  normalizeStoryGeneration,
   normalizeReaderChapterPayload,
   normalizeStoryEnvelope,
   type ReaderChapterView,
@@ -22,7 +23,11 @@ interface StoryAppProps {
 type RequestDescriptor =
   | { readonly kind: "load" }
   | { readonly kind: "poll" }
-  | { readonly kind: "create"; readonly submission: StorySetupSubmission }
+  | {
+      readonly kind: "create";
+      readonly requestId: string;
+      readonly submission: StorySetupSubmission;
+    }
   | {
       readonly command: {
         readonly storyId: string;
@@ -89,22 +94,15 @@ export async function readStoryStream(
     }
     if (event.type === "status") {
       if (event.status === "generating") return;
-      if (isRecord(event.generation)) {
-        const phase = event.generation.phase;
-        const mode = event.generation.mode;
-        const storyId = event.generation.storyId;
-        const targetChapter = event.generation.targetChapter;
-        if (
-          typeof storyId !== "string" ||
-          typeof targetChapter !== "number" ||
-          (mode !== "generate" && mode !== "rewrite") ||
-          !["preparing", "characters", "writing", "checking", "saving"].includes(String(phase))
-        )
-          throw new Error("Story stream status was invalid.");
-        onStatus?.({ mode, phase: phase as StoryGenerationView["phase"], storyId, targetChapter });
-        return;
+      let generation: StoryGenerationView | null;
+      try {
+        generation = normalizeStoryGeneration(event.generation);
+      } catch {
+        throw new Error("Story stream status was invalid.");
       }
-      throw new Error("Story stream status was invalid.");
+      if (generation === null) throw new Error("Story stream status was invalid.");
+      onStatus?.(generation);
+      return;
     }
     if (event.type === "heartbeat") return;
     if (event.type === "story") {
@@ -195,11 +193,13 @@ export function StoryApp({ apiKeyConfigured }: StoryAppProps) {
         : {
             body: JSON.stringify(
               request.kind === "create"
-                ? { ...request.submission, type: "create" }
+                ? { ...request.submission, requestId: request.requestId, type: "create" }
                 : request.command,
             ),
             headers: {
-              ...(request.kind === "command" ? { Accept: "application/x-ndjson" } : {}),
+              ...(request.kind === "command" || request.kind === "create"
+                ? { Accept: "application/x-ndjson" }
+                : {}),
               "Content-Type": "application/json",
             },
             method: "POST",
@@ -212,8 +212,10 @@ export function StoryApp({ apiKeyConfigured }: StoryAppProps) {
       const response = await fetch(endpoint, init);
       const payload = await readPayload(
         response,
-        request.kind === "command" ? () => setReceivedProse(true) : undefined,
-        request.kind === "command"
+        request.kind === "command" || request.kind === "create"
+          ? () => setReceivedProse(true)
+          : undefined,
+        request.kind === "command" || request.kind === "create"
           ? (generation) =>
               setServerGenerations((current) => [
                 ...current.filter(({ storyId }) => storyId !== generation.storyId),
@@ -254,7 +256,7 @@ export function StoryApp({ apiKeyConfigured }: StoryAppProps) {
       setServerGenerations(envelope.generations);
       if (envelope.generation !== null) {
         setGenerationChapter(envelope.generation.targetChapter);
-        setGenerationMode(envelope.generation.mode);
+        setGenerationMode(envelope.generation.mode === "rewrite" ? "rewrite" : "generate");
       } else if (request.kind === "poll") {
         setGenerationChapter(null);
       }
@@ -374,50 +376,11 @@ export function StoryApp({ apiKeyConfigured }: StoryAppProps) {
 
   const createStoryAndOpening = useCallback(
     async (submission: StorySetupSubmission) => {
-      setBusy("locking");
-      const created = await performRequest({ kind: "create", submission });
-      if (!created.ok || !created.story || !created.library.activeStoryId) {
-        setBusy(null);
-        return;
-      }
-      const openingChoice =
-        created.story.chapter?.choices.find(({ id }) => id === "choice-1") ??
-        created.story.chapter?.choices[0];
-      if (!openingChoice) {
-        setBusy(null);
-        setFailedRequestKind("create");
-        setError("Story was saved, but its opening action is missing.");
-        return;
-      }
-
-      const generation = {
-        mode: "generate",
-        phase: "preparing",
-        storyId: created.library.activeStoryId,
-        targetChapter: 1,
-      } as const;
-      setServerGenerations((current) => [
-        ...current.filter(({ storyId }) => storyId !== generation.storyId),
-        generation,
-      ]);
       setGenerationMode("generate");
       setGenerationChapter(1);
-      setBusy("turn");
-      try {
-        await performRequest({
-          command: {
-            choiceId: openingChoice.id,
-            expectedWorldVersion: created.story.world.version,
-            requestId: crypto.randomUUID(),
-            type: "take_action",
-          },
-          kind: "command",
-        });
-      } finally {
-        setBusy(null);
-      }
+      await runRequest({ kind: "create", requestId: crypto.randomUUID(), submission });
     },
-    [performRequest],
+    [runRequest],
   );
 
   const runLibraryCommand = useCallback(
@@ -476,10 +439,13 @@ export function StoryApp({ apiKeyConfigured }: StoryAppProps) {
           setServerGenerations((generations) => [
             ...generations.filter(({ storyId }) => storyId !== currentStoryId),
             {
+              events: [],
               mode: "generate",
               phase: "preparing",
+              startedAt: new Date().toISOString(),
               storyId: currentStoryId,
               targetChapter: nextChapter,
+              updatedAt: null,
             },
           ]);
         }
@@ -641,10 +607,18 @@ export function StoryApp({ apiKeyConfigured }: StoryAppProps) {
   }
 
   if (!story || showStoryPicker) {
+    const creation = serverGenerations.find(({ mode }) => mode === "create");
     return (
       <StorySetupCreator
         busy={busy === "locking" || busy === "library"}
         error={error}
+        {...(creation
+          ? {
+              creationEvents: creation.events,
+              creationPhase: creation.phase,
+              creationStartedAt: creation.startedAt,
+            }
+          : {})}
         {...(story && showStoryPicker
           ? { onCancel: () => setShowStoryPicker(false) }
           : !story && latestRejectedStory
@@ -684,7 +658,7 @@ export function StoryApp({ apiKeyConfigured }: StoryAppProps) {
       chapterSource={chapterSource}
       error={failedRequestKind === "command" ? error : null}
       generationChapter={generationChapter ?? activeGeneration?.targetChapter ?? null}
-      generationMode={activeGeneration?.mode ?? generationMode}
+      generationMode={activeGeneration?.mode === "rewrite" ? "rewrite" : generationMode}
       generationPhase={activeGeneration?.phase ?? "preparing"}
       generations={serverGenerations}
       key={activeStory.id}
@@ -702,10 +676,13 @@ export function StoryApp({ apiKeyConfigured }: StoryAppProps) {
           setServerGenerations((generations) => [
             ...generations.filter(({ storyId }) => storyId !== currentStoryId),
             {
+              events: [],
               mode: rewriting ? "rewrite" : "generate",
               phase: rewriting ? "writing" : "preparing",
+              startedAt: new Date().toISOString(),
               storyId: currentStoryId,
               targetChapter: rewriting ? story.world.chapter : story.world.chapter + 1,
+              updatedAt: null,
             },
           ]);
         }

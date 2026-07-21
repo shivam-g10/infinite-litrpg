@@ -89,7 +89,7 @@ export interface StorySummary {
   readonly createdAt: string;
   readonly id: string;
   readonly povCharacterId: string;
-  readonly status: "active" | "rejected";
+  readonly status: "active" | "creating" | "rejected";
   readonly title: string;
   readonly updatedAt: string;
 }
@@ -115,10 +115,24 @@ export interface StoryEnvelope {
 }
 
 export interface StoryGenerationView {
-  readonly mode: "generate" | "rewrite";
-  readonly phase: "preparing" | "characters" | "writing" | "checking" | "saving";
+  readonly events: readonly StoryGenerationEventView[];
+  readonly mode: "create" | "generate" | "rewrite";
+  readonly phase:
+    "world" | "world-checking" | "preparing" | "characters" | "writing" | "checking" | "saving";
   readonly storyId: string;
+  readonly startedAt: string | null;
   readonly targetChapter: number;
+  readonly updatedAt: string | null;
+}
+
+export interface StoryGenerationEventView {
+  readonly at: string;
+  readonly cycle: number | null;
+  readonly elapsedMs: number;
+  readonly level: "error" | "info" | "retry" | "success";
+  readonly message: string;
+  readonly phase: StoryGenerationView["phase"];
+  readonly sequence: number;
 }
 
 interface VisibleEventView {
@@ -285,7 +299,7 @@ function normalizeStorySummary(value: unknown): StorySummary {
   if (
     !/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/u.test(id) ||
     !povCharacterId ||
-    (status !== "active" && status !== "rejected") ||
+    (status !== "active" && status !== "creating" && status !== "rejected") ||
     !title.trim() ||
     title !== title.trim() ||
     !Number.isSafeInteger(chapterCount) ||
@@ -346,7 +360,7 @@ function normalizeStoryWarnings(value: unknown): readonly StoryWarningView[] {
   });
 }
 
-function normalizeStoryGeneration(value: unknown): StoryGenerationView | null {
+export function normalizeStoryGeneration(value: unknown): StoryGenerationView | null {
   if (value === undefined || value === null) return null;
   if (!isRecord(value)) throw new Error("Story response has invalid generation state.");
   const mode = stringAt(value, "mode");
@@ -354,8 +368,16 @@ function normalizeStoryGeneration(value: unknown): StoryGenerationView | null {
   const targetChapter = numberAt(value, "targetChapter");
   const phase = stringAt(value, "phase") || "preparing";
   if (
-    (mode !== "generate" && mode !== "rewrite") ||
-    !["preparing", "characters", "writing", "checking", "saving"].includes(phase) ||
+    (mode !== "create" && mode !== "generate" && mode !== "rewrite") ||
+    ![
+      "world",
+      "world-checking",
+      "preparing",
+      "characters",
+      "writing",
+      "checking",
+      "saving",
+    ].includes(phase) ||
     !storyId ||
     !Number.isSafeInteger(targetChapter) ||
     targetChapter < 1 ||
@@ -363,7 +385,70 @@ function normalizeStoryGeneration(value: unknown): StoryGenerationView | null {
   ) {
     throw new Error("Story response has invalid generation state.");
   }
-  return { mode, phase: phase as StoryGenerationView["phase"], storyId, targetChapter };
+  const events = Array.isArray(value.events)
+    ? value.events.map((event) => normalizeGenerationEvent(event))
+    : [];
+  const startedAt = nullableTimestampAt(value, "startedAt") ?? events[0]?.at ?? null;
+  const updatedAt = nullableTimestampAt(value, "updatedAt") ?? events.at(-1)?.at ?? startedAt;
+  return {
+    events,
+    mode,
+    phase: phase as StoryGenerationView["phase"],
+    startedAt,
+    storyId,
+    targetChapter,
+    updatedAt,
+  };
+}
+
+function normalizeGenerationEvent(value: unknown): StoryGenerationEventView {
+  if (!isRecord(value)) throw new Error("Story response has invalid generation events.");
+  const at = stringAt(value, "at");
+  const elapsedMs = numberAt(value, "elapsedMs");
+  const level = stringAt(value, "level");
+  const message = stringAt(value, "message");
+  const phase = stringAt(value, "phase");
+  const sequence = numberAt(value, "sequence");
+  const cycle = value.cycle === null ? null : numberAt(value, "cycle");
+  if (
+    !Number.isFinite(Date.parse(at)) ||
+    !Number.isFinite(elapsedMs) ||
+    elapsedMs < 0 ||
+    (level !== "error" && level !== "info" && level !== "retry" && level !== "success") ||
+    !message ||
+    ![
+      "world",
+      "world-checking",
+      "preparing",
+      "characters",
+      "writing",
+      "checking",
+      "saving",
+    ].includes(phase) ||
+    !Number.isSafeInteger(sequence) ||
+    sequence < 1 ||
+    (cycle !== null && (!Number.isSafeInteger(cycle) || cycle < 1 || cycle > 3))
+  ) {
+    throw new Error("Story response has invalid generation events.");
+  }
+  return {
+    at,
+    cycle,
+    elapsedMs,
+    level,
+    message,
+    phase: phase as StoryGenerationView["phase"],
+    sequence,
+  };
+}
+
+function nullableTimestampAt(value: Record<string, unknown>, key: string): string | null {
+  if (value[key] === undefined || value[key] === null || value[key] === "") return null;
+  const timestamp = stringAt(value, key);
+  if (!Number.isFinite(Date.parse(timestamp))) {
+    throw new Error("Story response has invalid generation timestamps.");
+  }
+  return timestamp;
 }
 
 export function normalizeStoryEnvelope(payload: unknown): StoryEnvelope {

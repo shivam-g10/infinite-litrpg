@@ -12,6 +12,8 @@ import {
   WorldDeltaSchema,
   WorldStateSchema,
   StorySetupSchema,
+  PersistedStorySetupSchema,
+  StoryGenesisRecordV1Schema,
   stageWorldDelta,
   validateChapterDraft,
   validateNarrativeStateClaims,
@@ -21,6 +23,8 @@ import {
   type PersistedTraceEnvelope,
   type PersistedWorldDelta,
   type StorySetup,
+  type PersistedStorySetup,
+  type StoryGenesisRecordV1,
   type TraceEnvelope,
   type WorldDelta,
   type WorldState,
@@ -31,6 +35,7 @@ const DEFAULT_BUSY_TIMEOUT_MS = 5_000;
 export type CommitFailurePoint =
   | "after-world-create"
   | "after-story-setup-insert"
+  | "after-story-genesis-insert"
   | "after-world-update"
   | "after-delta-insert"
   | "after-knowledge-changes"
@@ -199,14 +204,19 @@ export class StoryStore {
     }
   }
 
-  createWorld(input: unknown, setupInput?: unknown): WorldState {
+  createWorld(input: unknown, setupInput?: unknown, genesisInput?: unknown): WorldState {
     const validated = validateWorldState(input);
     if (!validated.ok) {
       throw new InvalidCommitError(`Invalid initial world: ${JSON.stringify(validated.issues)}`);
     }
     const state = validated.data;
     const stateJson = JSON.stringify(state);
-    const setup = parseStorySetup(setupInput);
+    const setup = parsePersistedStorySetup(setupInput);
+    const genesis =
+      genesisInput === undefined ? null : StoryGenesisRecordV1Schema.parse(genesisInput);
+    if (genesis && !isDeepStrictEqual(genesis.initialWorld, state)) {
+      throw new InvalidCommitError("Genesis initial world does not match canonical world");
+    }
 
     this.db
       .transaction(() => {
@@ -224,8 +234,21 @@ export class StoryStore {
               `INSERT INTO story_setups (world_id, setup_version, setup_json)
                VALUES (?, ?, ?)`,
             )
-            .run(state.id, 1, JSON.stringify(setup));
+            .run(
+              state.id,
+              StorySetupSchema.safeParse(setup).success ? 2 : 1,
+              JSON.stringify(setup),
+            );
           this.injectFailure("after-story-setup-insert");
+        }
+        if (genesis) {
+          this.db
+            .prepare<[string, number, string]>(
+              `INSERT INTO story_geneses (world_id, genesis_version, genesis_json)
+               VALUES (?, ?, ?)`,
+            )
+            .run(state.id, 1, JSON.stringify(genesis));
+          this.injectFailure("after-story-genesis-insert");
         }
       })
       .immediate();
@@ -238,7 +261,26 @@ export class StoryStore {
       .prepare<[string], JsonRow>("SELECT setup_json AS json FROM story_setups WHERE world_id = ?")
       .get(worldId);
 
-    return row ? StorySetupSchema.parse(parseJson(row.json)) : null;
+    if (!row) return null;
+    const persisted = PersistedStorySetupSchema.parse(parseJson(row.json));
+    if (StorySetupSchema.safeParse(persisted).success) return StorySetupSchema.parse(persisted);
+    return legacySetupPreferences(persisted);
+  }
+
+  loadPersistedStorySetup(worldId: string): PersistedStorySetup | null {
+    const row = this.db
+      .prepare<[string], JsonRow>("SELECT setup_json AS json FROM story_setups WHERE world_id = ?")
+      .get(worldId);
+    return row ? PersistedStorySetupSchema.parse(parseJson(row.json)) : null;
+  }
+
+  loadStoryGenesis(worldId: string): StoryGenesisRecordV1 | null {
+    const row = this.db
+      .prepare<[string], JsonRow>(
+        "SELECT genesis_json AS json FROM story_geneses WHERE world_id = ?",
+      )
+      .get(worldId);
+    return row ? StoryGenesisRecordV1Schema.parse(parseJson(row.json)) : null;
   }
 
   loadWorldState(worldId: string): WorldState | null {
@@ -824,8 +866,15 @@ export class StoryStore {
 
       CREATE TABLE IF NOT EXISTS story_setups (
         world_id TEXT PRIMARY KEY,
-        setup_version INTEGER NOT NULL CHECK (setup_version = 1),
+        setup_version INTEGER NOT NULL CHECK (setup_version IN (1, 2)),
         setup_json TEXT NOT NULL CHECK (json_valid(setup_json)),
+        FOREIGN KEY (world_id) REFERENCES worlds(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS story_geneses (
+        world_id TEXT PRIMARY KEY,
+        genesis_version INTEGER NOT NULL CHECK (genesis_version = 1),
+        genesis_json TEXT NOT NULL CHECK (json_valid(genesis_json)),
         FOREIGN KEY (world_id) REFERENCES worlds(id) ON DELETE CASCADE
       );
 
@@ -1187,13 +1236,33 @@ function parseJson(json: string): unknown {
   return JSON.parse(json) as unknown;
 }
 
-function parseStorySetup(input: unknown): StorySetup | null {
+function parsePersistedStorySetup(input: unknown): PersistedStorySetup | null {
   if (input === undefined) return null;
-  const result = StorySetupSchema.safeParse(input);
+  const result = PersistedStorySetupSchema.safeParse(input);
   if (!result.success) {
     throw new InvalidCommitError(`Invalid story setup: ${JSON.stringify(result.error.issues)}`);
   }
   return result.data;
+}
+
+function legacySetupPreferences(setup: PersistedStorySetup): StorySetup {
+  if (StorySetupSchema.safeParse(setup).success) return StorySetupSchema.parse(setup);
+  if (!("cast" in setup)) throw new InvalidCommitError("Unknown persisted story setup");
+  return StorySetupSchema.parse({
+    version: 2,
+    backgrounds: setup.backgrounds,
+    foundation: setup.foundation,
+    genres: setup.genres,
+    guidance: setup.guidance,
+    memory: setup.memory,
+    personalityTraits: setup.personalityTraits,
+    powerPath: setup.powerPath,
+    protagonistGender: setup.protagonistGender,
+    protagonistName: setup.cast.protagonist,
+    rebirthCause: setup.rebirthCause,
+    startingLife: setup.startingLife,
+    systemFocus: setup.systemFocus,
+  });
 }
 
 function hashJson(value: unknown): string {

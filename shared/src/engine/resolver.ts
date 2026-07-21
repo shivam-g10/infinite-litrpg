@@ -46,13 +46,6 @@ const EXPERIENCE_BY_ACTION = {
   wait: 0,
 } as const;
 
-const ASH_ROAD_INVESTIGATION_CLAIMS = [
-  "Boot prints on Ash Road split: raiders marched toward Black March while one barefoot trail returned to Cinder Village.",
-  "Blue glass grit in the Ash Road wagon ruts forms a broken System seal keyed to the Guild Outpost.",
-  "A snapped axle pin beside Ash Road bears a filed imperial crown mark beneath the soot.",
-  "A charred survey stake on Ash Road points to a concealed supply route entering Black March.",
-] as const;
-
 export function canonicalizeBackgroundIntentCandidate(
   candidateInput: unknown,
   actorId: string,
@@ -353,7 +346,11 @@ export function resolvePlayerExperienceAward(
     const ordinal = accepted.findIndex(({ id }) => id === playerIntent.id);
     if (nextChapter === null || ordinal < 0) return 0;
     const outcome = resolveIntentOutcome(state, playerIntent, nextChapter, ordinal, accepted);
-    return outcome.knowledgeMutations.some(({ type }) => type === "discover_fact") ? 15 : 0;
+    return outcome.knowledgeMutations.some(
+      ({ type }) => type === "discover_fact" || type === "learn_existing_fact",
+    )
+      ? 15
+      : 0;
   }
   return EXPERIENCE_BY_ACTION[playerIntent.action.type];
 }
@@ -477,14 +474,33 @@ export function resolveIntentOutcome(
       type: "adjust_resource",
     });
   } else if (intent.action.type === "investigate") {
+    const subjectId = intent.action.subjectId;
     const ledger = state.knowledgeLedgers.find(({ characterId }) => characterId === actor.id);
     const hasFactCapacity = state.facts.length + ordinal < 1_000;
     const hasLedgerCapacity = ledger !== undefined && ledger.entries.length < 500;
-    if (hasFactCapacity && hasLedgerCapacity) {
-      const fact = investigationFact(state, actor, intent.action.subjectId, chapter, ordinal);
-      if (fact) {
-        knowledgeMutations.push({ characterId: actor.id, fact, type: "discover_fact" });
-        surfacedClueFactIds.push(fact.id);
+    if (hasLedgerCapacity) {
+      const generated = state.facts.find(
+        (fact) =>
+          fact.discovery?.actionTypes.includes("investigate") === true &&
+          fact.discovery.subjectIds.includes(subjectId) &&
+          !ledger.entries.some(({ factId }) => factId === fact.id),
+      );
+      if (generated) {
+        knowledgeMutations.push({
+          certainty: generated.certainty,
+          characterId: actor.id,
+          discoveredChapter: chapter,
+          factId: generated.id,
+          source: generated.source,
+          type: "learn_existing_fact",
+        });
+        surfacedClueFactIds.push(generated.id);
+      } else if (hasFactCapacity && state.origin === undefined) {
+        const fact = investigationFact(state, actor, subjectId, chapter, ordinal);
+        if (fact) {
+          knowledgeMutations.push({ characterId: actor.id, fact, type: "discover_fact" });
+          surfacedClueFactIds.push(fact.id);
+        }
       }
     }
   } else if (intent.action.type === "interact" || intent.action.type === "defend") {
@@ -515,7 +531,7 @@ export function resolveIntentOutcome(
       locationId,
       observerIds,
       participantIds: [actor.id],
-      summary: summarizeAction(actor.name, intent.action),
+      summary: summarizeAction(state, actor, intent.action),
       visibility: "participants",
     },
     knowledgeMutations,
@@ -574,7 +590,6 @@ function investigationClaim(
   subject: string,
   clueIndex: number,
 ): string | null {
-  if (subjectId === "ash-road") return ASH_ROAD_INVESTIGATION_CLAIMS[clueIndex] ?? null;
   const location = state.locations.find(({ id }) => id === subjectId);
   const leadId =
     location?.adjacentLocationIds[clueIndex % (location.adjacentLocationIds.length || 1)];
@@ -592,25 +607,54 @@ function shortText(value: string): string {
   return value.length <= 240 ? value : `${value.slice(0, 237)}...`;
 }
 
-function summarizeAction(actorName: string, action: IntentAction): string {
+function summarizeAction(
+  state: WorldState,
+  actor: WorldState["characters"][number],
+  action: IntentAction,
+): string {
+  const actorName = displayName(actor.name);
+  const characterName = (id: string): string =>
+    displayName(
+      state.characters.find((character) => character.id === id)?.name ?? "a nearby character",
+    );
+  const locationName = (id: string): string =>
+    displayName(state.locations.find((location) => location.id === id)?.name ?? "a nearby place");
+  const factionName = (id: string): string =>
+    displayName(state.factions.find((faction) => faction.id === id)?.name ?? "a known faction");
+  const subjectName = (id: string): string =>
+    displayName(
+      state.characters.find((character) => character.id === id)?.name ??
+        state.locations.find((location) => location.id === id)?.name ??
+        state.factions.find((faction) => faction.id === id)?.name ??
+        state.activeEvents.find((event) => event.id === id)?.summary ??
+        (state.facts.some((fact) => fact.id === id) ? "a known lead" : "the immediate evidence"),
+    );
   switch (action.type) {
     case "move":
-      return `${actorName} moved to ${action.destinationId}.`;
+      return `${actorName} moved to ${locationName(action.destinationId)}.`;
     case "use_item":
-      return `${actorName} used ${action.quantity} ${action.itemId}.`;
+      return `${actorName} used ${action.quantity} ${displayName(
+        actor.inventory.find(({ itemId }) => itemId === action.itemId)?.name ?? "carried item",
+      )}.`;
     case "use_skill":
-      return `${actorName} used ${action.skillId}.`;
+      return `${actorName} used ${displayName(
+        actor.skills.find(({ id }) => id === action.skillId)?.name ?? "a known skill",
+      )}.`;
     case "investigate":
-      return `${actorName} investigated ${action.subjectId}.`;
+      return `${actorName} investigated ${subjectName(action.subjectId)}.`;
     case "interact":
-      return `${actorName} approached ${action.targetId}: ${action.approach}`;
+      return `${actorName} approached ${characterName(action.targetId)}: ${action.approach}`;
     case "defend":
-      return `${actorName} defended ${action.targetId}.`;
+      return `${actorName} defended ${subjectName(action.targetId)}.`;
     case "rally":
-      return `${actorName} rallied ${action.factionId} at ${action.locationId}.`;
+      return `${actorName} rallied ${factionName(action.factionId)} at ${locationName(action.locationId)}.`;
     case "wait":
       return `${actorName} waited and watched.`;
   }
+}
+
+function displayName(value: string): string {
+  return value.replace(/[.!?]+$/u, "").trimEnd();
 }
 
 function rejectionCode(code: ValidationCode | undefined): RejectionCode {

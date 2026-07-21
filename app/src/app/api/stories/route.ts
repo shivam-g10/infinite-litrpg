@@ -1,8 +1,14 @@
-import { CHARACTER_IDS, StorySetupSchema, type StorySetup } from "@infinite-litrpg/shared";
+import {
+  CHARACTER_IDS,
+  GENERATED_PROTAGONIST_ID,
+  StorySetupSchema,
+  type StorySetup,
+} from "@infinite-litrpg/shared";
 
 import { getStoryRuntime } from "@/server/story/runtime";
 import { storyEnvelope, storyErrorResponse } from "@/server/story/story-http";
 import { StoryServiceError } from "@/server/story/story-service";
+import { streamStoryOperation } from "../story/route";
 
 export const dynamic = "force-dynamic";
 
@@ -21,11 +27,25 @@ export async function POST(request: Request) {
     const runtime = await getStoryRuntime();
 
     if (command.type === "create") {
-      const result = await runtime.workspace.createStory({
-        povCharacterId: command.povCharacterId,
-        setup: command.setup,
-        title: command.title,
-      });
+      requireApiKey(runtime.environment.openAiApiKey);
+      const create = (
+        onChunk?: (text: string) => void,
+        onProgress?: Parameters<typeof runtime.workspace.createStory>[2],
+      ) =>
+        runtime.workspace.createStory(
+          {
+            povCharacterId: command.povCharacterId,
+            requestId: command.requestId,
+            setup: command.setup,
+            title: command.title,
+          },
+          onChunk,
+          onProgress,
+        );
+      if (request.headers.get("accept")?.includes("application/x-ndjson")) {
+        return streamStoryOperation(runtime, (onChunk, onProgress) => create(onChunk, onProgress));
+      }
+      const result = await create();
       return Response.json(storyEnvelope(runtime, result));
     }
 
@@ -48,7 +68,8 @@ export async function POST(request: Request) {
 
 type StoryLifecycleCommand =
   | {
-      readonly povCharacterId: (typeof CHARACTER_IDS)[number];
+      readonly povCharacterId: typeof GENERATED_PROTAGONIST_ID;
+      readonly requestId: string;
       readonly setup: StorySetup;
       readonly title: string;
       readonly type: "create";
@@ -60,10 +81,11 @@ function parseCommand(value: unknown): StoryLifecycleCommand {
     throw new StoryServiceError("Request body is invalid");
   }
   if (value.type === "create") {
-    requireExactKeys(value, ["povCharacterId", "setup", "title", "type"]);
+    requireExactKeys(value, ["povCharacterId", "requestId", "setup", "title", "type"]);
     if (
       typeof value.povCharacterId !== "string" ||
-      !CHARACTER_IDS.includes(value.povCharacterId as (typeof CHARACTER_IDS)[number])
+      (value.povCharacterId !== GENERATED_PROTAGONIST_ID &&
+        !CHARACTER_IDS.includes(value.povCharacterId as (typeof CHARACTER_IDS)[number]))
     ) {
       throw new StoryServiceError("Unknown viewpoint character");
     }
@@ -71,8 +93,12 @@ function parseCommand(value: unknown): StoryLifecycleCommand {
     if (!setup.success) {
       throw new StoryServiceError("Story setup is invalid");
     }
+    if (typeof value.requestId !== "string" || !/^[a-zA-Z0-9-]{8,100}$/u.test(value.requestId)) {
+      throw new StoryServiceError("requestId is invalid");
+    }
     return {
-      povCharacterId: value.povCharacterId as (typeof CHARACTER_IDS)[number],
+      povCharacterId: GENERATED_PROTAGONIST_ID,
+      requestId: value.requestId,
       setup: setup.data,
       title: parseTitle(value.title),
       type: "create",
@@ -87,6 +113,10 @@ function parseCommand(value: unknown): StoryLifecycleCommand {
     };
   }
   throw new StoryServiceError("Unknown story command");
+}
+
+function requireApiKey(apiKey: string | undefined): asserts apiKey is string {
+  if (!apiKey?.trim()) throw new StoryServiceError("OPENAI_API_KEY is not configured", 503);
 }
 
 function parseTitle(value: unknown): string {

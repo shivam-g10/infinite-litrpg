@@ -6,7 +6,10 @@
 flowchart LR
     B["Next.js browser UI"] --> H["HTTP and NDJSON routes"]
     H --> W["StoryWorkspace"]
+    W --> G["Genesis service"]
     W --> S["StoryService"]
+    G --> E
+    G --> O
     S --> E["Deterministic engine"]
     S --> O["OpenAI adapters"]
     O --> R["Responses API"]
@@ -24,6 +27,7 @@ The boundary is simple: models suggest; application code decides and commits.
 | Creator and reader | Click-based setup, library switching, chapter navigation, choices, progress, reroll, export | `app/src/components/`                                    |
 | HTTP layer         | Story CRUD, responsive reads, NDJSON generation stream, safe errors                         | `app/src/app/api/`, `app/src/server/story/story-http.ts` |
 | Workspace          | One runtime per story, per-story generation lock, background task status, library routing   | `app/src/server/story/story-workspace.ts`                |
+| Genesis service    | Terra candidate, deterministic compile, Terra audit, three cycles                           | `app/src/server/story/genesis-service.ts`                |
 | Story service      | Orchestrates one chapter without giving models write authority                              | `app/src/server/story/story-service.ts`                  |
 | OpenAI adapters    | Responses API calls, streaming, strict structured output, retries, timeout, usage           | `app/src/server/openai/`                                 |
 | Domain engine      | Schemas, world rules, resolver, POV filtering, story setup, narrative validation            | `shared/src/`                                            |
@@ -32,9 +36,11 @@ The boundary is simple: models suggest; application code decides and commits.
 
 ## Story creation
 
-The creator submits a `StorySetup`. Reincarnation and System are fixed for the current slice. The UI generates a fresh cast and selects one fresh world vocabulary set on each creation. A typed protagonist name overrides only that generated name.
+The creator submits `StorySetupV2`: reader selections, optional protagonist name, and guidance only. Client world and cast fields are rejected.
 
-Internal actor IDs remain stable so the deterministic fixture, knowledge ledgers, and tests do not change shape. Reader-facing names, System, class, skills, factions, places, calendar, and opening threat are replaced before the first chapter prompt.
+Terra medium generates `StoryGenesisCandidateV1`. The deterministic compiler assigns stable actor and internal IDs, validates topology, references, inventory, equipment, opening action, facts, milestones, and concrete guidance. Terra low audits coherence and setup compliance. Three candidate cycles are allowed. The accepted genesis, exact initial world, opening action, hashes, calls, usage, and cost commit atomically before Chapter 1.
+
+The legacy Demon King fixture remains test and compatibility data. Production story creation never loads it. Stories without a genesis record are readable and exportable but reject mutation with `LEGACY_STORY_READ_ONLY`.
 
 Each story gets its own directory and SQLite database. The library stores only story metadata and the active story ID.
 
@@ -114,7 +120,7 @@ stories/<story-id>/story.db           canonical state, chapters, traces, usage
 stories/<story-id>/chapter-001.md     reader-safe projection
 ```
 
-Important SQLite records include world snapshots, character state, knowledge, accepted deltas, chapter records, turn receipts, traces, and usage. Every commit compares the expected world version. A mismatch rolls back.
+Important SQLite records include setup version two, accepted genesis and initial-world snapshot, world snapshots, character state, knowledge, accepted deltas, chapter records, turn receipts, traces, and usage. Replay and re-narration start from the stored initial world. Genesis never runs twice for one saved story.
 
 ## Reader safety
 

@@ -52,7 +52,7 @@ describe("StoryService", () => {
     store.close();
   });
 
-  it("applies and persists setup canon before locking the new protagonist", () => {
+  it("persists setup preferences without treating them as world canon", () => {
     const store = new StoryStore();
     const service = new StoryService(store, unusedClient(), options());
     const setup = structuredClone(DEFAULT_STORY_SETUP);
@@ -67,12 +67,13 @@ describe("StoryService", () => {
     expect(view.pov.id).toBe("rowan-ashborn");
     expect(store.loadStorySetup("ashen-crown-v1")).toEqual(setup);
     expect(world?.facts.find(({ id }) => id === "rowan-is-malachar-reincarnated")?.claim).toBe(
-      "Rowan Ashborn is Demon King Malachar reincarnated in a male eight-year-old body after a deliberate sacrifice, with full memories.",
+      "Rowan is Malachar reincarnated.",
     );
     expect(world?.characters.find(({ id }) => id === "rowan-ashborn")).toMatchObject({
-      health: { current: 20, maximum: 20 },
-      publicRole: "Demon King reincarnated in a male eight-year-old body",
+      health: { current: 42, maximum: 42 },
+      publicRole: "Malachar reincarnated as a level-one human",
     });
+    expect(store.loadStoryGenesis("ashen-crown-v1")).toBeNull();
     store.close();
   });
 

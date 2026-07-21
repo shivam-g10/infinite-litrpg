@@ -8,7 +8,7 @@ export default defineConfig({
   reporter: [["list"], ["html", { open: "never" }]],
   workers: 1,
   use: {
-    baseURL: "http://127.0.0.1:3100",
+    baseURL: process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:3100",
     screenshot: "only-on-failure",
     trace: "retain-on-failure",
   },
@@ -16,10 +16,15 @@ export default defineConfig({
     { name: "chromium", use: { ...devices["Desktop Chrome"] } },
     { name: "mobile", use: { ...devices["Pixel 7"] } },
   ],
-  webServer: {
-    command: "npm run dev --workspace @infinite-litrpg/app -- --hostname 127.0.0.1 --port 3100",
-    url: "http://127.0.0.1:3100",
-    reuseExistingServer: !process.env.CI,
-    timeout: 120_000,
-  },
+  ...(process.env.PLAYWRIGHT_SKIP_WEBSERVER
+    ? {}
+    : {
+        webServer: {
+          command:
+            "npm run dev --workspace @infinite-litrpg/app -- --hostname 127.0.0.1 --port 3100",
+          url: "http://127.0.0.1:3100",
+          reuseExistingServer: !process.env.CI,
+          timeout: 120_000,
+        },
+      }),
 });

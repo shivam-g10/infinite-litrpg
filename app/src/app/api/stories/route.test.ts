@@ -27,6 +27,7 @@ beforeEach(() => {
   mocks.createStory.mockResolvedValue({ story: { chapter: 0 } });
   mocks.getStoryRuntime.mockReset();
   mocks.getStoryRuntime.mockResolvedValue({
+    environment: { openAiApiKey: "test-key" },
     workspace: {
       createStory: mocks.createStory,
     },
@@ -40,7 +41,8 @@ describe("stories create API", () => {
 
     const response = await POST(
       jsonRequest({
-        povCharacterId: "rowan-ashborn",
+        povCharacterId: "actor-protagonist",
+        requestId: "create-request-0001",
         setup,
         title: "The Oathbound Second Life",
         type: "create",
@@ -48,11 +50,16 @@ describe("stories create API", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(mocks.createStory).toHaveBeenCalledExactlyOnceWith({
-      povCharacterId: "rowan-ashborn",
-      setup,
-      title: "The Oathbound Second Life",
-    });
+    expect(mocks.createStory).toHaveBeenCalledExactlyOnceWith(
+      {
+        povCharacterId: "actor-protagonist",
+        requestId: "create-request-0001",
+        setup,
+        title: "The Oathbound Second Life",
+      },
+      undefined,
+      undefined,
+    );
   });
 
   it.each([

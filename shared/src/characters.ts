@@ -7,7 +7,24 @@ export const CHARACTER_IDS = [
   "nyra-vale",
 ] as const;
 
+export const GENERATED_PROTAGONIST_ID = "actor-protagonist" as const;
+
 export type CharacterId = (typeof CHARACTER_IDS)[number];
+
+export const LEGACY_CHARACTER_GENDERS: Readonly<Record<CharacterId, "female" | "male">> = {
+  "rowan-ashborn": "male",
+  "elara-voss": "female",
+  "maelin-rook": "male",
+  "varek-thorn": "male",
+  "lucan-aurelis": "male",
+  "nyra-vale": "female",
+};
+
+export function legacyCharacterGender(id: string): "female" | "male" | null {
+  return Object.hasOwn(LEGACY_CHARACTER_GENDERS, id)
+    ? LEGACY_CHARACTER_GENDERS[id as CharacterId]
+    : null;
+}
 
 export interface PublicCharacterProfile {
   readonly id: CharacterId;

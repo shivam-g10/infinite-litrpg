@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 const source = resolve(".");
 const temporaryRoot = mkdtempSync(join(tmpdir(), "infinite-litrpg-clean-"));
@@ -12,6 +12,7 @@ if (!npmCli) throw new Error("npm_execpath is unavailable");
 
 try {
   run("git", ["clone", "--no-local", source, clone], temporaryRoot);
+  copyWorkingTreeChanges();
   run(process.execPath, [npmCli, "ci"], clone);
   run(process.execPath, [npmCli, "run", "check"], clone);
 
@@ -28,6 +29,36 @@ try {
     throw new Error(`Refusing to remove unexpected path: ${resolvedTemporaryRoot}`);
   }
   rmSync(resolvedTemporaryRoot, { force: true, recursive: true });
+}
+
+function copyWorkingTreeChanges(): void {
+  const patch = execFileSync("git", ["diff", "--binary", "HEAD"], { cwd: source });
+  if (patch.length > 0) {
+    const patchPath = join(temporaryRoot, "working-tree.patch");
+    writeFileSync(patchPath, patch);
+    run("git", ["apply", "--whitespace=nowarn", patchPath], clone);
+  }
+
+  const untracked = execFileSync("git", ["ls-files", "--others", "--exclude-standard", "-z"], {
+    cwd: source,
+    encoding: "utf8",
+  })
+    .split("\0")
+    .filter(Boolean);
+  for (const path of untracked) {
+    const sourcePath = resolve(source, path);
+    const relativeSourcePath = relative(source, sourcePath);
+    if (relativeSourcePath.startsWith("..") || isAbsolute(relativeSourcePath)) {
+      throw new Error(`Refusing to copy unexpected path: ${sourcePath}`);
+    }
+    const targetPath = resolve(clone, relativeSourcePath);
+    mkdirSync(dirname(targetPath), { recursive: true });
+    copyFileSync(sourcePath, targetPath);
+  }
+
+  console.log(
+    `Applied working tree to clean clone: ${patch.length} patch bytes, ${untracked.length} untracked files.`,
+  );
 }
 
 function run(command: string, arguments_: readonly string[], cwd: string): void {

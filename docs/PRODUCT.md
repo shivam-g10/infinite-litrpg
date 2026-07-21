@@ -4,12 +4,12 @@
 
 Infinite LitRPG creates original reincarnation stories with an explicit System. The current creator fixes those two foundations and lets the reader choose the rest.
 
-The reader sets the title, starting life, gender, power path, genres, backgrounds, personality, rebirth cause, memory state, System focus, protagonist name, and optional guidance. If no name is entered, the app generates a fresh cast. World terms are also selected fresh for every new story.
+The reader sets the title, starting life, gender, power path, genres, backgrounds, personality, rebirth cause, memory state, System focus, protagonist name, and optional guidance. The server generates the cast, System mechanics, topology, factions, inventory, incident, threat, discoveries, relationships, opening action, milestones, and ending constraints.
 
 ## Reader loop
 
 1. Create or open a local book.
-2. Generate Chapter 1 as a real origin chapter.
+2. Generate, validate, audit, and save story genesis, then generate Chapter 1 in one server workflow.
 3. Read the committed chapter without developer telemetry.
 4. Choose when the story reaches a meaningful decision.
 5. Let routine chapters continue in the background.
@@ -27,6 +27,7 @@ The reader sets the title, starting life, gender, power path, genres, background
 - Titles, openings, scene shapes, and paragraph language must not loop.
 - Internal milestones, deadlines, prompt fields, audit language, and model instructions never appear in reader prose.
 - Models cannot invent durable canon outside an accepted `WorldDelta`.
+- Genesis is the one initialization exception: only the accepted, compiled genesis creates Chapter 0 canon.
 
 ## Product limits
 

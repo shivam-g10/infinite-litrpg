@@ -134,6 +134,26 @@ describe("StoryLibrary creation and paths", () => {
     ]);
   });
 
+  it("keeps the prior story active while genesis is pending and removes failed metadata", () => {
+    const library = new StoryLibrary({
+      now: clock(FIRST_TIME, SECOND_TIME),
+      rootDirectory: temporaryRoot,
+    });
+    const active = library.createStory(storyInput());
+    const pending = library.createPendingStory(
+      storyInput({ id: "pending-genesis", title: "Pending Genesis" }),
+    );
+
+    expect(pending.status).toBe("creating");
+    expect(library.getActiveStory()?.id).toBe(active.id);
+    expect(library.listActiveStories().map(({ id }) => id)).toEqual([active.id]);
+
+    library.removeCreatingStory(pending.id);
+    expect(library.getStory(pending.id)).toBeNull();
+    expect(existsSync(library.storyDirectoryPath(pending.id))).toBe(false);
+    expect(library.getActiveStory()?.id).toBe(active.id);
+  });
+
   it("rejects duplicate metadata and an orphaned directory without deleting either", () => {
     const library = new StoryLibrary({
       now: clock(FIRST_TIME),

@@ -1429,6 +1429,113 @@ a {
   line-height: 1.52;
 }
 
+.chapter-markdown {
+  max-width: 65ch;
+}
+
+.chapter-markdown p {
+  white-space: pre-line;
+}
+
+.chapter-markdown :is(h2, h3, h4, h5, h6) {
+  margin: 1.65em 0 0.6em;
+  line-height: 1.25;
+}
+
+.chapter-markdown h2 {
+  font-size: clamp(1.55rem, 2vw, 1.9rem);
+  font-weight: 500;
+}
+
+.chapter-markdown h3 {
+  font-size: clamp(1.3rem, 1.7vw, 1.55rem);
+  font-weight: 500;
+}
+
+.chapter-markdown :is(h4, h5, h6) {
+  font-size: clamp(1.08rem, 1.35vw, 1.25rem);
+  font-weight: 600;
+}
+
+.chapter-markdown :is(ul, ol) {
+  margin: 0 0 16px;
+  padding-left: 1.55em;
+  font-size: clamp(1.05rem, 1.35vw, 1.28rem);
+  line-height: 1.52;
+}
+
+.chapter-markdown li + li {
+  margin-top: 6px;
+}
+
+.chapter-markdown li > p {
+  margin-bottom: 6px;
+}
+
+.chapter-markdown blockquote {
+  margin: 18px 0;
+  padding: 2px 0 2px 18px;
+  border-left: 3px solid var(--accent);
+  color: var(--muted);
+}
+
+.chapter-markdown blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.chapter-markdown :not(pre) > code {
+  padding: 0.08em 0.3em;
+  border: 1px solid var(--border-soft);
+  border-radius: 3px;
+  background: var(--raised);
+  font-family: var(--mono);
+  font-size: 0.88em;
+}
+
+.chapter-markdown pre {
+  max-width: 100%;
+  margin: 18px 0;
+  padding: 16px;
+  overflow-x: auto;
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  background: var(--raised);
+  font-family: var(--mono);
+  line-height: 1.5;
+}
+
+.chapter-markdown table {
+  width: 100%;
+  margin: 18px 0;
+  border-collapse: collapse;
+  font-family: var(--sans);
+  font-size: 0.9rem;
+}
+
+.chapter-markdown :is(th, td) {
+  padding: 9px 11px;
+  border: 1px solid var(--border-soft);
+  text-align: left;
+}
+
+.chapter-markdown th {
+  background: var(--raised);
+  font-weight: 600;
+}
+
+.chapter-markdown hr {
+  margin: 28px 0;
+  border: 0;
+  border-top: 1px solid var(--border-soft);
+}
+
+.chapter-markdown__image-alt {
+  color: var(--muted);
+  font-family: var(--sans);
+  font-size: 0.85em;
+  font-style: italic;
+}
+
 .reader-context {
   padding-bottom: 24px;
   border-bottom: 1px solid var(--border-soft);
@@ -1942,6 +2049,71 @@ a {
   height: 10px;
   background: var(--accent);
   animation: rune-pulse 700ms ease-in-out infinite alternate;
+}
+
+.creator-progress {
+  margin-top: 18px;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 4px;
+  background: var(--raised);
+}
+
+.creator-progress__heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.creator-progress__heading .generation-mark {
+  flex: 0 0 auto;
+  margin-top: 6px;
+}
+
+.creator-progress h2,
+.creator-progress p {
+  margin: 0;
+}
+
+.creator-progress h2 {
+  font-size: 1rem;
+}
+
+.creator-progress__heading p {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.creator-progress__events {
+  margin: 16px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+  list-style: none;
+}
+
+.creator-progress__events li {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  gap: 10px;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.creator-progress__events li[data-level="retry"],
+.creator-progress__events li[data-level="error"] {
+  color: var(--danger);
+}
+
+.creator-progress__events li[data-level="success"] {
+  color: var(--text);
+}
+
+.creator-progress__events time {
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
 }
 
 .demo-complete {

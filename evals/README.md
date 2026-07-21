@@ -10,6 +10,9 @@ Gates:
 - arc transitions and long-horizon checkpoints stay valid;
 - Chapter 350 terminates and Chapter 351 is blocked;
 - accepted deltas remain the only source of new canon.
+- four provider-free generated openings differ in topology, incident, inventory, System, and action;
+- generated maps, references, equipment, opening actions, facts, and milestones compile strictly;
+- ten-chapter trajectories reject repeated actions, passive clock-or-XP loops, and narrow change.
 
 Run once with the normal repository gate:
 

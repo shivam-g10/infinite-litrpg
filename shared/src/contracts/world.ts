@@ -79,6 +79,7 @@ export const CharacterStateSchema = z
     equipmentItemIds: z.array(ItemIdSchema).max(12),
     experience: z.number().int().min(0),
     factionId: FactionIdSchema,
+    gender: z.enum(["male", "female"]).nullable().optional(),
     goals: z.array(ShortTextSchema).min(1).max(8),
     health: ResourcePoolSchema,
     id: CharacterIdSchema,
@@ -107,6 +108,16 @@ export const FactSchema = z
     ownerCharacterId: CharacterIdSchema.nullable(),
     source: ShortTextSchema,
     visibility: FactVisibilitySchema,
+    discovery: z
+      .object({
+        actionTypes: z
+          .array(z.enum(["investigate", "interact", "defend", "use_item", "use_skill"]))
+          .min(1)
+          .max(5),
+        subjectIds: z.array(IdSchema).min(1).max(8),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
@@ -213,6 +224,18 @@ export const WorldStateSchema = z
     terminalReason: ShortTextSchema.nullable(),
     threat: ShortTextSchema,
     version: WorldVersionSchema,
+    origin: z
+      .object({ genesisVersion: z.literal("1.0.0"), kind: z.literal("generated") })
+      .strict()
+      .optional(),
+    system: z
+      .object({
+        focus: ShortTextSchema,
+        name: ShortTextSchema,
+        rules: z.array(ShortTextSchema).min(2).max(8),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 

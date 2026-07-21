@@ -249,7 +249,7 @@ describe("deterministic turn resolution", () => {
 
     expect(claims).toHaveLength(4);
     expect(new Set(claims).size).toBe(4);
-    expect(claims.join(" ")).not.toContain("found corroborating traces tied to");
+    expect(claims[0]).toContain("found corroborating traces tied to Ash Road");
     expect(claims.some((claim) => claim.includes("System"))).toBe(true);
     expect(
       state.facts.filter(
@@ -505,6 +505,31 @@ describe("deterministic turn resolution", () => {
     expect(resolved.ok).toBe(false);
     if (resolved.ok) return;
     expect(resolved.issues.some(({ code }) => code === "TARGET_MISSING")).toBe(true);
+  });
+
+  it("investigates a local character by canonical name and rejects a remote character", () => {
+    const local = seedState();
+    const resolved = resolveTurn(
+      local,
+      playerAction(local, { subjectId: "nyra-vale", type: "investigate" }),
+      [],
+    );
+
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    expect(resolved.data.delta.events[0]?.summary).toBe("Rowan Ashborn investigated Nyra Vale.");
+
+    const remote = seedState();
+    remote.characters.find(({ id }) => id === "nyra-vale")!.locationId = "ash-road";
+    const rejected = resolveTurn(
+      remote,
+      playerAction(remote, { subjectId: "nyra-vale", type: "investigate" }),
+      [],
+    );
+    expect(rejected.ok).toBe(false);
+    if (!rejected.ok) {
+      expect(rejected.issues.some(({ code }) => code === "LOCATION_MISMATCH")).toBe(true);
+    }
   });
 
   it("rejects duplicate background IDs and player-ID collisions", () => {

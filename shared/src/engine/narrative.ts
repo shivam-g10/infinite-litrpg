@@ -12,6 +12,7 @@ import {
   type IntentAction,
   type WorldState,
 } from "../contracts";
+import { legacyCharacterGender } from "../characters";
 import { getClockPolicy } from "./clock";
 import { buildPovContext } from "./knowledge";
 import { resolveTurn } from "./resolver";
@@ -434,7 +435,11 @@ export function validateNarrativeStateClaims(
   const afterPov = prospectiveState.characters.find(({ id }) => id === povId);
   if (!beforePov || !afterPov) return [];
   const resourceContext = {
-    characters: prospectiveState.characters.map(({ id, name }) => ({ id, name })),
+    characters: prospectiveState.characters.map(({ gender, id, name }) => ({
+      gender: gender ?? legacyCharacterGender(id),
+      id,
+      name,
+    })),
     povId,
   };
 
@@ -712,7 +717,11 @@ function resourceTransitionTargetsInText(
 }
 
 interface NarrativeResourceContext {
-  readonly characters: readonly { readonly id: string; readonly name: string }[];
+  readonly characters: readonly {
+    readonly gender: "female" | "male" | null;
+    readonly id: string;
+    readonly name: string;
+  }[];
   readonly povId: string;
 }
 
@@ -768,9 +777,8 @@ function resourceClaimBelongsToPov(
   const owner = ownerCandidates.sort((left, right) => right.index - left.index)[0];
   if (owner?.kind === "character") return owner.characterId === context.povId;
   if (owner?.kind === "pronoun") {
-    if (owner.pronoun === "their") return false;
-    const femaleIds = new Set(["elara-voss", "nyra-vale"]);
-    const expectsFemale = owner.pronoun === "her";
+    const expectedGender =
+      owner.pronoun === "his" ? "male" : owner.pronoun === "her" ? "female" : null;
     let clauseStart = 0;
     for (const boundary of sentencePrefix.matchAll(
       /\b(?:after|although|and|as|because|before|once|since|though|when|while)\b/giu,
@@ -778,60 +786,58 @@ function resourceClaimBelongsToPov(
       if (boundary.index >= owner.index) break;
       clauseStart = boundary.index + boundary[0].length;
     }
-    let firstClauseCompatibleName: {
+    let firstClauseName: {
       readonly characterId: string;
       readonly index: number;
     } | null = null;
-    let firstCompatibleName: { readonly characterId: string; readonly index: number } | null = null;
-    let lastCompatibleName: { readonly characterId: string; readonly index: number } | null = null;
+    let firstName: { readonly characterId: string; readonly index: number } | null = null;
+    let lastName: { readonly characterId: string; readonly index: number } | null = null;
     for (const character of context.characters) {
-      if (femaleIds.has(character.id) !== expectsFemale) continue;
+      if (
+        expectedGender !== null &&
+        character.gender !== null &&
+        character.gender !== expectedGender
+      ) {
+        continue;
+      }
       for (const variant of [character.name, character.name.split(/\s+/u)[0]!]) {
         const expression = new RegExp(`\\b${escapeRegExp(variant)}\\b`, "giu");
         for (const nameMatch of sentencePrefix.matchAll(expression)) {
           if (
             nameMatch.index < owner.index &&
-            (firstCompatibleName === null || nameMatch.index < firstCompatibleName.index)
+            (firstName === null || nameMatch.index < firstName.index)
           ) {
-            firstCompatibleName = { characterId: character.id, index: nameMatch.index };
+            firstName = { characterId: character.id, index: nameMatch.index };
           }
           if (
             nameMatch.index < owner.index &&
-            (lastCompatibleName === null || nameMatch.index > lastCompatibleName.index)
+            (lastName === null || nameMatch.index > lastName.index)
           ) {
-            lastCompatibleName = { characterId: character.id, index: nameMatch.index };
+            lastName = { characterId: character.id, index: nameMatch.index };
           }
           if (
             nameMatch.index >= clauseStart &&
             nameMatch.index < owner.index &&
-            (firstClauseCompatibleName === null ||
-              nameMatch.index < firstClauseCompatibleName.index)
+            (firstClauseName === null || nameMatch.index < firstClauseName.index)
           ) {
-            firstClauseCompatibleName = { characterId: character.id, index: nameMatch.index };
+            firstClauseName = { characterId: character.id, index: nameMatch.index };
           }
         }
       }
     }
-    if (clauseStart > 0 && firstClauseCompatibleName !== null) {
-      return firstClauseCompatibleName.characterId === context.povId;
+    if (clauseStart > 0 && firstClauseName !== null) {
+      return firstClauseName.characterId === context.povId;
     }
-    if (clauseStart === 0 && lastCompatibleName !== null) {
-      return lastCompatibleName.characterId === context.povId;
+    if (clauseStart === 0 && lastName !== null) {
+      return lastName.characterId === context.povId;
     }
-    const leadingPronoun = sentencePrefix
-      .trimStart()
-      .match(/^(he|she)\b/iu)?.[1]
-      ?.toLowerCase();
-    if (leadingPronoun !== undefined) {
-      return (
-        (leadingPronoun === "she") === expectsFemale &&
-        femaleIds.has(context.povId) === expectsFemale
-      );
+    const povGender = context.characters.find(({ id }) => id === context.povId)?.gender ?? null;
+    if (expectedGender !== null && povGender !== null && povGender !== expectedGender) return false;
+    if (/^(?:he|she|they)\b/iu.test(sentencePrefix.trimStart())) return true;
+    if (firstName !== null) {
+      return firstName.characterId === context.povId;
     }
-    if (firstCompatibleName !== null) {
-      return firstCompatibleName.characterId === context.povId;
-    }
-    return femaleIds.has(context.povId) === expectsFemale;
+    return true;
   }
 
   let firstNamedCharacter: { readonly characterId: string; readonly index: number } | null = null;

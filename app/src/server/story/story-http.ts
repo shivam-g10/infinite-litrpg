@@ -13,9 +13,11 @@ import {
   StaleWorldVersionError,
 } from "../storage/story-store";
 import type { StoryRuntime } from "./runtime";
+import { StoryGenesisError } from "./genesis-service";
 import { StoryServiceError } from "./story-service";
 import {
   StoryWorkspaceDataError,
+  LegacyStoryReadOnlyError,
   StoryTurnInProgressError,
   StoryWorkspaceValidationError,
   type WorkspaceStoryResult,
@@ -73,6 +75,24 @@ export function describeStoryError(error: unknown): {
       status,
     };
   }
+  if (error instanceof StoryGenesisError) {
+    const reason = redactSecret(error.message, secret).slice(0, 500);
+    return error.code === "GENESIS_GUIDANCE_UNSATISFIED"
+      ? {
+          body: {
+            code: error.code,
+            error: `The generated world could not satisfy all concrete guidance: ${reason}`,
+          },
+          status: 422,
+        }
+      : {
+          body: {
+            code: error.code,
+            error: `World generation failed after three attempts: ${reason}`,
+          },
+          status: 502,
+        };
+  }
   if (error instanceof StaleWorldVersionError) {
     return {
       body: { code: "STALE_WORLD_VERSION", error: "World changed before commit" },
@@ -90,6 +110,15 @@ export function describeStoryError(error: unknown): {
       body: {
         code: "STORY_TURN_IN_PROGRESS",
         error: `Chapter ${error.generation.targetChapter} is already generating`,
+      },
+      status: 409,
+    };
+  }
+  if (error instanceof LegacyStoryReadOnlyError) {
+    return {
+      body: {
+        code: error.code,
+        error: "This legacy story is read-only. Create a generated story to continue.",
       },
       status: 409,
     };

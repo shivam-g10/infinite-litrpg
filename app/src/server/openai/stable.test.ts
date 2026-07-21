@@ -48,6 +48,23 @@ describe("stable Responses adapter", () => {
     expect((body as { service_tier?: string }).service_tier).toBe("default");
   });
 
+  it("removes provider-unsupported Unicode regex hints but keeps local validation", async () => {
+    const UnicodeResultSchema = z
+      .object({ name: z.string().regex(/^[\p{L}][\p{L}' -]*$/u) })
+      .strict();
+    const parse = vi.fn().mockResolvedValue(parsedResponse({ name: "Éowyn" }));
+    const request = {
+      ...structuredRequest({ maxRetries: 0 }),
+      schema: UnicodeResultSchema,
+    } as unknown as StructuredResponseRequest<z.infer<typeof UnicodeResultSchema>>;
+
+    const result = await runStructuredResponse(stableClient({ parse }), request);
+
+    expect(result.data).toEqual({ name: "Éowyn" });
+    const body = parse.mock.calls[0]?.[0] as { text: { format: unknown } };
+    expect(JSON.stringify(body.text.format)).not.toContain("\\\\p{");
+  });
+
   it("omits an unset structured output cap while reserving the provider maximum", async () => {
     const unboundedReserve = vi.fn();
     const boundedReserve = vi.fn();
