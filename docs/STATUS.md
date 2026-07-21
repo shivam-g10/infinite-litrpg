@@ -35,10 +35,11 @@ The old claim that world generation was complete was wrong. It was a cosmetic re
 - Secret scan, client-bundle scan, license gate, and non-optional dependency audit pass. The audit reports zero findings. Next.js's unused optional `sharp` dependency is documented in `docs/SECURITY.md` and excluded from the audit until Next.js accepts the patched release.
 - In-app browser QA passes desktop and 412 by 915 mobile creator state changes with no console warnings, framework overlay, or horizontal overflow.
 - The 2:48 demo is available at `https://youtu.be/Mmb5XsgcF_0`.
-- Devpost draft `https://devpost.com/software/infinite-litrpg` contains the description, technologies, repository, demo, and creator thumbnail.
+- Devpost submission `1112057` is submitted to OpenAI Build Week at `https://devpost.com/software/infinite-litrpg`.
 
-## Remaining gates
+## Release
 
-- Human creates three distinct books and reviews one for ten chapters.
-- Primary build thread `/feedback` Session ID is supplied: `019f7b02-c7fd-7da2-bbd8-a063184c2311`.
-- User authorizes commit, push, and final challenge submission.
+- Release commit `6983c3dbe2ecc45eb13326a61392fdd20ab14604` is on public `main`.
+- Primary build thread `/feedback` Session ID: `019f7b02-c7fd-7da2-bbd8-a063184c2311`.
+- Devpost accepted the submission on July 21, 2026 at 6:41:35 PM EDT.
+- Extended three-book and ten-chapter human review remains useful after submission. It is not a Build Week requirement.

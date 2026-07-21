@@ -2,16 +2,17 @@
 
 ## Fields
 
-| Field            | Value                                                    | State          |
-| ---------------- | -------------------------------------------------------- | -------------- |
-| Project          | Infinite LitRPG                                          | Ready          |
-| Track            | Apps for Your Life                                       | Ready          |
-| Tagline          | Create one reincarnated life. The world moves around it. | Ready          |
-| Repository       | `https://github.com/shivam-g10/infinite-litrpg`          | User push gate |
-| License          | MIT                                                      | Ready          |
-| Demo video       | `https://youtu.be/Mmb5XsgcF_0`                           | Ready          |
-| Devpost draft    | `https://devpost.com/software/infinite-litrpg`           | Ready          |
-| Codex Session ID | `019f7b02-c7fd-7da2-bbd8-a063184c2311`                   | Ready          |
+| Field            | Value                                                    | State     |
+| ---------------- | -------------------------------------------------------- | --------- |
+| Project          | Infinite LitRPG                                          | Ready     |
+| Track            | Apps for Your Life                                       | Ready     |
+| Tagline          | Create one reincarnated life. The world moves around it. | Ready     |
+| Repository       | `https://github.com/shivam-g10/infinite-litrpg`          | Published |
+| License          | MIT                                                      | Ready     |
+| Demo video       | `https://youtu.be/Mmb5XsgcF_0`                           | Ready     |
+| Devpost          | `https://devpost.com/software/infinite-litrpg`           | Submitted |
+| Submission ID    | `1112057`                                                | Submitted |
+| Codex Session ID | `019f7b02-c7fd-7da2-bbd8-a063184c2311`                   | Ready     |
 
 ## Description
 
@@ -50,6 +51,6 @@ Human judgment fixed the product scope, canon rules, local-first boundary, three
 - [x] Clean-clone setup passes with tracked and untracked working-tree files.
 - [ ] User approves a fresh ten-chapter progression.
 - [x] User supplies the final 2:48 demo.
-- [ ] Current branch is pushed with user authority.
+- [x] Current branch is pushed with user authority.
 - [x] Feedback session ID supplied.
-- [ ] Submission authorized.
+- [x] Submission authorized and accepted by Devpost.
