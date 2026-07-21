@@ -2,7 +2,7 @@
 
 ## 2026-07-21 Fixed-Bar Review Recovery
 
-- Current phase: the single provider-free validation stretch passed. One source checkpoint, one fixed 60-chapter generation stretch, and one human review remain.
+- Current phase: the one provider-free validation stretch passed. The one paid generation stretch ran once and stopped after six committed chapters. The app is live for user testing. No rerun is planned.
 - The rejected baseline is frozen at `evals/baselines/story-quality-chapters-1-18.json`: sparse dialogue, no meaningful character movement, no explicit System, repeated openings and titles, one-location loops, and weak progression.
 - Research across _Defiance of the Fall_, _Dungeon Crawler Carl_, _Azarinth Healer_, _He Who Fights with Monsters_, _The Primal Hunter_, and _The Wandering Inn_ produced one fixed good-enough bar in `research/2026-07-21-litrpg-good-enough.md`. Each story must pass independently; human interest remains final authority.
 - Prompt `1.6.0` gives frame, narrator, and audit every prior chapter. Sol medium frames and narrates; Terra low audits; up to three Luna agents receive every prior chapter through POV-safe canon history. A repeating ten-chapter guide requires commitment, setup, escalation, convergence, and payoff.
@@ -12,18 +12,22 @@
 - Every story is stored under ignored `stories/<story-id>/` with canonical `story.db` and one `chapter-###.md` projection per committed chapter. The old `data/ashen-crown.db` is copied once through SQLite backup and preserved.
 - The canceled settings and API-key UI is gone. The key remains server-side in root `.env`.
 - Two prompt `1.5.0` attempts made seven provider requests and committed no chapter. Their durable `$0.964953` exposure remains telemetry. No lock or active reservation remains. It cannot block prompt `1.6.0`.
-- Current local build is not pushed.
+- Source checkpoint `892a2b6` is local and not pushed.
 
-## Current Blocker
+## Current Result
 
-- The rejected prompt `1.4.12` packet and evidence JSON are absent from the active workspace and remain only in Git history. Human review is not ready until prompt `1.6.0` regenerates all 60 chapters and all six stories receive the one fixed automated and human review.
+- The rejected prompt `1.4.12` packet and evidence JSON are absent from the active workspace and remain only in Git history. `docs/SAMPLE_STORIES.md` is a pending marker, not story input or review evidence.
+- Prompt `1.6.0` committed Rowan chapters 1 through 5 and Elara chapter 1. Rowan chapter 6 stopped with `DIALOGUE_MISSING`. Elara chapter 2 stopped with `INVALID_OUTPUT` after three audit attempts. No other fresh review story started.
+- The required six ten-chapter packet does not exist, so the fixed 33-gate packet review and human progression review did not run. Partial output stays under ignored `stories/review-rowan-ashborn/` and `stories/review-elara-voss/` for inspection.
 
 ## Next Action
 
-Create one source-bridge commit, run provider-free preflight once, start the app for parallel user testing, then run `npm run review:stories:live -- --confirm-unbounded-cost` once. Evaluate the completed batch once and stop with the result.
+User tests the running app at `http://localhost:3000`. Do not repeat generation or evals. Use user feedback to choose a separate future code slice.
 
 ## Evidence Log
 
+- 2026-07-21 single paid stretch: source checkpoint `892a2b6` and provider-free preflight passed before `npm run review:stories:live -- --confirm-unbounded-cost` ran exactly once. It exited 1 after 320.5 seconds. Six chapters committed: Rowan 5 and Elara 1. The failed Rowan chapter 6 turn retained six attempts and `$0.152930625` known telemetry; the failed Elara chapter 2 turn retained eight attempts and `$0.100138313` known telemetry. The current stretch recorded 46 known requests totaling `$0.725929378`. The durable ledger has no run lock. It was not rerun.
+- 2026-07-21 parallel demo proof: the local app returned HTTP 200 with the server-side API key configured. In-app browser QA exercised story selection, saved chapter navigation, clean Reader mode, and latest-chapter rewrite with zero console errors. The app remains running at `http://localhost:3000` for user testing.
 - 2026-07-21 single provider-free validation stretch: format, lint, strict typecheck, production build, both security scans, license inventory, dependency audit, and diff hygiene exited 0. Vitest passed 555 tests across 31 files. Offline eval passed 14 invariant cases, 35 clock transitions, 12 POV checks, 1,000 simulations, and the chapter-350 terminal with chapter 351 blocked. Playwright passed 43 tests with one intentional desktop skip across Chromium and Pixel 7. No provider request ran. This stretch will not repeat before generation.
 - 2026-07-21 prompt `1.6.0` proof-first slice: prompt tests first failed on the old version, numeric word target, missing serial arc, missing present-character context, and absent POV-safe chapter history. Implementation then passed all 14 prompt tests. Story service passed 42 focused regressions and strict typecheck: 180-word complete prose reaches audit and one atomic commit; every review request omits `max_output_tokens`; Sol review calls use medium reasoning; prior failed exposure does not block unlimited retry; continuation plans expose only chapter count and stop chapter.
 - 2026-07-21 unbounded runtime slice: Stable Responses and Luna native/sequential adapters omit `max_output_tokens` when unset. Reservation telemetry uses the provider's documented 128,000-token hard maximum without enforcing a local spend ceiling. Shared chapter and trace contracts retain nonempty and structural validation while removing prose-size and `$3` maxima. Focused runtime tests passed 70 cases.

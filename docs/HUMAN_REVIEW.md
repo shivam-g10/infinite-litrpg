@@ -22,7 +22,7 @@ Check:
 6. Desktop and phone widths have no horizontal overflow.
 7. Markdown and Reader JSON exports contain no hidden canon.
 
-Final narrative signoff requires six contiguous ten-chapter stories. The rejected pack is absent from the active workspace. Git history preserves it. [SAMPLE_STORIES.md](SAMPLE_STORIES.md) is only a pending marker until prompt `1.6.0` replaces it.
+Final narrative signoff requires six contiguous ten-chapter stories. The rejected pack is absent from the active workspace. Git history preserves it. [SAMPLE_STORIES.md](SAMPLE_STORIES.md) contains no prose and is not review evidence. The single prompt `1.6.0` stretch stopped with six total chapters, so final narrative signoff is not ready.
 
 The long-form gate must pass first:
 

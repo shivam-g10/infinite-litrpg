@@ -90,6 +90,7 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 - [x] Remove active cost, output-token, prompt-byte, and prose-length ceilings; keep finite retries, provider limits, canon, and terminal guards.
 - [x] Define the fixed ten-chapter LitRPG pass bar from six popular reference series before regeneration.
 - [ ] Produce six authentic ten-chapter Markdown stories and pass deterministic checks plus human progression review.
+  - The one prompt `1.6.0` paid stretch stopped at Rowan chapter 6 and Elara chapter 2. It preserved Rowan chapters 1 through 5 and Elara chapter 1. No rerun will occur in this stretch.
 
 ### Phase 7: Hardening
 
@@ -216,8 +217,8 @@ The dated entries below preserve the failed capped variants as baseline evidence
 
 ## Outcomes and Retrospective
 
-- Phases 1 through 4 and Phase 6 are implemented. Prompt `1.4.12` proved the six-by-ten evidence pipeline but failed human quality review. Prompt `1.6.0` now has the fixed 33-gate ten-chapter bar, full-history orchestration, Sol framing and narration, natural-length scenes, and no application-side generation ceilings. The single provider-free validation stretch passed. Six replacement stories, one human review, current browser proof, and public demo evidence remain open.
+- Phases 1 through 4 and Phase 6 are implemented. Prompt `1.4.12` proved the six-by-ten evidence pipeline but failed human quality review. Prompt `1.6.0` has the fixed 33-gate ten-chapter bar, full-history orchestration, Sol framing and narration, natural-length scenes, and no application-side generation ceilings. The single provider-free validation stretch passed. The single paid stretch then stopped with six committed chapters: Rowan 1 through 5 and Elara 1. The fresh six-by-ten packet and its one final review remain open.
 
 ## Current Milestone
 
-Reader UX is ready for local testing. Narrative progression is not ready. The rejected prompt `1.4.12` pack remains only in Git history and cannot feed current generation or review. The one provider-free validation stretch passed. Next: authenticate one source bridge, start the app for user testing, generate all six ten-chapter stories once in batches of at most two, then perform one fixed automated and human review. No pilot or tuning loop.
+Reader UX is live at `http://localhost:3000` for local testing. Narrative progression is not ready. The rejected prompt `1.4.12` pack remains only in Git history and cannot feed current generation or review. One provider-free stretch passed. One paid stretch ran and stopped on fixed narrative gates. Do not loop or rerun. Next authority is user testing and feedback.
