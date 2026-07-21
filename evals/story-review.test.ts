@@ -3,11 +3,23 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 
-import { CHARACTER_IDS, PROMPT_VERSION } from "@infinite-litrpg/shared";
+import {
+  CHARACTER_IDS,
+  PROMPT_VERSION,
+  WorldStateSchema,
+  buildPovContext,
+  resolveTurn,
+  stageWorldDelta,
+  type ChapterRecord,
+} from "@infinite-litrpg/shared";
 import Database from "better-sqlite3";
 import { describe, expect, it } from "vitest";
 
-import { REVIEW_STORY_MODELS } from "../app/src/server/story/story-service";
+import {
+  REVIEW_STORY_MODELS,
+  initialChoices,
+  loadSeedWorld,
+} from "../app/src/server/story/story-service";
 import {
   buildStoryReviewServiceOptions,
   buildStoryReviewWorkspaceOptions,
@@ -15,6 +27,7 @@ import {
   createStoryReviewClient,
   readStoryReviewProgress,
   requireStoryReviewLedgerState,
+  runStoryReviewGenerationSchedule,
   storyReviewDatabasePath,
   storyReviewPromptCacheKey,
   storyReviewStoryId,
@@ -26,7 +39,9 @@ import {
   STORY_REVIEW_BRANCH_POLICY,
   STORY_REVIEW_SCHEMA_VERSION,
   STORY_REVIEW_SOURCE_BRIDGE_FROM_GIT_SHA,
+  STORY_REVIEW_SOURCE_BRIDGE_INTERMEDIATE_GIT_SHA,
   STORY_REVIEW_SOURCE_BRIDGE_PATHS,
+  STORY_REVIEW_SOURCE_VARIANT_CONFIG_SHA256,
   STORY_REVIEW_TOTAL_CAP_USD,
   STORY_REVIEW_VARIANT_CONFIG_SHA256,
   StoryReviewEvidenceSchema,
@@ -40,6 +55,7 @@ import {
   mergeStoryReviewHumanSections,
   parseStoryReviewWorktreePaths,
   parseStoryReviewArgs,
+  selectStoryReviewChoice,
   splitStoryReviewGitLines,
   storyReviewMarkdownMatches,
   validateStoryReviewBranch,
@@ -49,26 +65,31 @@ import {
 } from "./story-review";
 
 describe("ten-chapter story review evidence", () => {
-  it("binds the ledger precision hotfix to one exact Git child and file set", () => {
+  it("binds the unbounded quality variant to one exact Git child and file set", () => {
     const toSourceGitSha = "d".repeat(40);
     const bridge = buildStoryReviewSourceBridge({
       changedPaths: STORY_REVIEW_SOURCE_BRIDGE_PATHS,
       diffSha256: "e".repeat(64),
       fromSourceGitSha: STORY_REVIEW_SOURCE_BRIDGE_FROM_GIT_SHA,
+      intermediateSourceGitSha: STORY_REVIEW_SOURCE_BRIDGE_INTERMEDIATE_GIT_SHA,
       toSourceGitSha,
     });
     expect(bridge).toEqual({
       changedPaths: STORY_REVIEW_SOURCE_BRIDGE_PATHS,
       diffSha256: "e".repeat(64),
       fromSourceGitSha: STORY_REVIEW_SOURCE_BRIDGE_FROM_GIT_SHA,
-      reason: "conservative-subnano-cost-accounting",
+      fromVariantConfigSha256: STORY_REVIEW_SOURCE_VARIANT_CONFIG_SHA256,
+      intermediateSourceGitSha: STORY_REVIEW_SOURCE_BRIDGE_INTERMEDIATE_GIT_SHA,
+      reason: "unbounded-generation-and-fixed-quality-bar",
       toSourceGitSha,
+      toVariantConfigSha256: STORY_REVIEW_VARIANT_CONFIG_SHA256,
     });
     expect(() =>
       buildStoryReviewSourceBridge({
         changedPaths: STORY_REVIEW_SOURCE_BRIDGE_PATHS.slice(0, -1),
         diffSha256: "e".repeat(64),
         fromSourceGitSha: STORY_REVIEW_SOURCE_BRIDGE_FROM_GIT_SHA,
+        intermediateSourceGitSha: STORY_REVIEW_SOURCE_BRIDGE_INTERMEDIATE_GIT_SHA,
         toSourceGitSha,
       }),
     ).toThrow(/approved hotfix/u);
@@ -77,33 +98,78 @@ describe("ten-chapter story review evidence", () => {
         changedPaths: STORY_REVIEW_SOURCE_BRIDGE_PATHS,
         diffSha256: "e".repeat(64),
         fromSourceGitSha: "f".repeat(40),
+        intermediateSourceGitSha: STORY_REVIEW_SOURCE_BRIDGE_INTERMEDIATE_GIT_SHA,
         toSourceGitSha,
       }),
     ).toThrow();
 
     const base = fixtureEvidence();
+    const bridgedEvidence = {
+      ...base,
+      qualityVariantArchive: {
+        ...base.qualityVariantArchive,
+        toSourceGitSha: STORY_REVIEW_SOURCE_BRIDGE_FROM_GIT_SHA,
+        variantConfigSha256: STORY_REVIEW_SOURCE_VARIANT_CONFIG_SHA256,
+      },
+      sourceBridge: bridge,
+      sourceGitSha: toSourceGitSha,
+      stories: base.stories.map((story) => ({
+        ...story,
+        chapters: story.chapters.map((chapter) => ({
+          ...chapter,
+          sourceGitSha: toSourceGitSha,
+        })),
+      })),
+    };
+    expect(StoryReviewEvidenceSchema.safeParse(bridgedEvidence).success).toBe(true);
     expect(
       StoryReviewEvidenceSchema.safeParse({
-        ...base,
+        ...bridgedEvidence,
         qualityVariantArchive: {
-          ...base.qualityVariantArchive,
-          toSourceGitSha: STORY_REVIEW_SOURCE_BRIDGE_FROM_GIT_SHA,
+          ...bridgedEvidence.qualityVariantArchive,
+          variantConfigSha256: STORY_REVIEW_VARIANT_CONFIG_SHA256,
         },
-        sourceBridge: bridge,
-        sourceGitSha: toSourceGitSha,
-        stories: base.stories.map((story) => ({
-          ...story,
-          chapters: story.chapters.map((chapter) => ({
-            ...chapter,
-            sourceGitSha: toSourceGitSha,
-          })),
-        })),
       }).success,
-    ).toBe(true);
+    ).toBe(false);
+    expect(
+      StoryReviewEvidenceSchema.safeParse({
+        ...bridgedEvidence,
+        sourceBridge: undefined,
+      }).success,
+    ).toBe(false);
+    expect(
+      StoryReviewEvidenceSchema.safeParse({
+        ...bridgedEvidence,
+        sourceBridge: {
+          ...bridge,
+          fromVariantConfigSha256: STORY_REVIEW_VARIANT_CONFIG_SHA256,
+        },
+      }).success,
+    ).toBe(false);
   });
 
   it("disables invisible SDK retries so every provider attempt is reserved", () => {
     expect(createStoryReviewClient("test-key").maxRetries).toBe(0);
+  });
+
+  it("generates all six stories in one stretch with at most two concurrent", async () => {
+    const started: string[] = [];
+    const completed: string[] = [];
+    let active = 0;
+    let maximumActive = 0;
+
+    await runStoryReviewGenerationSchedule(async (characterId) => {
+      started.push(characterId);
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      await Promise.resolve();
+      active -= 1;
+      completed.push(characterId);
+    });
+
+    expect(maximumActive).toBe(2);
+    expect(started).toEqual(CHARACTER_IDS);
+    expect(completed).toEqual(CHARACTER_IDS);
   });
 
   it("binds the quality variant to exact models, quality gates, and stable POV cache keys", () => {
@@ -113,11 +179,11 @@ describe("ten-chapter story review evidence", () => {
       settle: () => undefined,
     };
 
-    expect(buildStoryReviewServiceOptions("rowan-ashborn", costHooks, 0.0848)).toEqual({
+    expect(buildStoryReviewServiceOptions("rowan-ashborn", costHooks)).toEqual({
       costHooks,
       enforceNarrativeQuality: true,
       maxBackgroundAgents: 3,
-      maxCostUsdPerChapter: 0.0848,
+      maxCostUsdPerChapter: null,
       modelConfig: REVIEW_STORY_MODELS,
       nativeMultiAgent: false,
       promptCacheKey: storyReviewPromptCacheKey("rowan-ashborn"),
@@ -125,8 +191,8 @@ describe("ten-chapter story review evidence", () => {
     });
     expect(REVIEW_STORY_MODELS).toEqual({
       audit: { model: "gpt-5.6-terra", reasoningEffort: "low" },
-      frame: { model: "gpt-5.6-sol", reasoningEffort: "low" },
-      narration: { model: "gpt-5.6-sol", reasoningEffort: "low" },
+      frame: { model: "gpt-5.6-sol", reasoningEffort: "medium" },
+      narration: { model: "gpt-5.6-sol", reasoningEffort: "medium" },
     });
     expect(storyReviewPromptCacheKey("rowan-ashborn")).toBe(
       storyReviewPromptCacheKey("rowan-ashborn"),
@@ -144,8 +210,8 @@ describe("ten-chapter story review evidence", () => {
       reserve: () => undefined,
       settle: () => undefined,
     };
-    const options = buildStoryReviewWorkspaceOptions(client, costHooks, 0.0848, rootDirectory);
-    const workspace = createStoryReviewWorkspace(client, costHooks, 0.0848, rootDirectory);
+    const options = buildStoryReviewWorkspaceOptions(client, costHooks, rootDirectory);
+    const workspace = createStoryReviewWorkspace(client, costHooks, rootDirectory);
 
     try {
       expect(options.rootDirectory).toBe(resolve(rootDirectory));
@@ -262,7 +328,7 @@ describe("ten-chapter story review evidence", () => {
     expect(chapter.chapterRecordHash).toBe(
       sha256(JSON.stringify(demo.result.canonicalNarrativeInput.chapterRecord)),
     );
-    expect(chapter.chosenAction).toBe("Travel toward Ash Road.");
+    expect(chapter.chosenAction).toBe("Confront Nyra Vale about what must happen next.");
     expect(chapter.adapterMode).toBe("sequential");
     expect(chapter.serviceTier).toBe("flex");
     expect(
@@ -587,7 +653,7 @@ describe("ten-chapter story review evidence", () => {
     ).toThrow(/renames and copies/iu);
   });
 
-  it("avoids repeating an action type when an offered alternative exists", () => {
+  it("follows director rank while preserving the final action-diversity bar", () => {
     const demo = readCurrentDemo();
     const first = structuredClone(demo.result.canonicalNarrativeInput.chapterRecord) as {
       choices: { action: unknown; description: string; milestoneId: string | null }[];
@@ -622,7 +688,7 @@ describe("ten-chapter story review evidence", () => {
     second.stateAfterVersion = 3;
 
     const third = structuredClone(second) as typeof second;
-    const variedChoice = second.choices[1]!;
+    const variedChoice = second.choices[0]!;
     third.chapter = 3;
     third.id = "chapter-003";
     third.playerAction = {
@@ -637,13 +703,29 @@ describe("ten-chapter story review evidence", () => {
     third.stateAfterVersion = 4;
 
     expect(validateStoryReviewBranch("rowan-ashborn", [first, second, third])).toHaveLength(3);
+    const repeatedDirectorActions = [
+      second.playerAction,
+      { ...second.playerAction, stateVersion: second.playerAction.stateVersion + 1 },
+    ];
+    expect(
+      selectStoryReviewChoice(
+        repeatedDirectorActions as ChapterRecord["playerAction"][],
+        second.choices as ChapterRecord["choices"],
+      ),
+    ).toEqual(second.choices[1]);
+    expect(
+      selectStoryReviewChoice(
+        repeatedDirectorActions.slice(0, 1) as ChapterRecord["playerAction"][],
+        second.choices as ChapterRecord["choices"],
+      ),
+    ).toEqual(second.choices[0]);
     second.playerAction.description = first.choices[1]!.description;
     expect(() => validateStoryReviewBranch("rowan-ashborn", [first, second])).toThrow(
-      /least-used-action-type/iu,
+      /director-ranked-with-final-feasibility-guard/iu,
     );
     first.playerAction.source = "custom";
     expect(() => validateStoryReviewBranch("rowan-ashborn", [first])).toThrow(
-      /least-used-action-type/iu,
+      /director-ranked-with-final-feasibility-guard/iu,
     );
   });
 
@@ -765,16 +847,43 @@ describe("ten-chapter story review evidence", () => {
     ).toThrow();
   });
 
-  it("keeps the paid command on one exact 60-chapter ceiling", () => {
+  it("accepts telemetry above the historical story and chapter ceilings", () => {
+    const evidence = fixtureEvidence();
+    const [first, ...rest] = evidence.stories;
+    if (!first) throw new Error("Fixture lacks its first story");
+    const [firstChapter, ...remainingChapters] = first.chapters;
+    if (!firstChapter) throw new Error("Fixture lacks its first chapter");
+    const stories = [
+      {
+        ...first,
+        chapters: [{ ...firstChapter, costUsd: 10 }, ...remainingChapters],
+      },
+      ...rest,
+    ];
+
+    expect(
+      StoryReviewEvidenceSchema.parse({
+        ...evidence,
+        committedChapterCostUsd: 10.59,
+        durableExposureUsd: 20,
+        stories,
+      }),
+    ).toMatchObject({ costLimitEnabled: false, durableExposureUsd: 20 });
+  });
+
+  it("requires explicit unbounded-cost confirmation without accepting money limit flags", () => {
     expect(parseStoryReviewArgs(["--preflight-only"])).toMatchObject({
-      chapterCapUsd: 0.0848,
-      confirmCost: false,
+      confirmUnboundedCost: false,
       preflightOnly: true,
-      totalCapUsd: STORY_REVIEW_TOTAL_CAP_USD,
     });
-    expect(() => parseStoryReviewArgs([])).toThrow(/--confirm-cost/u);
+    expect(() => parseStoryReviewArgs([])).toThrow(/--confirm-unbounded-cost/u);
+    expect(parseStoryReviewArgs(["--confirm-unbounded-cost"])).toEqual({
+      confirmUnboundedCost: true,
+      finalizeOnly: false,
+      preflightOnly: false,
+    });
     expect(parseStoryReviewArgs(["--finalize-only"])).toMatchObject({
-      confirmCost: false,
+      confirmUnboundedCost: false,
       finalizeOnly: true,
       preflightOnly: false,
     });
@@ -782,26 +891,11 @@ describe("ten-chapter story review evidence", () => {
       /cannot be combined/u,
     );
     expect(() =>
-      parseStoryReviewArgs([
-        "--confirm-cost",
-        "--chapter-cap-usd",
-        "0.0848",
-        "--total-cap-usd",
-        "5",
-      ]),
-    ).toThrow(/5\.088/u);
-    expect(() =>
-      parseStoryReviewArgs([
-        "--confirm-cost",
-        "--chapter-cap-usd",
-        "0.05",
-        "--total-cap-usd",
-        "5.088",
-      ]),
-    ).toThrow(/0\.0848/u);
+      parseStoryReviewArgs(["--confirm-unbounded-cost", "--chapter-cap-usd", "0.0848"]),
+    ).toThrow(/unknown story-review argument/iu);
   });
 
-  it("projects only the missing suffix while retaining the hard aggregate cap", () => {
+  it("reports only finite review progress and telemetry exposure", () => {
     const emptyProgress = Object.fromEntries(
       CHARACTER_IDS.map((characterId) => [characterId, 0]),
     ) as Record<(typeof CHARACTER_IDS)[number], number>;
@@ -811,40 +905,30 @@ describe("ten-chapter story review evidence", () => {
     expect(buildStoryReviewPreflight(emptyProgress, 0)).toEqual({
       byCharacter: emptyProgress,
       completedChapters: 0,
+      costLimitEnabled: false,
       durableExposureUsd: 0,
-      effectiveChapterCapUsd: 0.0848,
-      fullPlanFitsAuthorizedCap: true,
-      maximumAdditionalExposureUsd: 5.088,
-      projectedMaximumExposureUsd: 5.088,
       remainingChapters: 60,
-      requestedPlanMaximumExposureUsd: 5.088,
     });
     expect(buildStoryReviewPreflight(partialProgress, 0.2)).toEqual({
       byCharacter: partialProgress,
       completedChapters: 12,
+      costLimitEnabled: false,
       durableExposureUsd: 0.2,
-      effectiveChapterCapUsd: 0.0848,
-      fullPlanFitsAuthorizedCap: true,
-      maximumAdditionalExposureUsd: 4.0704,
-      projectedMaximumExposureUsd: 4.2704,
       remainingChapters: 48,
-      requestedPlanMaximumExposureUsd: 4.2704,
     });
-    expect(buildStoryReviewPreflight(emptyProgress, 0.86713)).toEqual({
+    expect(buildStoryReviewPreflight(emptyProgress, 50.86713)).toEqual({
       byCharacter: emptyProgress,
       completedChapters: 0,
-      durableExposureUsd: 0.86713,
-      effectiveChapterCapUsd: 0.070347833,
-      fullPlanFitsAuthorizedCap: true,
-      maximumAdditionalExposureUsd: 4.22086998,
-      projectedMaximumExposureUsd: 5.08799998,
+      costLimitEnabled: false,
+      durableExposureUsd: 50.86713,
       remainingChapters: 60,
-      requestedPlanMaximumExposureUsd: 5.95513,
     });
     expect(() =>
       buildStoryReviewPreflight({ ...emptyProgress, [CHARACTER_IDS[0]]: 11 }, 0),
     ).toThrow(/chapter count/u);
-    expect(() => buildStoryReviewPreflight(emptyProgress, 5.089)).toThrow(/exposure/u);
+    expect(() => buildStoryReviewPreflight(emptyProgress, Number.POSITIVE_INFINITY)).toThrow(
+      /exposure/u,
+    );
   });
 
   it("requires source ChapterRecord and TraceEnvelope payloads for tracked evidence", () => {
@@ -884,8 +968,8 @@ function fixtureEvidence() {
   }));
   return StoryReviewEvidenceSchema.parse({
     branchPolicy: STORY_REVIEW_BRANCH_POLICY,
-    chapterCapUsd: 0.0848,
     chaptersPerStory: STORY_REVIEW_CHAPTERS_PER_STORY,
+    costLimitEnabled: false,
     generatedAt: "2026-07-21T00:00:00.000Z",
     priorVariantExposureUsd: 0.05,
     promptVersion: PROMPT_VERSION,
@@ -904,7 +988,6 @@ function fixtureEvidence() {
     stories,
     committedChapterCostUsd: 0.6,
     durableExposureUsd: 0.65,
-    totalCapUsd: STORY_REVIEW_TOTAL_CAP_USD,
     variantConfigSha256: STORY_REVIEW_VARIANT_CONFIG_SHA256,
   });
 }
@@ -922,13 +1005,50 @@ function readCurrentDemo(): {
     readFileSync(resolve("docs/evidence/rowan-chapter-1-demo.json"), "utf8"),
   ) as ReturnType<typeof readCurrentDemo>;
   const trace = demo.result.trace as {
-    acceptedDelta: { promptVersion: string };
-    intents: { promptVersion: string }[];
+    acceptedDelta: unknown;
+    intents: readonly { actorId: string; promptVersion: string }[];
     promptVersion: string;
+    stateAfterHash: string;
+    stateBeforeHash: string;
   };
+  const chapter = demo.result.canonicalNarrativeInput.chapterRecord as ChapterRecord;
+  const seed = loadSeedWorld();
+  seed.lockedPovId = "rowan-ashborn";
+  const stateBefore = WorldStateSchema.parse(seed);
+  const firstChoice = initialChoices(stateBefore)[0];
+  if (!firstChoice) throw new Error("Current Rowan seed lacks an initial choice");
+  const playerAction = {
+    action: firstChoice.action,
+    actorId: "rowan-ashborn" as const,
+    description: firstChoice.description,
+    milestoneId: firstChoice.milestoneId,
+    source: "suggested" as const,
+    stateVersion: stateBefore.version,
+  };
+  const backgroundIntents = trace.intents
+    .filter(({ actorId }) => actorId !== "rowan-ashborn")
+    .map((intent) => ({ ...intent, promptVersion: PROMPT_VERSION }));
+  const resolved = resolveTurn(stateBefore, playerAction, backgroundIntents);
+  if (!resolved.ok)
+    throw new Error(`Current Rowan demo cannot resolve: ${JSON.stringify(resolved.issues)}`);
+  const staged = stageWorldDelta(stateBefore, resolved.data.intents, resolved.data.delta);
+  if (!staged.ok)
+    throw new Error(`Current Rowan demo cannot stage: ${JSON.stringify(staged.issues)}`);
+
   trace.promptVersion = PROMPT_VERSION;
-  trace.acceptedDelta.promptVersion = PROMPT_VERSION;
-  for (const intent of trace.intents) intent.promptVersion = PROMPT_VERSION;
+  trace.acceptedDelta = resolved.data.delta;
+  trace.intents = resolved.data.intents;
+  trace.stateBeforeHash = sha256(JSON.stringify(stateBefore));
+  trace.stateAfterHash = sha256(JSON.stringify(staged.data.state));
+  chapter.playerAction = playerAction;
+  chapter.safeContextHash = sha256(
+    JSON.stringify(buildPovContext(staged.data.state, "rowan-ashborn")),
+  );
+  const canonical = demo.result.canonicalNarrativeInput as {
+    chapterRecord: unknown;
+    stateAfter: unknown;
+  };
+  canonical.stateAfter = staged.data.state;
   return demo;
 }
 

@@ -18,11 +18,24 @@ describe("provider-free story-quality gates", () => {
     const result = evaluateStoryQuality(passingStory());
 
     expect(result.passed).toBe(true);
-    expect(result.gates).toHaveLength(26);
+    expect(result.gates).toHaveLength(33);
     expect(result.gates.every((gate) => gate.passed)).toBe(true);
     expect(result.metrics.dialogue.maxDialogueFreeStreak).toBe(0);
     expect(result.metrics.characterDevelopment.distinctCategoryCount).toBe(4);
     expect(result.metrics.litrpgSystem.chapterCountWithExplicitSystem).toBe(4);
+    expect(result.metrics.litrpgSystem.chapterCountWithConsequentialSystem).toBeGreaterThanOrEqual(
+      4,
+    );
+    expect(result.metrics.litrpgSystem.chapterCountWithSystemTradeoff).toBeGreaterThanOrEqual(2);
+    expect(result.metrics.dialogue.chapterCountWithConsequentialDialogue).toBeGreaterThanOrEqual(3);
+    expect(result.metrics.arcPhases.early.covered).toBe(true);
+    expect(result.metrics.arcPhases.middle.covered).toBe(true);
+    expect(result.metrics.arcPhases.late.covered).toBe(true);
+    expect(result.metrics.endingChange.changedDimensions).toEqual([
+      "situation",
+      "location",
+      "objective",
+    ]);
     expect(result.metrics.progression.novelMarkerChapterRatio).toBe(1);
     expect(result.grammarProxy).toEqual({
       evaluated: false,
@@ -39,11 +52,14 @@ describe("provider-free story-quality gates", () => {
       "dialogue-presence",
       "dialogue-ratio",
       "dialogue-streak",
+      "dialogue-consequences",
       "character-development-presence",
       "character-development-strength",
       "character-development-categories",
       "system-presence",
       "system-streak",
+      "system-consequences",
+      "system-tradeoffs",
       "opening-first-word",
       "opening-phrase-uniqueness",
       "opening-phrase-repeat",
@@ -62,6 +78,10 @@ describe("provider-free story-quality gates", () => {
       "novelty-average",
       "novelty-lowest",
       "novelty-reused-sentences",
+      "arc-phase-early",
+      "arc-phase-middle",
+      "arc-phase-late",
+      "ending-material-change",
     ] as const satisfies readonly StoryQualityGateId[];
 
     expect(result.passed).toBe(false);
@@ -86,7 +106,10 @@ describe("provider-free story-quality gates", () => {
     const result = evaluateStoryQuality(story);
     const failed = result.gates.filter((entry) => !entry.passed);
 
-    expect(failed.map((entry) => entry.id)).toEqual(["scene-movement-streak"]);
+    expect(failed.map((entry) => entry.id)).toEqual([
+      "scene-movement-streak",
+      "ending-material-change",
+    ]);
     expect(result.metrics.action.uniqueSignatureRatio).toBe(1);
     expect(result.metrics.progression.novelMarkerChapterRatio).toBe(1);
     expect(result.metrics.sceneMovement.maxConsecutiveChaptersInSameScene).toBe(10);
@@ -133,6 +156,144 @@ describe("provider-free story-quality gates", () => {
     expect(result.metrics.dialogue.chapterCountWithDialogue).toBe(0);
     expect(gate(result, "dialogue-presence").passed).toBe(false);
     expect(gate(result, "dialogue-streak").actual).toBe(10);
+  });
+
+  it("requires a speech exchange before dialogue can change a plan", () => {
+    const story = passingStory().map((chapter, index) => ({
+      ...chapter,
+      prose: `Wind crossed ridge ${index + 1}. “Take this route with me now, and guard the eastern turn.” Their plan changed and the sentries retreated.`,
+    }));
+
+    const result = evaluateStoryQuality(story);
+
+    expect(gate(result, "dialogue-presence").passed).toBe(true);
+    expect(result.metrics.dialogue.consequentialDialogueChapters).toEqual([]);
+    expect(gate(result, "dialogue-consequences").passed).toBe(false);
+  });
+
+  it("does not join an exchange to a consequence in another paragraph", () => {
+    const story = passingStory().map((chapter, index) => ({
+      ...chapter,
+      prose: `Clouds crossed ridge ${index + 1}. “Take this route with me now, and guard the eastern turn.” Nyra replied, “I agree, and I will hold the rear.”\n\nTheir plan changed and the sentries retreated.`,
+    }));
+
+    const result = evaluateStoryQuality(story);
+
+    expect(gate(result, "dialogue-presence").passed).toBe(true);
+    expect(result.metrics.dialogue.consequentialDialogueChapters).toEqual([]);
+    expect(gate(result, "dialogue-consequences").passed).toBe(false);
+  });
+
+  it("rejects decorative System mentions without consequences or tradeoffs", () => {
+    const story = passingStory().map((chapter) => ({
+      ...chapter,
+      prose: chapter.prose.replace(
+        /\[System:[^\]]+\]/gu,
+        "[System: Status displayed.] The System shimmered, then vanished.",
+      ),
+    }));
+
+    const result = evaluateStoryQuality(story);
+
+    expect(gate(result, "system-presence").passed).toBe(true);
+    expect(result.metrics.litrpgSystem.consequentialSystemChapters).toEqual([]);
+    expect(result.metrics.litrpgSystem.systemTradeoffChapters).toEqual([]);
+    expect(gate(result, "system-consequences").passed).toBe(false);
+    expect(gate(result, "system-tradeoffs").passed).toBe(false);
+  });
+
+  it("requires a local decision before a System outcome counts", () => {
+    const story = passingStory().map((chapter, index) => ({
+      ...chapter,
+      prose: `Embers crossed vault ${index + 1}. [System: Skill unlocked — Ember Step.] Its force revealed the sealed exit and opened the iron gate.`,
+    }));
+
+    const result = evaluateStoryQuality(story);
+
+    expect(gate(result, "system-presence").passed).toBe(true);
+    expect(result.metrics.litrpgSystem.consequentialSystemChapters).toEqual([]);
+    expect(gate(result, "system-consequences").passed).toBe(false);
+  });
+
+  it("does not assemble System causality from separate paragraphs", () => {
+    const story = passingStory().map((chapter, index) => ({
+      ...chapter,
+      prose: `Ash crossed vault ${index + 1}. [System: Skill unlocked — Ember Step.]\n\nRowan chose the risk at a cost. His action revealed the sealed exit and opened the iron gate.`,
+    }));
+
+    const result = evaluateStoryQuality(story);
+
+    expect(gate(result, "system-presence").passed).toBe(true);
+    expect(result.metrics.litrpgSystem.consequentialSystemChapters).toEqual([]);
+    expect(result.metrics.litrpgSystem.systemTradeoffChapters).toEqual([]);
+    expect(gate(result, "system-consequences").passed).toBe(false);
+    expect(gate(result, "system-tradeoffs").passed).toBe(false);
+  });
+
+  it("rejects long quoted filler that never changes a plan, relationship, or conflict", () => {
+    const story = passingStory().map((chapter) => ({
+      ...chapter,
+      prose: chapter.prose.replace(
+        /“[^”]+”/gu,
+        "“These are enough spoken words to count as dialogue, but they communicate no decision.”",
+      ),
+    }));
+
+    const result = evaluateStoryQuality(story);
+
+    expect(gate(result, "dialogue-presence").passed).toBe(true);
+    expect(result.metrics.dialogue.consequentialDialogueChapters).toEqual([]);
+    expect(gate(result, "dialogue-consequences").passed).toBe(false);
+  });
+
+  it("requires the ten-chapter ending to differ materially from its opening", () => {
+    const story = [...passingStory()];
+    story[9] = {
+      ...story[9]!,
+      actionSignature: story[0]!.actionSignature,
+      progressionMarkers: story[0]!.progressionMarkers,
+      sceneLocationId: story[0]!.sceneLocationId,
+    };
+
+    const result = evaluateStoryQuality(story);
+
+    expect(result.metrics.endingChange.changedDimensions).toEqual([]);
+    expect(gate(result, "ending-material-change")).toMatchObject({
+      actual: 0,
+      passed: false,
+      threshold: 3,
+    });
+  });
+
+  it("groups target variants by action type before measuring repetition", () => {
+    const story = passingStory().map((chapter, index) => ({
+      ...chapter,
+      actionSignature: JSON.stringify({
+        subjectId: `different-target-${index + 1}`,
+        type: "investigate",
+      }),
+    }));
+
+    const result = evaluateStoryQuality(story);
+
+    expect(result.metrics.action).toMatchObject({
+      dominantSignature: "investigate",
+      dominantSignatureCount: 10,
+      maxSameSignatureStreak: 10,
+      uniqueSignatureCount: 1,
+    });
+    expect(gate(result, "action-uniqueness").passed).toBe(false);
+    expect(gate(result, "action-dominance").passed).toBe(false);
+    expect(gate(result, "action-streak").passed).toBe(false);
+  });
+
+  it("does not apply ten-chapter arc gates to other evaluation windows", () => {
+    const result = evaluateStoryQuality(passingStory().slice(0, 9));
+
+    expect(result.gates.map((entry) => entry.id)).not.toContain("arc-phase-early");
+    expect(result.gates.map((entry) => entry.id)).not.toContain("ending-material-change");
+    expect(result.metrics.arcPhases.applicable).toBe(false);
+    expect(result.metrics.endingChange.applicable).toBe(false);
   });
 
   it("pins the immutable chapters 1-18 before-change baseline and thresholds", () => {
@@ -185,8 +346,20 @@ describe("provider-free story-quality gates", () => {
         worldId: "ashen-crown-v1",
       },
     });
-    expect(baseline.thresholds).toEqual(STORY_QUALITY_THRESHOLDS);
-    expect(STORY_QUALITY_EVAL_VERSION).toBe("1.1.0");
+    expect(baseline.thresholds).toEqual({
+      ...STORY_QUALITY_THRESHOLDS,
+      dialogue: {
+        ...STORY_QUALITY_THRESHOLDS.dialogue,
+        minDialogueChapterRatio: 0.5,
+      },
+      title: {
+        ...STORY_QUALITY_THRESHOLDS.title,
+        minUniqueTitleRatio: 0.7,
+      },
+    });
+    expect(STORY_QUALITY_THRESHOLDS.dialogue.minDialogueChapterRatio).toBe(0.6);
+    expect(STORY_QUALITY_THRESHOLDS.title.minUniqueTitleRatio).toBe(0.8);
+    expect(STORY_QUALITY_EVAL_VERSION).toBe("1.4.0");
   });
 
   it("rejects gaps and missing deterministic progression evidence", () => {
@@ -209,16 +382,16 @@ function gate(result: ReturnType<typeof evaluateStoryQuality>, id: StoryQualityG
 
 function passingStory(): readonly StoryQualityChapter[] {
   const prose = [
-    "Rain hammered copper rooftops while Rowan climbed the storm spire. He realized pride had isolated him, and he vowed to ask Nyra for help. “I feared this summit yesterday, but I will face its thunder beside you today.” [System: Quest accepted — Break the Tempest Crown.] Lightning revealed a stair hidden inside the bell tower.",
+    "Rain hammered copper rooftops while Rowan climbed the storm spire. He realized pride had isolated him, and he vowed to ask Nyra for help. “Take the eastern stair with me; I will face its thunder beside you today.” Nyra answered, “Then we climb together, and you keep nothing hidden.” Their agreed plan opened the bell tower approach. [System: Quest offered — Break the Tempest Crown.] Accepting it would expose his sealed bloodline, but Rowan chose that risk to gain the tower key. Lightning revealed a stair hidden inside the bell tower.",
     "Moss softened every footfall in the moonlit cedar grove. He trusted Nyra with the scar-map, though he regretted hiding it for so long. “Take the northern path and keep the silver owl in sight; I will guard our retreat.” Ancient roots opened around a glass spring, revealing the dryad envoy and her stolen seed.",
     "Sand hissed across the crimson dunes as scorpions circled the caravan. Rowan decided to surrender his royal seal, while Nyra confided in him about her vanished brother. “Trade the seal for the captives, then ride before the sun turns these chains into brands.” The bargain freed three scouts and exposed a buried obelisk beneath the wagons.",
-    "Parchment dust swirled through the forbidden archive when the bronze doors shut. He understood that command was not the same as loyalty to his companions. “Read the violet marginalia aloud; its cipher names whoever altered the succession record.” [System: Skill unlocked — Echo Script.] Glowing annotations identified Chancellor Merek as the forger.",
-    "Reeds bent over the flooded delta where black boats stalked the refugees. Rowan feared losing another village, yet he chose to trust Nyra with the helm. “Steer between those cypress shadows while I cut the chain across the eastern channel.” Their maneuver opened an escape route and won the ferrymaster’s alliance with the Ashbound.",
+    "Parchment dust swirled through the forbidden archive when the bronze doors shut. He understood that command was not the same as loyalty to his companions. “Read the violet marginalia aloud; its cipher names whoever altered the succession record.” [System: Skill unlocked — Echo Script.] Rowan chose to spend the new skill at once. Glowing annotations identified Chancellor Merek as the forger.",
+    "Reeds bent over the flooded delta where black boats stalked the refugees. Rowan feared losing another village, yet he chose to trust Nyra with the helm. “Steer between those cypress shadows while I cut the chain across the eastern channel.” Nyra replied, “I will take the helm, but you guard the chain.” Their revised plan opened an escape route and won the ferrymaster’s alliance with the Ashbound.",
     "Crystal dust glittered inside the abandoned mine as distant pickaxes answered themselves. He admitted the crown could not excuse his earlier cruelty, and he promised the miners restitution. “Leave the sapphires untouched; we rescue the trapped crew before claiming a single shard.” The rescue uncovered a living crystal heart and restored six workers to their families.",
-    "Silk banners concealed poisoned needles throughout the winter banquet hall. Nyra distrusted Merek, while Rowan hoped her suspicion was wrong. “Watch his left hand when the toast begins, because the assassin’s signal will come before the bells.” [System: Quest completed — Unmask the Glass Viper.] The exposed minister surrendered his coded ledger.",
+    "Silk banners concealed poisoned needles throughout the winter banquet hall. Nyra distrusted Merek, while Rowan hoped her suspicion was wrong. “Watch his left hand when the toast begins, because the assassin’s signal will come before the bells.” [System: Quest completed — Unmask the Glass Viper.] Rowan chose to claim the earned reward. Its mark exposed the minister, who surrendered his coded ledger.",
     "Blue ice groaned beneath the glacier bridge as white wolves closed from both cliffs. Rowan recognized that fear made him reckless, and he resolved to protect rather than dominate. “Lower your spear and mirror my steps; the pack follows sound across these hollow shelves.” Their quiet crossing spared the wolves and reached the observatory before dusk.",
     "Sparks leaped from the volcanic forge while the cracked anvil sang in two voices. He forgave Nyra for breaking the seal, though she grieved for the memories it destroyed. “Strike after the red pulse, and our joined rhythm will temper the blade without waking its curse.” Together they forged Dawncleaver and sealed the furnace spirit inside its willing steel.",
-    "Stars wheeled beneath the abyssal gate where gravity pulled toward an empty throne. Rowan could no longer mistake solitude for strength, and he committed to share the coming rule. “Stand with me when the void answers; no crown matters unless we both return to our people.” [System: Class evolved — Ashbound Sovereign.] The gate closed, their pact endured, and a new road opened home.",
+    "Stars wheeled beneath the abyssal gate where gravity pulled toward an empty throne. Rowan could no longer mistake solitude for strength, and he committed to share the coming rule. “Stand with me when the void answers; no crown matters unless we both return to our people.” Nyra replied, “Shared crown, shared road; I stand with you.” Their pact changed the plan for the throne. [System: Class choice offered — Ashbound Sovereign.] The class demanded he surrender sole rule, so Rowan chose the shared crown and accepted its cost. The gate closed, their pact endured, and a new road opened home.",
   ] as const;
   const titles = [
     "Thunder Above Copper",

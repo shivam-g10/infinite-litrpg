@@ -67,7 +67,7 @@ npm run test:e2e
 npm run check
 ```
 
-`npm run check` must run all non-live gates. Live API evals need separate explicit command and cost cap.
+`npm run check` must run all non-live gates. Live API evals need a separate explicit command and authorization. Record usage and estimated cost, but do not impose an application-side token, prose-size, prompt-size, or cost ceiling.
 
 ## Autonomous Build Done Bar
 

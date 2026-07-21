@@ -159,8 +159,6 @@ export interface StoryView {
   readonly continuationPlan: {
     readonly chapterCount: number;
     readonly endChapter: number;
-    readonly maxCostUsd: number;
-    readonly maxCostUsdPerChapter: number;
   } | null;
   readonly world: WorldView;
   readonly pov: PovView;
@@ -190,23 +188,16 @@ function normalizeContinuationPlan(value: unknown): StoryView["continuationPlan"
   if (!isRecord(value)) throw new Error("Story response has an invalid continuation plan.");
   const chapterCount = numberAt(value, "chapterCount");
   const endChapter = numberAt(value, "endChapter");
-  const maxCostUsd = numberAt(value, "maxCostUsd");
-  const maxCostUsdPerChapter = numberAt(value, "maxCostUsdPerChapter");
-  const expectedMaxCostUsd =
-    Math.round(chapterCount * maxCostUsdPerChapter * 1_000_000_000) / 1_000_000_000;
   if (
     !Number.isSafeInteger(chapterCount) ||
     chapterCount < 1 ||
     !Number.isSafeInteger(endChapter) ||
     endChapter < 1 ||
-    endChapter > DEMO_CHAPTER_LIMIT ||
-    maxCostUsd <= 0 ||
-    maxCostUsdPerChapter <= 0 ||
-    maxCostUsd !== expectedMaxCostUsd
+    endChapter > DEMO_CHAPTER_LIMIT
   ) {
     throw new Error("Story response has an invalid continuation plan.");
   }
-  return { chapterCount, endChapter, maxCostUsd, maxCostUsdPerChapter };
+  return { chapterCount, endChapter };
 }
 
 function recordAt(record: Record<string, unknown>, key: string): Record<string, unknown> {

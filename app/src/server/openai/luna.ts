@@ -19,7 +19,11 @@ import type {
 import type { z } from "zod";
 
 import { OpenAIRuntimeError } from "./errors";
-import { parseRuntimeServiceTier, type RuntimeReasoningEffort } from "./models";
+import {
+  GPT_5_6_MAX_OUTPUT_TOKENS,
+  parseRuntimeServiceTier,
+  type RuntimeReasoningEffort,
+} from "./models";
 import { runRetriedRequest, type RuntimeCallResult, type RuntimePolicy } from "./policy";
 import { NO_PROMPT_CACHE_OPTIONS, runStructuredResponse, type StableOpenAIClient } from "./stable";
 import { estimateMaximumRequestCostUsd } from "./usage";
@@ -27,7 +31,6 @@ import { estimateMaximumRequestCostUsd } from "./usage";
 const LUNA_MODEL = "gpt-5.6-luna" as const;
 const MULTI_AGENT_BETA = "responses_multi_agent=v1" as const;
 const MAX_BACKGROUND_AGENTS = 3;
-export const SEQUENTIAL_AGENT_MAX_OUTPUT_TOKENS = 256;
 
 export type IntentBatch = z.infer<typeof IntentBatchSchema>;
 export type NativeMultiAgentOutputItem = BetaResponseOutputItem;
@@ -47,7 +50,7 @@ export interface LunaWorldTickRequest {
   readonly agents: readonly LunaAgentInput[];
   readonly capabilities: LunaRuntimeCapabilities;
   readonly coordinatorInstructions: string;
-  readonly maxOutputTokens: number;
+  readonly maxOutputTokens?: number;
   readonly policy: RuntimePolicy;
   readonly reasoningEffort: Extract<RuntimeReasoningEffort, "none" | "low">;
   readonly resolverInput: string;
@@ -171,7 +174,7 @@ export async function runNativeLunaWorldTick(
           betas: [MULTI_AGENT_BETA],
           input: buildNativeCoordinatorInput(request.resolverInput, request.agents),
           instructions: request.coordinatorInstructions,
-          max_output_tokens: request.maxOutputTokens,
+          ...outputTokenLimitRequestOption(request.maxOutputTokens),
           model: LUNA_MODEL,
           multi_agent: {
             enabled: true,
@@ -191,7 +194,7 @@ export async function runNativeLunaWorldTick(
       new TextEncoder().encode(
         `${request.coordinatorInstructions}\n${buildNativeCoordinatorInput(request.resolverInput, request.agents)}\n${JSON.stringify(schemaFormat)}`,
       ).byteLength,
-      request.maxOutputTokens,
+      request.maxOutputTokens ?? GPT_5_6_MAX_OUTPUT_TOKENS,
       { inputBilling: "uncached", serviceTier },
     ),
     policy: request.policy,
@@ -218,7 +221,9 @@ export async function runSequentialLunaWorldTick(
       agentId: agent.actorId,
       input: request.resolverInput,
       instructions: agent.instructions,
-      maxOutputTokens: Math.min(request.maxOutputTokens, SEQUENTIAL_AGENT_MAX_OUTPUT_TOKENS),
+      ...(request.maxOutputTokens === undefined
+        ? {}
+        : { maxOutputTokens: request.maxOutputTokens }),
       model: LUNA_MODEL,
       policy: request.policy,
       reasoningEffort: request.reasoningEffort,
@@ -441,7 +446,10 @@ function validateLunaRequest(request: LunaWorldTickRequest): void {
   if (request.agents.length < 1 || request.agents.length > MAX_BACKGROUND_AGENTS) {
     throw new OpenAIRuntimeError("INVALID_POLICY", "Luna world tick requires one to three agents");
   }
-  if (!Number.isInteger(request.maxOutputTokens) || request.maxOutputTokens < 1) {
+  if (
+    request.maxOutputTokens !== undefined &&
+    (!Number.isSafeInteger(request.maxOutputTokens) || request.maxOutputTokens < 1)
+  ) {
     throw new OpenAIRuntimeError("INVALID_POLICY", "maxOutputTokens must be a positive integer");
   }
   if (!WorldVersionSchema.safeParse(request.stateVersion).success) {
@@ -457,6 +465,12 @@ function validateLunaRequest(request: LunaWorldTickRequest): void {
     }
     actorIds.add(agent.actorId);
   }
+}
+
+function outputTokenLimitRequestOption(
+  maxOutputTokens: number | undefined,
+): { readonly max_output_tokens: number } | Record<string, never> {
+  return maxOutputTokens === undefined ? {} : { max_output_tokens: maxOutputTokens };
 }
 
 function toCallSummary(agentId: string | null, call: RuntimeCallResult<unknown>): LunaCallSummary {

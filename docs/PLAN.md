@@ -45,7 +45,7 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 - [x] Implement Responses structured-output adapters.
 - [x] Implement Luna native Multi-agent world tick.
 - [x] Implement sequential Luna fallback.
-- [x] Implement bounded refusal, retry, timeout, and preflight cost handling.
+- [x] Implement refusal, finite retry, timeout, and usage telemetry without active cost or output ceilings.
 - [x] Persist successful calls and every failed or successful runtime attempt without secrets.
 - [x] Keep product requests explicitly Standard and bind explicit Flex into release-eval requests, pricing, reservations, traces, and recovery evidence.
 
@@ -72,10 +72,10 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 - [x] Export POV-safe Reader state, Markdown, and explicit full Developer JSON.
 - [x] Replace routine chapter prompts with deterministic continuation to meaningful decisions.
 - [x] Stop the demo run after chapter 100 without changing the chapter-350 engine.
-- [x] Keep committed prose visible with truthful progress, stop, retry, and cost-bound copy.
+- [x] Keep committed prose visible with truthful background progress, stop, and retry copy.
 - [x] Review every committed chapter in Reader with Previous, Next, and chapter picker controls without a model call.
 - [x] Label local saved evidence separately from live OpenAI generation and show key readiness without exposing the key.
-- [x] Make one live chapter the primary action and keep multi-chapter continuation behind exact-cost progressive disclosure.
+- [x] Make one live chapter the primary action and keep multi-chapter continuation behind exact-target progressive disclosure.
 
 ### Phase 6B: Human Review Recovery
 
@@ -87,11 +87,13 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 - [x] Keep the Reader pinned while several chapters generate in the background; show simple progress without cost noise.
 - [x] Let the reader reroll the latest chapter prose without mutating its accepted world delta.
 - [x] Let the reader preserve, reject, reopen, and restart story candidates through a simple story library.
+- [x] Remove active cost, output-token, prompt-byte, and prose-length ceilings; keep finite retries, provider limits, canon, and terminal guards.
+- [x] Define the fixed ten-chapter LitRPG pass bar from six popular reference series before regeneration.
 - [ ] Produce six authentic ten-chapter Markdown stories and pass deterministic checks plus human progression review.
 
 ### Phase 7: Hardening
 
-- [x] Full check command green.
+- [ ] Current full check command green after the fresh six-by-ten artifact and human signoff exist. Its provider-free constituent gates passed in one stretch.
 - [x] Browser smoke path green.
 - [ ] Current prompt native Multi-agent live smoke path green. Sequential Rowan proof is current; native proof predates prompt `1.4.11`.
 - [x] Strict offline review-packet generator rejects partial, false-gate, and mixed-tier reports.
@@ -105,7 +107,7 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 - User-owned gates begin after repository is submission-ready.
 - [x] README setup and architecture complete.
 - [x] Screenshots and architecture diagram ready.
-- [x] Complete the no-cost real-browser Reader, God Mode, cost-confirmation, and cancel rehearsal in 87.4 seconds.
+- [x] Complete the no-cost real-browser Reader, Developer-details, generation-confirmation, and stop rehearsal in 87.4 seconds.
 - [ ] Final real-click demo rehearsal completes below three minutes. Script and no-cost layout rehearsal path are ready.
 - [ ] User approves six ten-chapter story reviews and the strict POV packets.
 - [ ] User authorizes public repository push.
@@ -114,6 +116,8 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 - [ ] User authorizes final challenge submission.
 
 ## Surprises and Discoveries
+
+The dated entries below preserve the failed capped variants as baseline evidence. ADR-023 supersedes their token, byte, prose-length, continuation, per-chapter cost, and global-cost ceilings for the current prompt `1.6.0` product and six-story review paths.
 
 - Next.js setup intentionally deferred during planning scaffold.
 - Native Multi-agent beta access is confirmed for the configured key.
@@ -192,27 +196,28 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 - `WorldState.chapter` means last committed chapter. Generation from 349 may create terminal chapter 350. Any request when current chapter is 350 is rejected before model access.
 - Validated narration uses buffer-audit-replay streaming. This trades first-token latency for zero exposure of rejected prose.
 - ADR-008 routes title and option ranking to Luna while application code owns the final chapter frame. ADR-012 moves narration to Luna; Terra remains the custom-action translator. The full live eval still allows all three relevant background agents.
-- ADR-015 permits one bounded Luna continuation only for an otherwise-valid 750-to-899-word draft. The request still targets 900 to 925 words; deterministic acceptance may reach 949 before the unchanged absolute 900-to-1,300-word gate and full audit.
+- ADR-015 documented the old bounded continuation. ADR-023 supersedes it: current prompt `1.6.0` requests one complete natural-length scene with no local prose or output-token ceiling.
 - ADR-016 rejects explicit resource snapshots, location claims, route orientation, and POV-owned fact attribution that contradict staged canon. Human review remains authoritative outside those narrow deterministic checks.
 - ADR-017 keeps paid evidence append-only. Superseded turns must come from an authenticated source boundary; an uncommitted current suffix uses separate checkpoint-bound settled-failure provenance. Final report commitment gates ledger release, and authenticated crash retry is idempotent.
-- ADR-018 permits canon-preserving prose replacement only after exact source authentication and deterministic re-resolution. It records actual reasoning configuration, keeps replacement evidence crash-safe, and rejects the full target plan before client creation if its hard ceilings exceed the global ledger cap.
+- ADR-018 introduced canon-preserving prose replacement after exact source authentication and deterministic re-resolution. ADR-023 retains the provenance and crash-safety rules but removes its request and global cost ceilings.
 - ADR-019 permits routine continuation only when shared milestone policy says no player decision is due. It uses the persisted application-owned recommendation, keeps one atomic request per chapter, and treats chapter 100 as a UI horizon rather than terminal canon.
-- ADR-020 permits only the exact `$3` to `$3.021` live-ledger extension for the two-target human-review correction. Read-only preflight authenticates report, baseline, exposure, target ceiling, and lock state before dotenv or client creation. It does not include native smoke spend.
+- ADR-020 records the completed historical `$3` to `$3.021` correction authorization. ADR-023 supersedes that ceiling for current generation while preserving the ledger as telemetry and provenance.
 - ADR-021 keeps ten-chapter progression evidence outside the version 9 two-chapter release matrix. Six fresh contiguous runs use one isolated ledger and publish only passed runtime commits.
 - ADR-022 rejects the repetitive first-choice branch, names movement direction in prompt `1.4.12`, and requires a hash-bound provider-free migration that carries all old exposure before six replacement runs.
-- ADR-010 permits official input-token counting to narrow a byte reservation. Failed counting keeps the byte bound. Actual overrun aborts before commit with exact accounting.
+- ADR-010 records the old byte-reservation design. ADR-023 removes that blocker from current generation; measured usage remains trace telemetry.
 - Prompt `1.4.9` distinguishes reader access to selected-POV private canon from an in-world knowledge transfer. It does not auto-approve empty leak lists or weaken forbidden fact and remote-effect checks.
-- ADR-011 replaces pair-only live recovery and static suite rejection with authenticated prefix recovery plus durable request-level global reservations. Static projection stays visible but cannot reclaim or spend exposure.
+- ADR-011 introduced authenticated prefix recovery and durable accounting. ADR-023 keeps recovery and accounting but disables spend-limit enforcement.
 - Version 7 authenticates each retained result's source cap. Every new result cap must equal the current run cap; mixed caps cannot be forged to pass the cost gate.
 - ADR-013 makes prompt-cache behavior explicit, grounds audit failures in retained prose, and moves new live evidence to strict report version 8. Canon, three background agents, deterministic validation, full independent audit, and atomic commit remain unchanged.
 - ADR-014 keeps product traffic explicitly Standard and requires Flex for version 9 full release reports. Requested and returned tier, pricing version, and projection must agree; missing, mixed, auto, mismatched, or retained poisoned evidence fails closed.
 - Responses rejects Zod fixed tuples because their generated JSON Schema uses an unsupported array-valued `items`. Runtime candidates therefore use compact strict objects and homogeneous argument arrays, followed by exact deterministic decoding and canonical schema validation.
 - Version 8 creates one turn identity before model access; binds accepted results, candidates, raw narration, recovery, and audit responses, retry groups for intent and narrative calls, committed chapter requests, traces, and stream chunks to it; deterministically restages full before and after state; preserves raw malformed audit text; carries authenticated legacy gaps across resumes; and recomputes every release gate from evidence.
+- ADR-023 defines the current fixed quality bar, removes all application-side generation ceilings, routes frame and narration to Sol with medium reasoning, and keeps Terra as the independent audit. Provider-native limits, finite retries, timeouts, canon, POV, and chapter 350 still apply.
 
 ## Outcomes and Retrospective
 
-- Phases 1 through 4 and Phase 6 are implemented. Offline contracts, deterministic transitions, knowledge boundaries, atomic storage, both OpenAI adapters, the simplified reader, chapter-100 demo path, README, architecture, and current screenshots are green. Prompt `1.4.12` proved the six-by-ten evidence pipeline but failed human quality review. Phase 5 now requires a test-first quality variant and six replacement stories that pass. The corrected strict release report, current native live proof, and public demo evidence remain open.
+- Phases 1 through 4 and Phase 6 are implemented. Prompt `1.4.12` proved the six-by-ten evidence pipeline but failed human quality review. Prompt `1.6.0` now has the fixed 33-gate ten-chapter bar, full-history orchestration, Sol framing and narration, natural-length scenes, and no application-side generation ceilings. The single provider-free validation stretch passed. Six replacement stories, one human review, current browser proof, and public demo evidence remain open.
 
 ## Current Milestone
 
-Reader UX is ready for local testing. Narrative progression is not ready. The full prompt `1.4.12` six-by-ten artifact exists and passes provenance, but all six human verdicts are `revise`. Next: preserve this rejected baseline, add exact regressions, implement and review the next variant, prove its archive migration without provider access, then regenerate within the existing `$5.088` authorization. Stop only after the replacement pack passes human review and the demo path is reverified.
+Reader UX is ready for local testing. Narrative progression is not ready. The rejected prompt `1.4.12` pack remains only in Git history and cannot feed current generation or review. The one provider-free validation stretch passed. Next: authenticate one source bridge, start the app for user testing, generate all six ten-chapter stories once in batches of at most two, then perform one fixed automated and human review. No pilot or tuning loop.

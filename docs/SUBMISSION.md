@@ -41,10 +41,12 @@ Everything runs locally with SQLite and the user's OpenAI API key. There is no a
 
 ## GPT-5.6 Use
 
-| Role                                                                           | Model         |
-| ------------------------------------------------------------------------------ | ------------- |
-| Custom-action translation                                                      | GPT-5.6 Terra |
-| Background intents, option ranking, narration, bounded continuation, and audit | GPT-5.6 Luna  |
+| Role                                       | Model         |
+| ------------------------------------------ | ------------- |
+| Custom-action translation                  | GPT-5.6 Terra |
+| Background intents                         | GPT-5.6 Luna  |
+| Story frame and narration                  | GPT-5.6 Sol   |
+| Independent narrative and continuity audit | GPT-5.6 Terra |
 
 Only the OpenAI Responses API is used. Product runtime requests Standard processing. Release evaluation uses explicitly isolated Flex processing with returned-tier verification and tier-aware accounting.
 
@@ -82,7 +84,7 @@ No sample data import is needed. The Ashen Crown world seeds automatically into 
 - [Architecture](ARCHITECTURE.md)
 - [Current verified status](STATUS.md)
 - [Human review guide](HUMAN_REVIEW.md)
-- [Current one-chapter POV excerpts; ten-chapter replacement pending](SAMPLE_STORIES.md)
+- [Fresh six-story review marker; six ten-chapter stories pending](SAMPLE_STORIES.md)
 - [Eval contract](../evals/README.md)
 - [Narrative rubric](../evals/RUBRIC.md)
 - [Desktop reader](screenshots/reader-desktop.png)

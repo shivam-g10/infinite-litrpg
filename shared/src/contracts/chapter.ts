@@ -25,22 +25,14 @@ export const ChapterDraftCandidateSchema = z
   .object({
     choices: z.array(ChoiceSchema).max(2),
     contractVersion: z.literal(CONTRACT_VERSION),
-    prose: z.string().trim().min(1).max(20_000),
+    prose: z.string().trim().min(1),
     terminal: z.boolean(),
     title: ShortTextSchema,
   })
   .strict();
 
 export const ChapterDraftSchema = ChapterDraftCandidateSchema.superRefine(
-  ({ choices, prose, terminal }, context) => {
-    const wordCount = prose.trim().split(/\s+/u).filter(Boolean).length;
-    if (wordCount < 900 || wordCount > 1_300) {
-      context.addIssue({
-        code: "custom",
-        message: `Chapter prose must contain 900 to 1300 words; received ${wordCount}`,
-        path: ["prose"],
-      });
-    }
+  ({ choices, terminal }, context) => {
     if (terminal ? choices.length !== 0 : choices.length !== 2) {
       context.addIssue({
         code: "custom",
@@ -208,13 +200,13 @@ export const ChapterRecordSchema = z
   .object({
     chapter: ChapterNumberSchema,
     choices: z.array(ChoiceSchema).max(2),
-    estimatedCostUsd: z.number().min(0).max(3),
+    estimatedCostUsd: z.number().min(0),
     id: z.string().regex(/^chapter-[0-9]{3}$/u),
     latencyMs: z.number().int().min(0),
     narrativeAudit: NarrativeAuditSchema,
     playerAction: PlayerActionSchema,
     povCharacterId: CharacterIdSchema,
-    prose: z.string().trim().min(1).max(20_000),
+    prose: z.string().trim().min(1),
     proseHash: HashSchema,
     requestId: z.string().uuid().optional(),
     safeContextHash: HashSchema,
@@ -226,15 +218,7 @@ export const ChapterRecordSchema = z
     usage: UsageSchema,
   })
   .strict()
-  .superRefine(({ choices, narrativeAudit, prose, terminal }, context) => {
-    const wordCount = prose.trim().split(/\s+/u).filter(Boolean).length;
-    if (wordCount < 900 || wordCount > 1_300) {
-      context.addIssue({
-        code: "custom",
-        message: `Committed prose must contain 900 to 1300 words; received ${wordCount}`,
-        path: ["prose"],
-      });
-    }
+  .superRefine(({ choices, narrativeAudit, terminal }, context) => {
     if (terminal ? choices.length !== 0 : choices.length !== 2) {
       context.addIssue({
         code: "custom",

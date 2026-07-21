@@ -24,9 +24,11 @@ import { FLEX_PRICING_VERSION, PRICING_VERSION } from "../openai/usage";
 import { StoryStore } from "../storage/story-store";
 import {
   canonicalizeNarrativeAuditOutput,
+  diversifyQualityOptionIds,
+  initialChoices,
+  loadSeedWorld,
   REVIEW_STORY_MODELS,
   type NarrativeCandidateEvidence,
-  type NarrativeResponseEvidence,
   type NarrativeTurnIdentity,
   StoryService,
   StoryServiceError,
@@ -47,6 +49,61 @@ describe("StoryService", () => {
     expect(view.continuationPlan).toBeNull();
     expect(view.world).toMatchObject({ chapter: 0, terminal: false, version: 1 });
     store.close();
+  });
+
+  it("opens on a present-character conflict or the shortest route toward one", () => {
+    const expectedFirstActions = {
+      "elara-voss": {
+        approach: "Confront Lucan Aurelis about the immediate threat.",
+        targetId: "lucan-aurelis",
+        type: "interact",
+      },
+      "lucan-aurelis": {
+        approach: "Confront Elara Voss about the immediate threat.",
+        targetId: "elara-voss",
+        type: "interact",
+      },
+      "maelin-rook": { destinationId: "capital", type: "move" },
+      "nyra-vale": {
+        approach: "Confront Rowan Ashborn about the immediate threat.",
+        targetId: "rowan-ashborn",
+        type: "interact",
+      },
+      "rowan-ashborn": {
+        approach: "Confront Nyra Vale about the immediate threat.",
+        targetId: "nyra-vale",
+        type: "interact",
+      },
+      "varek-thorn": { destinationId: "ash-road", type: "move" },
+    } as const;
+
+    for (const characterId of CHARACTER_IDS) {
+      const state = loadSeedWorld();
+      state.lockedPovId = characterId;
+      const choices = initialChoices(state);
+
+      expect(choices).toHaveLength(2);
+      expect(choices[0]?.action).toEqual(expectedFirstActions[characterId]);
+    }
+  });
+
+  it("keeps the director first choice and supplies a distinct second action type", () => {
+    const state = loadSeedWorld();
+    state.lockedPovId = "rowan-ashborn";
+    const options = buildChapterChoiceOptions(state);
+    const moveIds = options
+      .filter(({ action }) => action.type === "move")
+      .map(({ id }) => id)
+      .slice(0, 2);
+
+    const diversified = diversifyQualityOptionIds(state, moveIds, [
+      { subjectId: "cinder-village", type: "investigate" },
+    ]);
+    const byId = new Map(options.map((option) => [option.id, option] as const));
+
+    expect(diversified[0]).toBe(moveIds[0]);
+    expect(byId.get(diversified[1] ?? "")?.action.type).not.toBe("move");
+    expect(byId.get(diversified[1] ?? "")?.action.type).not.toBe("investigate");
   });
 
   it("never changes the selected viewpoint", () => {
@@ -78,8 +135,10 @@ describe("StoryService", () => {
     const audits = [firstProse, secondProse].map((prose) => approvedAudit(prose));
     const create = vi
       .fn()
+      .mockResolvedValueOnce(parsedResponse(waitIntent(), "resp_review_background_1"))
       .mockResolvedValueOnce(parsedResponse(frames[0], "resp_review_frame_1"))
       .mockResolvedValueOnce(parsedResponse(audits[0], "resp_review_audit_1"))
+      .mockResolvedValueOnce(parsedResponse(waitIntent(), "resp_review_background_2"))
       .mockResolvedValueOnce(parsedResponse(frames[1], "resp_review_frame_2"))
       .mockResolvedValueOnce(parsedResponse(audits[1], "resp_review_audit_2"));
     const stream = vi
@@ -92,6 +151,7 @@ describe("StoryService", () => {
       {
         ...options(),
         enforceNarrativeQuality: true,
+        maxBackgroundAgents: 1,
         modelConfig: REVIEW_STORY_MODELS,
         promptCacheKey: "story:test-review",
       },
@@ -110,8 +170,10 @@ describe("StoryService", () => {
     }
 
     expect(create.mock.calls.map(([body]) => (body as { model: string }).model)).toEqual([
+      "gpt-5.6-luna",
       "gpt-5.6-sol",
       "gpt-5.6-terra",
+      "gpt-5.6-luna",
       "gpt-5.6-sol",
       "gpt-5.6-terra",
     ]);
@@ -119,30 +181,62 @@ describe("StoryService", () => {
       "gpt-5.6-sol",
       "gpt-5.6-sol",
     ]);
+    for (const [body] of [...create.mock.calls, ...stream.mock.calls]) {
+      expect(body).not.toHaveProperty("max_output_tokens");
+    }
     expect(
       stream.mock.calls.map(
         ([body]) => (body as { reasoning: { effort: string } }).reasoning.effort,
       ),
-    ).toEqual(["low", "low"]);
-    expect(create.mock.calls[2]?.[0]).toMatchObject({
+    ).toEqual(["medium", "medium"]);
+    expect(create.mock.calls[4]?.[0]).toMatchObject({
       prompt_cache_key: "story:test-review",
       prompt_cache_options: { mode: "implicit", ttl: "30m" },
     });
+    const firstFrameBody = create.mock.calls[1]?.[0] as {
+      input: string;
+      instructions: string;
+    };
+    const firstFrameInput = JSON.parse(firstFrameBody.input) as Record<string, unknown>;
+    expect(firstFrameBody.instructions).toContain("tenChapterQualityPlan");
+    expect(firstFrameBody.instructions).toContain("prefer a legal interact option");
+    expect(firstFrameBody.instructions).toContain("Never force an unsupported action");
+    expect(firstFrameInput).toHaveProperty("optionActionsById");
+    expect(firstFrameInput).toHaveProperty(
+      "tenChapterQualityPlan.targets.systemTradeoffChapters",
+      2,
+    );
     const secondNarrationInput = JSON.parse(
       (stream.mock.calls[1]?.[0] as { input: string }).input,
     ) as { chapterBrief: { storyHistory: Array<{ prose: string; title: string }> } };
     for (const input of [
-      JSON.parse((create.mock.calls[2]?.[0] as { input: string }).input) as {
+      JSON.parse((create.mock.calls[4]?.[0] as { input: string }).input) as {
         storyHistory: Array<{ prose: string; title: string }>;
       },
       secondNarrationInput.chapterBrief,
-      JSON.parse((create.mock.calls[3]?.[0] as { input: string }).input) as {
+      JSON.parse((create.mock.calls[5]?.[0] as { input: string }).input) as {
         storyHistory: Array<{ prose: string; title: string }>;
       },
     ]) {
       expect(input.storyHistory[0]?.prose).toBe(firstProse);
       expect(input.storyHistory[0]?.title).toBe("Rain Over Cinder");
     }
+    const secondBackgroundInstructions = (create.mock.calls[3]?.[0] as { instructions: string })
+      .instructions;
+    const secondBackgroundPayload = JSON.parse(
+      secondBackgroundInstructions.split("\n").at(-1) ?? "null",
+    ) as {
+      povSafeChapterHistory: Array<{
+        chapter: number;
+        ownIntent: { goal: string; result: string } | null;
+      }>;
+    };
+    expect(secondBackgroundPayload.povSafeChapterHistory).toHaveLength(1);
+    expect(secondBackgroundPayload.povSafeChapterHistory[0]).toMatchObject({
+      chapter: 1,
+      ownIntent: { goal: "Survive the chapter.", result: "accepted" },
+    });
+    expect(secondBackgroundInstructions).not.toContain(firstProse);
     expect(view.chapter.title).toBe("Smoke Beyond the Gate");
     store.close();
   });
@@ -201,7 +295,6 @@ describe("StoryService", () => {
       {
         ...options(),
         auditReasoningEffort: "low",
-        canonicalAuditMaxOutputTokens: 64,
         canonicalNarrationDirective: "Keep the exact canonical route.",
       },
     );
@@ -225,11 +318,10 @@ describe("StoryService", () => {
     expect(store.loadWorldState("ashen-crown-v1")).toEqual(beforeSnapshot);
     expect(create).toHaveBeenCalledTimes(1);
     expect(stream).toHaveBeenCalledTimes(1);
-    expect(create.mock.calls[0]?.[0]).toMatchObject({
-      max_output_tokens: 64,
-      reasoning: { effort: "low" },
-    });
+    expect(create.mock.calls[0]?.[0]).toMatchObject({ reasoning: { effort: "low" } });
+    expect(create.mock.calls[0]?.[0]).not.toHaveProperty("max_output_tokens");
     expect(stream.mock.calls[0]?.[0]).toMatchObject({ reasoning: { effort: "none" } });
+    expect(stream.mock.calls[0]?.[0]).not.toHaveProperty("max_output_tokens");
     expect(JSON.parse(String(stream.mock.calls[0]?.[0].input))).toMatchObject({
       retryDirective: "Keep the exact canonical route.",
     });
@@ -298,7 +390,7 @@ describe("StoryService", () => {
     if (!worldBefore || !chapterBefore) throw new Error("Original chapter missing");
 
     const replacementProse = exactWordCount(
-      'Rain sharpened the empty road. "I will carry the danger," Rowan said. "Then I will remember that promise," the System answered. [System: Experience gained] Rowan chose restraint over the old hunger for command.',
+      'Rain sharpened the empty road. "The road is narrowing, and the ash is moving behind us," Nyra said. "Then I choose the ridge, but you decide when the danger outweighs the System reward," Rowan answered. [System: Experience gained] Rowan chose restraint over the old hunger for command.',
       900,
       "ember",
     );
@@ -421,13 +513,14 @@ describe("StoryService", () => {
       responseTier: "flex" as const,
     },
   ])(
-    "audits prose before one atomic chapter commit on $requestedTier",
+    "audits natural-length prose before one atomic chapter commit on $requestedTier",
     async ({ expectedPricingVersion, requestedTier, responseTier }) => {
       const store = new StoryStore();
-      const oversizedProse = Array.from({ length: 1_301 }, (_, index) => `excess${index}`).join(
-        " ",
+      const prose = exactWordCount(
+        'Rain hissed against Rowan\'s mail. "The bridge will not hold," Nyra said. Rowan studied the System warning, chose the eastern trail, and accepted that the detour would cost them daylight. The ash shifted behind them as they left.',
+        180,
+        "ember",
       );
-      const prose = Array.from({ length: 900 }, (_, index) => `ember${index}`).join(" ");
       const proseHash = createHash("sha256").update(prose).digest("hex");
       const frame = {
         choices: [
@@ -472,9 +565,6 @@ describe("StoryService", () => {
         .mockResolvedValueOnce(parsedResponse(audit, "resp_audit", usage(), responseTier));
       const stream = vi
         .fn()
-        .mockReturnValueOnce(
-          fakeStream(oversizedProse, "resp_narration_rejected", usage(), responseTier),
-        )
         .mockReturnValueOnce(fakeStream(prose, "resp_narration_approved", usage(), responseTier));
       const client = {
         responses: { create: parse, stream },
@@ -523,37 +613,28 @@ describe("StoryService", () => {
       expect(() => service.getReaderChapter(2)).toThrowError(
         expect.objectContaining({ status: 404 }),
       );
-      expect(result.chapter.prose.split(/\s+/u)).toHaveLength(900);
+      expect(result.chapter.prose.split(/\s+/u)).toHaveLength(180);
       expect(result.godMode).toMatchObject({ gateResult: "passed" });
       expect(result.godMode).toMatchObject({ schemaVersion: RUNTIME_SCHEMA_VERSION });
       expect(store.loadChapters("ashen-crown-v1")).toHaveLength(1);
       expect(replayed.join("")).toBe(prose);
       expect(store.loadFailedTurnTraces("ashen-crown-v1")).toEqual([]);
       expect(parse).toHaveBeenCalledTimes(2);
-      expect(stream).toHaveBeenCalledTimes(2);
-      expect(draftRejections).toHaveLength(1);
-      expect(draftRejections[0]?.some(({ code }) => code === "INVALID_SCHEMA")).toBe(true);
-      expect(narrativeCandidates).toHaveLength(2);
+      expect(stream).toHaveBeenCalledTimes(1);
+      expect(draftRejections).toEqual([]);
+      expect(narrativeCandidates).toHaveLength(1);
       expect(narrativeCandidates[0]).toMatchObject({
-        accepted: false,
-        deterministicIssues: [expect.objectContaining({ code: "INVALID_SCHEMA" })],
-        narratorAttempt: 0,
-        narratorResponseId: "resp_narration_rejected",
-        rawProse: oversizedProse,
-        rawWordCount: 1_301,
-        rejectionStage: "deterministic",
-      });
-      expect(narrativeCandidates[1]).toMatchObject({
         accepted: true,
         auditResponseId: "resp_audit",
         mergedProse: prose,
-        narratorAttempt: 1,
+        mergedWordCount: 180,
+        narratorAttempt: 0,
         narratorResponseId: "resp_narration_approved",
+        rawProse: prose,
+        rawWordCount: 180,
+        recovery: null,
         rejectionStage: "accepted",
       });
-      expect(runtimeAttempts).toContainEqual(
-        expect.objectContaining({ errorCode: "NARRATIVE_AUDIT_REJECTED", phase: "narration" }),
-      );
       const committedChapter = store.loadChapter("ashen-crown-v1", 1);
       if (!committedChapter) throw new Error("Committed chapter missing");
       const committedTrace = store.loadTrace(committedChapter.traceId);
@@ -589,19 +670,18 @@ describe("StoryService", () => {
       );
       expect(stream.mock.calls.map(([body]) => (body as { model?: string }).model)).toEqual([
         "gpt-5.6-luna",
-        "gpt-5.6-luna",
       ]);
       expect(
         parse.mock.calls.map(([body]) => (body as { service_tier?: string }).service_tier),
       ).toEqual([responseTier, responseTier]);
       expect(
         stream.mock.calls.map(([body]) => (body as { service_tier?: string }).service_tier),
-      ).toEqual([responseTier, responseTier]);
-      expect(calls[1]?.retries).toBe(1);
+      ).toEqual([responseTier]);
+      expect(calls[1]?.retries).toBe(0);
       const duplicate = await service.takeTurn(command);
       expect(duplicate.world).toMatchObject({ chapter: 1, version: 2 });
       expect(parse).toHaveBeenCalledTimes(2);
-      expect(stream).toHaveBeenCalledTimes(2);
+      expect(stream).toHaveBeenCalledTimes(1);
       await expect(
         service.takeTurn({
           ...command,
@@ -796,12 +876,7 @@ describe("StoryService", () => {
     const recommended = first.chapter.choices.find(({ id }) => id === "choice-1");
     if (!recommended) throw new Error("Recommended choice missing");
 
-    expect(first.continuationPlan).toEqual({
-      chapterCount: 46,
-      endChapter: 47,
-      maxCostUsd: 46,
-      maxCostUsdPerChapter: 1,
-    });
+    expect(first.continuationPlan).toEqual({ chapterCount: 46, endChapter: 47 });
     await expect(
       service.takeTurn({
         approvedThroughChapter: 100,
@@ -933,10 +1008,10 @@ describe("StoryService", () => {
       label: "uncommitted mana spend",
     },
     {
-      characterId: "elara-voss" as const,
+      characterId: "maelin-rook" as const,
       defect:
-        "She crossed beneath them into the shadow of Aurelis Capital. Stone replaced packed earth.",
-      expectedIssue: "arrival at Aurelis Capital",
+        "He crossed beneath them into the shadow of Capital Road. Packed earth replaced stone.",
+      expectedIssue: "arrival at Capital Road",
       label: "movement beyond the committed destination",
     },
     {
@@ -1130,309 +1205,6 @@ describe("StoryService", () => {
     const acceptedAuditInput = (parse.mock.calls[2]?.[0] as { input?: string } | undefined)?.input;
     expect(rejectedAuditInput).toBe(acceptedAuditInput);
     expect(rejectedAuditInput).toContain(auditedProse);
-    store.close();
-  });
-
-  it.each([
-    {
-      continuationWordCount: 132,
-      expectedMaximumAdditionalWords: 181,
-      name: "the live 768-word lower eligibility path",
-      rawWordCount: 768,
-    },
-    {
-      continuationWordCount: 88,
-      expectedMaximumAdditionalWords: 137,
-      name: "the existing 812 plus 88 word three-agent path",
-      rawWordCount: 812,
-    },
-    {
-      continuationWordCount: 91,
-      expectedMaximumAdditionalWords: 99,
-      name: "the live 850 plus 91 word defect",
-      rawWordCount: 850,
-    },
-  ])("repairs $name under the release cap", async (testCase) => {
-    const store = new StoryStore();
-    const rawProse = Array.from({ length: testCase.rawWordCount }, () => "ember").join(" ");
-    const continuation = Array.from(
-      { length: testCase.continuationWordCount },
-      () => "cinder",
-    ).join(" ");
-    const prose = `${rawProse} ${continuation}`;
-    const mergedWordCount = testCase.rawWordCount + testCase.continuationWordCount;
-    const proseHash = createHash("sha256").update(prose).digest("hex");
-    const actorIds = ["lucan-aurelis", "maelin-rook", "nyra-vale"] as const;
-    const meteredUsage = usage(1_000, 200);
-    const frame = {
-      choices: [
-        {
-          action: { type: "wait" },
-          description: "Wait and study the road before committing.",
-          id: "choice-1",
-          milestoneId: null,
-        },
-        {
-          action: { subjectId: "capital-road", type: "investigate" },
-          description: "Inspect Capital Road for immediate danger.",
-          id: "choice-2",
-          milestoneId: null,
-        },
-      ],
-      terminal: false,
-      title: "The Capital Road",
-    } as const;
-    const unsafeFrame = {
-      ...frame,
-      title: "Malachar contained the Void beneath his throne.",
-    } as const;
-    const audit: NarrativeAudit = {
-      approved: true,
-      evidence: NARRATIVE_AUDIT_DIMENSIONS.map((dimension) => ({
-        detail: "The chapter stays inside supplied canon.",
-        dimension,
-        issueCode: "pass",
-      })),
-      leakedFactIds: [],
-      proseHash,
-      scores: {
-        arcProgress: 2,
-        characterAutonomy: 2,
-        choiceFulfillment: 2,
-        continuity: 2,
-        litrpgMechanics: 2,
-        povSafety: 2,
-        prose: 2,
-      },
-    };
-    const parse = vi
-      .fn()
-      .mockResolvedValueOnce(parsedResponse(waitIntent(), "resp_lucan", meteredUsage))
-      .mockResolvedValueOnce(parsedResponse(waitIntent(), "resp_maelin", meteredUsage))
-      .mockResolvedValueOnce(parsedResponse(waitIntent(), "resp_nyra", meteredUsage))
-      .mockResolvedValueOnce(
-        parsedResponse(unsafeFrame, "resp_frame_hidden_1", usage(1_853, 112, 0, 1_850)),
-      )
-      .mockResolvedValueOnce(
-        parsedResponse(unsafeFrame, "resp_frame_hidden_2", usage(1_853, 112, 1_850)),
-      )
-      .mockResolvedValueOnce(parsedResponse(frame, "resp_frame_three", usage(1_853, 114, 1_850)))
-      .mockResolvedValueOnce(parsedResponse(audit, "resp_audit_three", meteredUsage));
-    const stream = vi
-      .fn()
-      .mockReturnValueOnce(fakeStream(rawProse, "resp_narration_three", usage(1_252, 1_052)))
-      .mockReturnValueOnce(fakeStream(continuation, "resp_recovery_three", usage(300, 80)));
-    const count = vi
-      .fn()
-      .mockResolvedValueOnce({ input_tokens: 1_400, object: "response.input_tokens" })
-      .mockResolvedValueOnce({ input_tokens: 3_200, object: "response.input_tokens" });
-    const narrativeCandidates: NarrativeCandidateEvidence[] = [];
-    const service = new StoryService(
-      store,
-      { responses: { create: parse, inputTokens: { count }, stream } } as unknown as OpenAI,
-      {
-        maxBackgroundAgents: 3,
-        maxCostUsdPerChapter: 0.0405,
-        nativeMultiAgent: false,
-        onNarrativeCandidate: (candidate) => narrativeCandidates.push(candidate),
-      },
-    );
-    const selected = service.selectPov("elara-voss");
-
-    const replayed: string[] = [];
-    const result = await service.takeTurn(
-      {
-        choiceId: selected.chapter.choices[0]?.id ?? "missing",
-        expectedWorldVersion: 1,
-        requestId: "00000000-0000-4000-8000-000000000050",
-        type: "take_action",
-      },
-      (chunk) => {
-        replayed.push(chunk);
-      },
-    );
-
-    expect(result.world).toMatchObject({ chapter: 1, version: 2 });
-    expect(result.estimatedCostUsd).toBeLessThanOrEqual(0.0405);
-    expect(result.chapter.prose).toBe(prose);
-    expect(parse).toHaveBeenCalledTimes(7);
-    expect(parse.mock.calls.slice(0, 3).map(([body]) => (body as { input: string }).input)).toEqual(
-      [
-        "Use assigned actor instructions. Intent only.",
-        "Use assigned actor instructions. Intent only.",
-        "Use assigned actor instructions. Intent only.",
-      ],
-    );
-    expect(
-      parse.mock.calls.slice(3, 6).map(([body]) => (body as { instructions: string }).instructions),
-    ).toEqual([
-      expect.stringContaining("optionsByIdAsDescription"),
-      expect.stringContaining("optionsByIdAsDescription"),
-      expect.stringContaining("optionsByIdAsDescription"),
-    ]);
-    expect(stream).toHaveBeenCalledTimes(2);
-    expect(count).not.toHaveBeenCalled();
-    expect(replayed.join("")).toBe(prose);
-    expect(narrativeCandidates).toHaveLength(1);
-    expect(narrativeCandidates[0]).toMatchObject({
-      accepted: true,
-      auditResponseId: "resp_audit_three",
-      mergedProse: prose,
-      mergedWordCount,
-      narratorResponseId: "resp_narration_three",
-      rawProse,
-      rawWordCount: testCase.rawWordCount,
-      recovery: {
-        accepted: true,
-        maximumAdditionalWords: testCase.expectedMaximumAdditionalWords,
-        minimumAdditionalWords: 900 - testCase.rawWordCount,
-        prose: continuation,
-        responseId: "resp_recovery_three",
-        wordCount: testCase.continuationWordCount,
-      },
-    });
-    const calls = result.godMode.calls as readonly {
-      agentId: string | null;
-      model: string;
-      phase: string;
-    }[];
-    expect(calls.filter(({ agentId }) => agentId !== null).map(({ agentId }) => agentId)).toEqual(
-      actorIds,
-    );
-    expect(calls).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ model: "gpt-5.6-luna", phase: "narration" }),
-        expect.objectContaining({ model: "gpt-5.6-luna", phase: "recovery" }),
-        expect.objectContaining({ model: "gpt-5.6-luna", phase: "audit" }),
-      ]),
-    );
-    const chapter = store.loadChapter("ashen-crown-v1", 1);
-    if (!chapter) throw new Error("Three-agent recovery chapter missing");
-    const trace = store.loadTrace(chapter.traceId);
-    if (!trace) throw new Error("Three-agent recovery trace missing");
-    expect(chapter.proseHash).toBe(proseHash);
-    expect(chapter.narrativeAudit.proseHash).toBe(proseHash);
-    expect(trace.attempts).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ model: "gpt-5.6-luna", phase: "recovery" }),
-      ]),
-    );
-    expect(trace.totalEstimatedCostUsd).toBe(
-      trace.attempts.reduce((sum, attempt) => sum + attempt.costUsd, 0),
-    );
-    expect(trace.totalUsage.totalTokens).toBe(
-      trace.attempts.reduce((sum, attempt) => sum + attempt.usage.totalTokens, 0),
-    );
-    store.close();
-  });
-
-  it.each([
-    { name: "below the minimum", rejectedWordCount: 10 },
-    { name: "above the acceptance ceiling", rejectedWordCount: 130 },
-  ])("records recovery $name before retrying narration", async ({ rejectedWordCount }) => {
-    const store = new StoryStore();
-    const rawProse = "ember ".repeat(820).trim();
-    const rejectedContinuation = "cinder ".repeat(rejectedWordCount).trim();
-    const finalProse = "ash ".repeat(900).trim();
-    const frame = {
-      choices: [
-        {
-          action: { type: "wait" },
-          description: "Wait and watch the road for movement.",
-          id: "choice-1",
-          milestoneId: null,
-        },
-        {
-          action: { subjectId: "ash-road", type: "investigate" },
-          description: "Inspect the ash road for a fresh trail.",
-          id: "choice-2",
-          milestoneId: null,
-        },
-      ],
-      terminal: false,
-      title: "The Ash Road",
-    } as const;
-    const audit: NarrativeAudit = {
-      approved: true,
-      evidence: NARRATIVE_AUDIT_DIMENSIONS.map((dimension) => ({
-        detail: "The chapter stays inside supplied canon.",
-        dimension,
-        issueCode: "pass",
-      })),
-      leakedFactIds: [],
-      proseHash: createHash("sha256").update(finalProse).digest("hex"),
-      scores: {
-        arcProgress: 2,
-        characterAutonomy: 2,
-        choiceFulfillment: 2,
-        continuity: 2,
-        litrpgMechanics: 2,
-        povSafety: 2,
-        prose: 2,
-      },
-    };
-    const parse = vi
-      .fn()
-      .mockResolvedValueOnce(parsedResponse(frame, "resp_recovery_frame"))
-      .mockResolvedValueOnce(parsedResponse(audit, "resp_recovery_audit"));
-    const stream = vi
-      .fn()
-      .mockReturnValueOnce(fakeStream(rawProse, "resp_short_narration"))
-      .mockReturnValueOnce(fakeStream(rejectedContinuation, "resp_bad_recovery"))
-      .mockReturnValueOnce(fakeStream(finalProse, "resp_retried_narration"));
-    const narrativeCandidates: NarrativeCandidateEvidence[] = [];
-    const narrativeResponses: NarrativeResponseEvidence[] = [];
-    const service = new StoryService(
-      store,
-      { responses: { create: parse, stream } } as unknown as OpenAI,
-      {
-        ...options(),
-        maxBackgroundAgents: 0,
-        onNarrativeCandidate: (candidate) => narrativeCandidates.push(candidate),
-        onNarrativeResponse: (response) => narrativeResponses.push(response),
-      },
-    );
-    const selected = service.selectPov("rowan-ashborn");
-
-    const result = await service.takeTurn({
-      choiceId: selected.chapter.choices[0]?.id ?? "missing",
-      expectedWorldVersion: 1,
-      requestId: "00000000-0000-4000-8000-000000000353",
-      type: "take_action",
-    });
-
-    expect(result.chapter.prose).toBe(finalProse);
-    expect(narrativeCandidates).toHaveLength(2);
-    expect(narrativeResponses.map(({ phase, responseId }) => [phase, responseId])).toEqual([
-      ["narration", "resp_short_narration"],
-      ["recovery", "resp_bad_recovery"],
-      ["narration", "resp_retried_narration"],
-      ["audit", "resp_recovery_audit"],
-    ]);
-    expect(narrativeCandidates[0]).toMatchObject({
-      accepted: false,
-      mergedProse: rawProse,
-      narratorResponseId: "resp_short_narration",
-      rawWordCount: 820,
-      recovery: {
-        accepted: false,
-        maximumAdditionalWords: 129,
-        minimumAdditionalWords: 80,
-        prose: rejectedContinuation,
-        responseId: "resp_bad_recovery",
-        wordCount: rejectedWordCount,
-      },
-      rejectionStage: "recovery",
-    });
-    expect(narrativeCandidates[1]).toMatchObject({
-      accepted: true,
-      narratorAttempt: 1,
-      narratorResponseId: "resp_retried_narration",
-      rejectionStage: "accepted",
-    });
-    const retryInput = (stream.mock.calls[2]?.[0] as { input?: string } | undefined)?.input;
-    expect(retryInput).toContain("prior draft had 820 words");
-    expect(retryInput).not.toContain(rawProse);
     store.close();
   });
 
@@ -1832,7 +1604,7 @@ describe("StoryService", () => {
     store.close();
   });
 
-  it("persists every model attempt when a turn fails before commit", async () => {
+  it("persists failed attempts and resumes the turn without a local cost ceiling", async () => {
     const store = new StoryStore();
     const unsafeFrame = {
       choices: [
@@ -1894,16 +1666,6 @@ describe("StoryService", () => {
 
     const priorExposure = failures[0]?.totalEstimatedCostUsd ?? 0;
     parse.mockClear();
-    const retryService = new StoryService(store, client, {
-      ...options(),
-      maxCostUsdPerChapter: priorExposure + 0.000_000_001,
-    });
-    await expect(retryService.takeTurn(command)).rejects.toMatchObject({
-      code: "COST_CAP_EXCEEDED",
-    });
-    expect(parse).not.toHaveBeenCalled();
-    expect(store.loadFailedTurnTraces("ashen-crown-v1")).toHaveLength(1);
-
     const recoveredProse = Array.from({ length: 900 }, (_, index) => `recovery${index}`).join(" ");
     const recoveredAudit: NarrativeAudit = {
       approved: true,
@@ -1930,7 +1692,10 @@ describe("StoryService", () => {
       )
       .mockResolvedValueOnce(parsedResponse(recoveredAudit, "resp_recovered_audit"));
     stream.mockReturnValueOnce(fakeStream(recoveredProse, "resp_recovered_narration"));
-    const recovered = await new StoryService(store, client, options()).takeTurn(command);
+    const recovered = await new StoryService(store, client, {
+      ...options(),
+      maxCostUsdPerChapter: null,
+    }).takeTurn(command);
     const recoveredChapter = store.loadChapter("ashen-crown-v1", 1);
     if (!recoveredChapter) throw new Error("Recovered chapter missing");
     const recoveredTrace = store.loadTrace(recoveredChapter.traceId);
@@ -2180,7 +1945,7 @@ describe("StoryService", () => {
 function options() {
   return {
     maxBackgroundAgents: 0,
-    maxCostUsdPerChapter: 1,
+    maxCostUsdPerChapter: null,
     nativeMultiAgent: false,
   } as const;
 }

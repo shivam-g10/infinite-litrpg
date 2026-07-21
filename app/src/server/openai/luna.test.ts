@@ -86,6 +86,36 @@ describe("Luna world-tick adapters", () => {
     expect(JSON.stringify(body.text.format)).not.toMatch(/"items":\[/u);
   });
 
+  it("omits an unset native output cap while reserving the provider maximum", async () => {
+    const [callItem, callOutputItem] = hostedCallEvidence("call_unbounded");
+    const create = vi
+      .fn()
+      .mockResolvedValue(
+        betaResponse([
+          callItem,
+          callOutputItem,
+          messageItem(
+            JSON.stringify({ intents: [{ c: "actor-one", ...intentCandidate() }] }),
+            "root",
+            "final_answer",
+          ),
+        ]),
+      );
+    const reserve = vi.fn();
+    const tickRequest = request(true);
+    delete (tickRequest as { maxOutputTokens?: number }).maxOutputTokens;
+    tickRequest.policy = {
+      budget: new ChapterCostBudget(null),
+      costHooks: { markUncertain: vi.fn(), reserve, settle: vi.fn() },
+      maxRetries: 0,
+    };
+
+    await runLunaWorldTick(client({ create, parse: vi.fn() }), tickRequest);
+
+    expect(create.mock.calls[0]?.[0]).not.toHaveProperty("max_output_tokens");
+    expect(reserve.mock.calls[0]?.[0].maximumCostUsd).toBeGreaterThan(0.75);
+  });
+
   it("binds explicit Flex to the native beta request and response", async () => {
     const [callItem, callOutputItem] = hostedCallEvidence("call_flex");
     const response = betaResponse([
@@ -173,7 +203,7 @@ describe("Luna world-tick adapters", () => {
     expect(parse).not.toHaveBeenCalled();
   });
 
-  it("runs explicit sequential fallback in order with same resolver input", async () => {
+  it("runs explicit sequential fallback in order without a hidden output cap", async () => {
     const parse = vi
       .fn()
       .mockResolvedValueOnce(parsedIntentCandidate(intentCandidate(), "resp_actor-one"))
@@ -204,7 +234,7 @@ describe("Luna world-tick adapters", () => {
     ]);
     expect(
       parse.mock.calls.map(([body]) => (body as { max_output_tokens: number }).max_output_tokens),
-    ).toEqual([256, 256, 256]);
+    ).toEqual([1_000, 1_000, 1_000]);
     for (const [body] of parse.mock.calls) {
       const format = (body as { text: { format: unknown } }).text.format;
       expect(JSON.stringify(format)).not.toContain("actorId");
@@ -213,6 +243,22 @@ describe("Luna world-tick adapters", () => {
       expect(JSON.stringify(format)).not.toContain("stateVersion");
       expect(JSON.stringify(format)).not.toContain("prerequisites");
       expect(JSON.stringify(format)).not.toMatch(/"items":\[/u);
+    }
+  });
+
+  it("omits an unset output cap from every sequential request", async () => {
+    const parse = vi
+      .fn()
+      .mockResolvedValueOnce(parsedIntentCandidate(intentCandidate(), "resp_actor-one"))
+      .mockResolvedValueOnce(parsedIntentCandidate(intentCandidate(), "resp_actor-two"));
+    const tickRequest = request(false, ["actor-one", "actor-two"]);
+    delete (tickRequest as { maxOutputTokens?: number }).maxOutputTokens;
+    tickRequest.policy = { budget: new ChapterCostBudget(null), maxRetries: 0 };
+
+    await runLunaWorldTick(client({ create: vi.fn(), parse }), tickRequest);
+
+    for (const [body] of parse.mock.calls) {
+      expect(body).not.toHaveProperty("max_output_tokens");
     }
   });
 

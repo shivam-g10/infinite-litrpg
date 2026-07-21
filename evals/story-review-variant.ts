@@ -58,7 +58,7 @@ const LegacyVariantConfigSchema = z
   })
   .strict();
 
-const QualityVariantConfigSchema = z
+const HistoricalQualityVariantConfigSchema = z
   .object({
     branchPolicy: z.string().min(1).max(120),
     enforceNarrativeQuality: z.literal(true),
@@ -81,6 +81,53 @@ const QualityVariantConfigSchema = z
     storyQualityGateCount: z.literal(26),
   })
   .strict();
+
+const CurrentQualityVariantConfigSchema = z
+  .object({
+    branchPolicy: z.literal(STORY_REVIEW_VARIANT_CONFIG.branchPolicy),
+    costLimitEnabled: z.literal(false),
+    enforceNarrativeQuality: z.literal(true),
+    modelRouting: z
+      .object({
+        audit: z
+          .object({
+            model: z.literal(STORY_REVIEW_VARIANT_CONFIG.modelRouting.audit.model),
+            reasoningEffort: z.literal(
+              STORY_REVIEW_VARIANT_CONFIG.modelRouting.audit.reasoningEffort,
+            ),
+          })
+          .strict(),
+        frame: z
+          .object({
+            model: z.literal(STORY_REVIEW_VARIANT_CONFIG.modelRouting.frame.model),
+            reasoningEffort: z.literal(
+              STORY_REVIEW_VARIANT_CONFIG.modelRouting.frame.reasoningEffort,
+            ),
+          })
+          .strict(),
+        narration: z
+          .object({
+            model: z.literal(STORY_REVIEW_VARIANT_CONFIG.modelRouting.narration.model),
+            reasoningEffort: z.literal(
+              STORY_REVIEW_VARIANT_CONFIG.modelRouting.narration.reasoningEffort,
+            ),
+          })
+          .strict(),
+      })
+      .strict(),
+    proseLengthLimitEnabled: z.literal(false),
+    promptVersion: z.literal(STORY_REVIEW_VARIANT_CONFIG.promptVersion),
+    providerOutputLimitRequested: z.literal(false),
+    schemaVersion: z.literal(STORY_REVIEW_VARIANT_CONFIG.schemaVersion),
+    storyQualityEvalVersion: z.literal(STORY_REVIEW_VARIANT_CONFIG.storyQualityEvalVersion),
+    storyQualityGateCount: z.literal(STORY_REVIEW_VARIANT_CONFIG.storyQualityGateCount),
+  })
+  .strict();
+
+const QualityVariantConfigSchema = z.union([
+  HistoricalQualityVariantConfigSchema,
+  CurrentQualityVariantConfigSchema,
+]);
 
 const VariantConfigSchema = z.union([LegacyVariantConfigSchema, QualityVariantConfigSchema]);
 
@@ -409,12 +456,13 @@ export function readStoryReviewVariantMarker(
   markerPath: string,
   archiveRoot: string,
   expectedSourceGitSha: string,
+  expectedVariantConfigSha256 = STORY_REVIEW_VARIANT_CONFIG_SHA256,
 ): StoryReviewVariantMarker {
   return readStoryReviewVariantMarkerForConfig(
     markerPath,
     archiveRoot,
     expectedSourceGitSha,
-    STORY_REVIEW_VARIANT_CONFIG_SHA256,
+    expectedVariantConfigSha256,
   );
 }
 

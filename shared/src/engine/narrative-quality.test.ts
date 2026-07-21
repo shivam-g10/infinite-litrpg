@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildTenChapterQualityPlan,
   countDialogueWords,
   validateNarrativeQuality,
   validateTitleNovelty,
@@ -14,6 +15,40 @@ const repetitiveHistory: NarrativeHistoryEntry[] = [
 ];
 
 describe("narrative quality gates", () => {
+  it("distributes the fixed ten-chapter beats across early, middle, and late phases", () => {
+    const plans = Array.from({ length: 10 }, (_, index) =>
+      buildTenChapterQualityPlan(index + 1, true),
+    );
+
+    expect(
+      plans.filter(({ beats }) => beats.consequentialDialogue).map(({ position }) => position),
+    ).toEqual([1, 2, 4, 6, 8, 10]);
+    expect(
+      plans.filter(({ beats }) => beats.systemConsequence).map(({ position }) => position),
+    ).toEqual([1, 3, 6, 9]);
+    expect(
+      plans.filter(({ beats }) => beats.systemTradeoff).map(({ position }) => position),
+    ).toEqual([3, 6, 9]);
+    expect(
+      plans.filter(({ beats }) => beats.characterTurn).map(({ position }) => position),
+    ).toEqual([1, 4, 7, 10]);
+    expect(new Set(plans.map(({ sceneShape }) => sceneShape)).size).toBe(10);
+    expect(plans[0]?.targets).toMatchObject({
+      characterTurns: 4,
+      consequentialDialogueChapters: 6,
+      distinctFourWordOpenings: 7,
+      systemConsequenceChapters: 4,
+      systemTradeoffChapters: 2,
+      uniqueTitles: 8,
+    });
+  });
+
+  it("keeps the six-beat dialogue schedule without inventing an absent partner", () => {
+    expect(buildTenChapterQualityPlan(1, false).beats.consequentialDialogue).toBe(true);
+    expect(buildTenChapterQualityPlan(1, false).dialogue).toContain("Do not invent");
+    expect(buildTenChapterQualityPlan(3, false).beats.consequentialDialogue).toBe(false);
+  });
+
   it("rejects the observed repetitive, dialogue-free, System-free pattern", () => {
     const issues = validateNarrativeQuality({
       dialogueRequired: true,

@@ -29,6 +29,7 @@ interface StoryShellProps {
   readonly activeStory: StorySummary;
   readonly apiKeyConfigured: boolean;
   readonly automaticRun: boolean;
+  readonly automaticRunPaused: boolean;
   readonly busy: boolean;
   readonly chapterSource: "live" | "local";
   readonly error: string | null;
@@ -538,7 +539,10 @@ function ReaderActions({
     return (
       <section className="demo-complete">
         <h2>Chapter {DEMO_CHAPTER_LIMIT} ready</h2>
-        <p>Review the story here or export the complete draft as Markdown.</p>
+        <p>
+          Demo auto-stop reached. Review or export this draft. The viewpoint remains locked for the
+          full 350-chapter canon.
+        </p>
       </section>
     );
   }
@@ -782,7 +786,7 @@ function ReaderView(props: StoryShellProps) {
             ))}
           </div>
         ) : null}
-        {!reviewingSavedChapter && displayedChapter ? (
+        {!reviewingSavedChapter && displayedChapter && activeChapter > 0 ? (
           <section className="rewrite-chapter" aria-label="Rewrite latest chapter">
             <div>
               <strong>Want a different telling?</strong>
@@ -816,6 +820,14 @@ function ReaderView(props: StoryShellProps) {
               <h2>Reading saved chapter {activeChapter}</h2>
               <p>New chapters stay in the background until you choose to open them.</p>
               {runMessage ? <p role="status">{runMessage}</p> : null}
+              {error ? (
+                <div className="error-rail error-rail--reader" role="alert">
+                  <p>{error}</p>
+                  <button disabled={props.busy} onClick={props.onContinue} type="button">
+                    Retry and resume generation
+                  </button>
+                </div>
+              ) : null}
               <button onClick={() => onReviewChapter(story.world.chapter)} type="button">
                 Return to chapter {story.world.chapter}
               </button>
@@ -825,8 +837,8 @@ function ReaderView(props: StoryShellProps) {
         {error && !reviewingSavedChapter ? (
           <div className="error-rail error-rail--reader" role="alert">
             <p>{error}</p>
-            <button onClick={onRetry} type="button">
-              Retry same chapter
+            <button onClick={props.automaticRunPaused ? props.onContinue : onRetry} type="button">
+              {props.automaticRunPaused ? "Retry and resume generation" : "Retry same chapter"}
             </button>
           </div>
         ) : null}

@@ -25,7 +25,6 @@ Put the key in root `.env`:
 
 ```dotenv
 OPENAI_API_KEY=
-OPENAI_MAX_COST_USD_PER_CHAPTER=0.20
 OPENAI_MAX_BACKGROUND_AGENTS=3
 OPENAI_NATIVE_MULTI_AGENT=false
 ```
@@ -42,7 +41,7 @@ Open `http://127.0.0.1:3000`. Choose one of six characters. The viewpoint locks 
 
 Each local story lives under ignored `stories/<story-id>/`: canonical state in `story.db`, plus one readable `chapter-###.md` file per committed chapter. The story library can start, switch, reject, reopen, or restart drafts. Rewriting the latest chapter changes prose only; accepted canon stays fixed.
 
-For the no-cost UI review, exact chapter-100 behavior proof, and capped live review command, use the [human review guide](docs/HUMAN_REVIEW.md). The [sample file](docs/SAMPLE_STORIES.md) is the six-story progression packet. Its status is recorded in [current status](docs/STATUS.md).
+For the no-cost UI review, exact chapter-100 behavior proof, and live review command, use the [human review guide](docs/HUMAN_REVIEW.md). The [sample file](docs/SAMPLE_STORIES.md) becomes the six-story progression packet only after the fresh 60-chapter run. It never feeds story generation. Its status is recorded in [current status](docs/STATUS.md).
 
 Set `OPENAI_NATIVE_MULTI_AGENT=true` to use the native Multi-agent beta. The default sequential Luna adapter preserves the same intent schema and deterministic resolver.
 
@@ -60,8 +59,6 @@ flowchart LR
     O --> F["App-owned legal choices"]
     S --> T["Sol POV chapter"]
     K["POV-safe knowledge"] --> T
-    T --> X["Bounded Sol recovery when needed"]
-    X --> A
     T --> A["Terra narrative audit"]
     F --> A
     A --> C["Atomic SQLite commit"]
@@ -88,7 +85,7 @@ See the [living plan](docs/PLAN.md), [decision records](decisions/), [verified s
 | ----------------------------------------- | --------------- |
 | Custom-action translation and story audit | `gpt-5.6-terra` |
 | Background character intents              | `gpt-5.6-luna`  |
-| Story frame, narration, and recovery      | `gpt-5.6-sol`   |
+| Story frame and narration                 | `gpt-5.6-sol`   |
 
 Only the OpenAI Responses API is used.
 
@@ -100,15 +97,15 @@ npm run check
 
 This runs format, lint, strict type checks, unit tests, 1,000 deterministic simulations, POV and chapter-350 evals, production build, desktop and mobile E2E tests, secret and client-bundle scans, license checks, the required six-by-ten story-review check, dependency audit, and diff hygiene. The full command intentionally remains red until that authentic long-form artifact exists.
 
-Live API evals are separate and capped:
+Live API work is separate from non-live checks. Current six-story review uses explicit unbounded-cost confirmation while recording actual usage:
 
 ```powershell
-npm run evals:live:smoke
-npm run evals:live:full
-npm run evals:live:full:preflight
+npm run review:stories:preflight
+npm run review:stories:live -- --confirm-unbounded-cost
+npm run review:stories:check
 ```
 
-The smoke command defaults to Standard. The full npm script requires explicit cost confirmation and selects Flex. Preflight authenticates a full resume and its cost ceiling without loading an API key, creating a provider client, writing a report, or changing the spend ledger. Reports stay in ignored `evals/reports/`. See [eval gates](evals/README.md) and [current status](docs/STATUS.md).
+Preflight authenticates source, recovery state, and progress without loading an API key, creating a provider client, writing a report, or changing the spend ledger. The paid command has no application cost, output-token, prompt-byte, or prose-length ceiling. Provider limits, finite retries, timeouts, canon checks, and the fixed 60-chapter horizon remain. Reports stay in ignored `evals/reports/`. See [eval gates](evals/README.md) and [current status](docs/STATUS.md).
 
 ## Safety
 
@@ -117,7 +114,7 @@ The smoke command defaults to Standard. The full npm script requires explicit co
 - Developer JSON is an explicit full-canon export.
 - Every request carries a UUID and expected world version for replay safety.
 - Multi-chapter continuation shows its exact chapter target, runs in the background, and carries a server-validated stop chapter. Automatic continuation cannot cross a meaningful decision or chapter 100.
-- Per-chapter cost, retries, timeout, and background concurrency are bounded. Generation uses a tier-priced byte worst case first. When that bound would falsely block, the official input-token counter supplies an exact count plus a 512-token margin at the same tier. Counter failure keeps the byte bound. Returned tier mismatch fails, unknown response cost keeps its reservation, and failed exposure carries into later chapter retries.
+- Retries, timeout, and background concurrency remain finite. Product generation omits `max_output_tokens` and has no local prose-length or cost ceiling. Actual provider usage and cost stay in server-side Developer evidence. Returned tier mismatch fails, and unknown interrupted usage stays recorded for reconciliation.
 
 ## Build Week
 

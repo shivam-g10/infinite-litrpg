@@ -7,6 +7,7 @@ import type { z } from "zod";
 
 import { OpenAIRuntimeError } from "./errors";
 import {
+  GPT_5_6_MAX_OUTPUT_TOKENS,
   parseRuntimeModel,
   parseRuntimeServiceTier,
   type RuntimeModel,
@@ -26,7 +27,7 @@ export interface StructuredResponseRequest<T> {
   readonly agentId?: string | null;
   readonly input: string;
   readonly instructions: string;
-  readonly maxOutputTokens: number;
+  readonly maxOutputTokens?: number;
   readonly model: RuntimeModel;
   readonly onCandidate?: (candidate: T, context: StructuredResponseCandidateContext) => void;
   readonly onRawCandidate?: (context: StructuredResponseRawCandidateContext) => void;
@@ -67,7 +68,7 @@ export async function runStructuredResponse<T>(
     format,
     inputForAttempt: () => request.input,
     instructions: request.instructions,
-    maxOutputTokens: request.maxOutputTokens,
+    maxOutputTokens: request.maxOutputTokens ?? GPT_5_6_MAX_OUTPUT_TOKENS,
     model,
     policy: request.policy,
     promptCacheEnabled: request.promptCacheKey !== undefined,
@@ -127,7 +128,7 @@ export async function runStructuredResponse<T>(
         {
           input: request.input,
           instructions: request.instructions,
-          max_output_tokens: request.maxOutputTokens,
+          ...outputTokenLimitRequestOption(request.maxOutputTokens),
           model,
           ...promptCacheRequestOptions(request.promptCacheKey),
           reasoning: { effort: reasoningEffort },
@@ -189,7 +190,7 @@ export interface BufferedNarrationRequest {
   readonly chunkCharacters?: number;
   readonly input: string | ((attempt: number) => string);
   readonly instructions: string;
-  readonly maxOutputTokens: number;
+  readonly maxOutputTokens?: number;
   readonly model: RuntimeModel;
   readonly onRawCandidate?: (context: NarrationRawCandidateContext) => void;
   readonly policy: RuntimePolicy;
@@ -236,7 +237,7 @@ export async function createAuditedNarrationReplay(
   const maximumCostUsd = createStableMaximumCostResolver(client, {
     inputForAttempt,
     instructions: request.instructions,
-    maxOutputTokens: request.maxOutputTokens,
+    maxOutputTokens: request.maxOutputTokens ?? GPT_5_6_MAX_OUTPUT_TOKENS,
     model,
     policy: request.policy,
     promptCacheEnabled: request.promptCacheKey !== undefined,
@@ -293,7 +294,7 @@ export async function createAuditedNarrationReplay(
         {
           input: inputForAttempt(attempt),
           instructions: request.instructions,
-          max_output_tokens: request.maxOutputTokens,
+          ...outputTokenLimitRequestOption(request.maxOutputTokens),
           model,
           ...promptCacheRequestOptions(request.promptCacheKey),
           reasoning: { effort: reasoningEffort },
@@ -379,13 +380,22 @@ async function* replayBufferedText(text: string, chunkCharacters: number): Async
   }
 }
 
-function validateGenerationSettings(schemaName: string, maxOutputTokens: number): void {
+function validateGenerationSettings(schemaName: string, maxOutputTokens: number | undefined): void {
   if (!/^[A-Za-z0-9_-]{1,64}$/u.test(schemaName)) {
     throw new OpenAIRuntimeError("INVALID_POLICY", "Schema name is invalid");
   }
-  if (!Number.isInteger(maxOutputTokens) || maxOutputTokens < 1) {
+  if (
+    maxOutputTokens !== undefined &&
+    (!Number.isSafeInteger(maxOutputTokens) || maxOutputTokens < 1)
+  ) {
     throw new OpenAIRuntimeError("INVALID_POLICY", "maxOutputTokens must be a positive integer");
   }
+}
+
+function outputTokenLimitRequestOption(
+  maxOutputTokens: number | undefined,
+): { readonly max_output_tokens: number } | Record<string, never> {
+  return maxOutputTokens === undefined ? {} : { max_output_tokens: maxOutputTokens };
 }
 
 function validatePromptCacheKey(promptCacheKey: string | undefined): void {

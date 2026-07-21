@@ -17,7 +17,6 @@ import {
 
 export const MAX_RETRIES = 2 as const;
 export const DEFAULT_TIMEOUT_MS = 60_000;
-export const DEFAULT_CHAPTER_COST_CAP_USD = 0.1;
 const NANO_USD = 1_000_000_000;
 
 export interface RuntimePolicy {
@@ -79,17 +78,18 @@ export interface EvaluatedResponse<T> {
 }
 
 export class ChapterCostBudget {
-  readonly capUsd: number;
+  readonly capUsd: number | null;
   #spentUsd = 0;
 
-  constructor(capUsd = DEFAULT_CHAPTER_COST_CAP_USD) {
-    if (!Number.isFinite(capUsd) || capUsd <= 0) {
+  constructor(capUsd: number | null = null) {
+    if (capUsd !== null && (!Number.isFinite(capUsd) || capUsd <= 0)) {
       throw new OpenAIRuntimeError("INVALID_POLICY", "Chapter cost cap must be positive");
     }
     this.capUsd = capUsd;
   }
 
   get remainingUsd(): number {
+    if (this.capUsd === null) return Number.POSITIVE_INFINITY;
     return Math.max(0, this.capUsd - this.#spentUsd);
   }
 
@@ -101,7 +101,7 @@ export class ChapterCostBudget {
     if (!Number.isFinite(maximumCostUsd) || maximumCostUsd <= 0) {
       throw new OpenAIRuntimeError("INVALID_POLICY", "Request cost bound must be positive");
     }
-    if (this.#spentUsd + maximumCostUsd > this.capUsd) {
+    if (this.capUsd !== null && this.#spentUsd + maximumCostUsd > this.capUsd) {
       throw new OpenAIRuntimeError(
         "COST_CAP_EXCEEDED",
         `Chapter has $${this.remainingUsd.toFixed(6)} left but request may cost $${maximumCostUsd.toFixed(6)}`,
@@ -143,7 +143,7 @@ export class ChapterCostBudget {
       throw new OpenAIRuntimeError("INVALID_USAGE", "Estimated response cost is invalid");
     }
     this.#spentUsd += costUsd;
-    if (this.#spentUsd > this.capUsd) {
+    if (this.capUsd !== null && this.#spentUsd > this.capUsd) {
       throw new OpenAIRuntimeError(
         "COST_CAP_EXCEEDED",
         `Chapter cost $${this.#spentUsd.toFixed(6)} exceeds cap $${this.capUsd.toFixed(6)}`,

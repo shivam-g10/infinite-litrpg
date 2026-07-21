@@ -10,7 +10,7 @@ Evals define completion. Implement runner before live prompt work.
 - `npm run evals:live:full:preflight`: full Flex resume authentication and cost proof with no API key, client, provider request, report write, or ledger mutation.
 - `npm run evals:live:reconcile`: registered no-network reconciliation for an interrupted unknown request.
 - `npm run evals:live:reconcile-settled`: registered no-network report materialization for a released run whose requests all settled.
-- `npm run review:stories:preflight`: read-only six-by-ten progress and exact cost projection with zero provider requests.
+- `npm run review:stories:preflight`: read-only six-by-ten progress and cost telemetry with zero provider requests.
 - `npm run review:stories:live`: isolated Flex generation of six contiguous ten-chapter review stories.
 - `npm run review:stories:finalize`: no-network artifact finalization after all 60 chapters committed.
 - `npm run review:stories:recover`: no-network stale-lock recovery at maximum unknown exposure.
@@ -48,23 +48,23 @@ Never resume automatically.
 
 ## Ten-Chapter Story Review
 
-The version 9 release matrix stays fixed at chapters 1 and 2. Long-form human progression review uses a separate runner, data directory, and spend ledger. It generates one least-used-action-type branch from chapters 1 through 10 for every canonical viewpoint and avoids an immediate type repeat when another offered type exists. Each included chapter must be a real `StoryService` atomic commit with an approved audit, contiguous world versions, current prompt and source Git provenance, exact prose and trace hashes, Flex receipts, and no validation failure.
+The version 9 release matrix stays fixed at chapters 1 and 2. Long-form human progression review uses a separate runner, data directory, and spend ledger. It follows the director-ranked branch from chapters 1 through 10 for every canonical viewpoint, overriding rank only when needed to preserve the final action-diversity and repetition gates. Each included chapter must be a real `StoryService` atomic commit with an approved audit, contiguous world versions, current prompt and source Git provenance, exact prose and trace hashes, Flex receipts, and no validation failure. All six stories generate once in batches of at most two. After all 60 chapters commit, all six stories receive one final 33-gate evaluation. There is no pilot, per-story eval stop, or tuning loop.
 
 ```powershell
 npm run review:stories:preflight
-npm run review:stories:live -- --confirm-cost --chapter-cap-usd 0.0848 --total-cap-usd 5.088
+npm run review:stories:live -- --confirm-unbounded-cost
 npm run review:stories:check
 ```
 
-The first command loads no API key and creates no client, ledger, report, or provider request. It prints each viewpoint's committed prefix plus the aggregate projection. The paid command requires a clean committed worktree and exact flags. Its isolated durable ledger caps Responses generation exposure at `$5.088`; each uninterrupted chapter chain is capped at `$0.0848`. SDK retries are disabled; every transport attempt needs its own reservation. A clean product retry remains inside the chapter's attempt chain. A hard-killed unknown request is charged in full to the aggregate ledger, and its resumed chapter can exceed `$0.0848` in lifetime exposure because no failed-turn trace exists. The `$5.088` aggregate remains hard. Input-token count endpoint billing, if any, is outside this local ledger and needs provider-invoice reconciliation.
+The first command loads no API key and creates no client, ledger, report, or provider request. It prints each viewpoint's committed prefix and durable cost telemetry. The paid command requires a clean committed worktree and explicit acknowledgement that application cost enforcement is disabled. The runner omits the per-chapter cost limit and all requested output-token ceilings. The provider still enforces its own documented model and account limits. SDK retries remain disabled; every transport attempt is reserved and settled in the isolated durable ledger for interruption recovery and actual-cost reporting, but reservation totals do not block generation. A hard-killed unknown request stays recorded at its conservative maximum. Input-token count endpoint billing, if any, is outside this local ledger and needs provider-invoice reconciliation.
 
-Prompt `1.4.12` replaces the rejected prompt `1.4.11` branch. After committing the new source, migrate the frozen databases without provider access:
+Prompt `1.6.0` replaces the human-rejected `1.4.12` branch. It uses the fixed 33-gate quality bar, Sol medium for framing and narration, full prior history, natural-length scenes, and no application-side token, byte, prose-length, per-chapter cost, or aggregate cost ceiling. The exact source bridge authenticates the existing archive marker, its old variant hash, both intervening commits, every changed path, and the new variant hash without rewriting ignored evidence. After the single source commit, run:
 
 ```powershell
-npm run review:stories:migrate-variant -- --from-source-git-sha 5c92e7a75629d0d39e6edea676b4cf4ad44fb12c --confirm-archive
+npm run review:stories:preflight
 ```
 
-The migration hashes every archived file, deduplicates restored response IDs before cost reconciliation, binds the manifest hash into the ledger source, carries all `$0.1635525` exposure, and applies only the authorized `$2.544` to `$5.088` cap transition.
+Preflight must report zero provider requests, a clean worktree, the exact source bridge, 0 of 60 committed chapters, `$0.964953` durable telemetry, and `$0.0694375` uncertain telemetry. Do not run the old migration command: the completed rejected databases are already archived. The retained ledger cap fields authenticate that lineage only. Current review hooks set `enforceLimit: false`, so those values cannot block generation.
 
 One stable run ID owns all suffix resumes so historical reservations remain recoverable. A clean failure releases the lock and preserves committed prefixes. If the process dies, use the exact run ID from the lock error only after confirming that process is dead:
 
@@ -72,7 +72,7 @@ One stable run ID owns all suffix resumes so historical reservations remain reco
 npm run review:stories:recover -- --run-id <uuid>
 ```
 
-Recovery loads no API key and makes no provider request. It converts each unknown active reservation to uncertain at full maximum, releases the stale lock, and retains that conservative exposure against remaining headroom. If all 60 chapters already committed but output writing did not finish, run `npm run review:stories:finalize`; it loads no key, makes no provider request, and permits only the two review output paths to be dirty. The tracked JSON contains all 60 canonical chapter records, committed deltas, matching traces, six final states, current variant hash, and any carried archive reference. The final check restages those payloads, recomputes the varied branch and usage totals, rebuilds every summary, binds the source SHA as an ancestor of the current checkout, and permits only named non-runtime review-document bridges. It rejects a missing viewpoint, any gap or reorder in chapters 1 through 10, a false audit, mismatched action, delta, state, prose or trace, mixed source provenance, runtime drift, unrelated worktree drift, or stale generated Markdown. Human notes inside marked review blocks remain editable. Human verdict remains authoritative.
+Recovery loads no API key and makes no provider request. It converts each unknown active reservation to uncertain at full maximum, releases the stale lock, and retains conservative exposure as telemetry. If all 60 chapters already committed but output writing did not finish, run `npm run review:stories:finalize`; it loads no key, makes no provider request, and permits only the two review output paths to be dirty. The tracked JSON contains all 60 canonical chapter records, committed deltas, matching traces, six final states, current variant hash, disabled cost-limit evidence, and any carried archive reference. The final check restages those payloads, recomputes the varied branch and usage totals, rebuilds every summary, binds the source SHA as an ancestor of the current checkout, and permits only named non-runtime review-document bridges. It rejects a missing viewpoint, any gap or reorder in chapters 1 through 10, a false audit, mismatched action, delta, state, prose or trace, mixed source provenance, runtime drift, unrelated worktree drift, or stale generated Markdown. Human notes inside marked review blocks remain editable. Human verdict remains authoritative.
 
 Runner must load root `.env`, redact secrets, write reports under ignored `evals/reports/`, and return nonzero on gate failure.
 

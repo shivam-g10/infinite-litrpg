@@ -43,7 +43,6 @@ type RequestDescriptor =
     };
 
 type BusyState = "library" | "loading" | "locking" | "turn" | null;
-const MAX_STREAM_BYTES = 1_000_000;
 const EMPTY_LIBRARY: StoryLibraryView = { activeStoryId: null, stories: [] };
 
 async function readPayload(
@@ -62,7 +61,7 @@ async function readPayload(
   }
 }
 
-async function readStoryStream(
+export async function readStoryStream(
   response: Response,
   onChunk?: (chunk: string) => void,
 ): Promise<unknown> {
@@ -70,7 +69,6 @@ async function readStoryStream(
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
-  let bytes = 0;
   let result: unknown;
   let sawStory = false;
 
@@ -106,8 +104,6 @@ async function readStoryStream(
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
-    bytes += value.byteLength;
-    if (bytes > MAX_STREAM_BYTES) throw new Error("Story stream exceeded its safe size.");
     buffer += decoder.decode(value, { stream: true });
     const lines = buffer.split("\n");
     buffer = lines.pop() ?? "";
@@ -136,6 +132,7 @@ export function StoryApp({ apiKeyConfigured, characters }: StoryAppProps) {
   const [reviewBusy, setReviewBusy] = useState(false);
   const [reviewError, setReviewError] = useState<string | null>(null);
   const [automaticRun, setAutomaticRun] = useState(false);
+  const [automaticRunPaused, setAutomaticRunPaused] = useState(false);
   const [generationChapter, setGenerationChapter] = useState<number | null>(null);
   const [generationMode, setGenerationMode] = useState<"generate" | "rewrite">("generate");
   const [runMessage, setRunMessage] = useState<string | null>(null);
@@ -212,6 +209,7 @@ export function StoryApp({ apiKeyConfigured, characters }: StoryAppProps) {
         setReviewBusy(false);
         setReviewError(null);
         setRunMessage(null);
+        setAutomaticRunPaused(false);
       }
       setStory(nextStory);
       setLibrary(envelope.library);
@@ -316,7 +314,7 @@ export function StoryApp({ apiKeyConfigured, characters }: StoryAppProps) {
     automaticRunActive.current = true;
     stopRequestedRef.current = false;
     setGenerationMode("generate");
-    if (story.chapter) {
+    if (!reviewedChapter && story.chapter) {
       const pinnedChapter = {
         chapter: story.world.chapter,
         prose: story.chapter.prose,
@@ -326,6 +324,7 @@ export function StoryApp({ apiKeyConfigured, characters }: StoryAppProps) {
       setReviewedChapter(pinnedChapter);
     }
     setAutomaticRun(true);
+    setAutomaticRunPaused(false);
     setStopRequested(false);
     setRunMessage(null);
     setBusy("turn");
@@ -348,7 +347,13 @@ export function StoryApp({ apiKeyConfigured, characters }: StoryAppProps) {
           },
           kind: "command",
         });
-        if (!result.ok || !result.story) break;
+        if (!result.ok || !result.story) {
+          setAutomaticRunPaused(true);
+          setRunMessage(
+            `Generation paused before chapter ${nextChapter}. Saved chapters are safe.`,
+          );
+          break;
+        }
         current = result.story;
         if (stopRequestedRef.current) {
           setRunMessage(`Stopped after chapter ${current.world.chapter}.`);
@@ -379,7 +384,7 @@ export function StoryApp({ apiKeyConfigured, characters }: StoryAppProps) {
       setBusy(null);
       setGenerationChapter(null);
     }
-  }, [performRequest, story]);
+  }, [performRequest, reviewedChapter, story]);
 
   const stopAfterCurrentChapter = useCallback(() => {
     if (!automaticRunActive.current) return;
@@ -460,6 +465,10 @@ export function StoryApp({ apiKeyConfigured, characters }: StoryAppProps) {
   const latestRejectedStory = library.stories
     .filter(({ status }) => status === "rejected")
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+  const activeStories = library.stories.filter(({ status }) => status === "active");
+  const savedStories = story
+    ? activeStories.filter(({ id }) => id !== library.activeStoryId)
+    : activeStories;
 
   if (busy === "loading" && !story && !error) {
     return (
@@ -491,7 +500,7 @@ export function StoryApp({ apiKeyConfigured, characters }: StoryAppProps) {
     return (
       <CharacterSelection
         apiKeyConfigured={apiKeyConfigured}
-        busy={busy === "locking"}
+        busy={busy === "locking" || busy === "library"}
         {...(!story && latestRejectedStory
           ? {
               cancelLabel: "Reopen previous draft",
@@ -502,7 +511,9 @@ export function StoryApp({ apiKeyConfigured, characters }: StoryAppProps) {
         error={error}
         {...(story && showStoryPicker ? { onCancel: () => setShowStoryPicker(false) } : {})}
         onLock={(characterId) => void runRequest({ characterId, kind: "create" })}
+        onOpenStory={(storyId) => runLibraryCommand("activate", storyId)}
         onRetry={retry}
+        savedStories={savedStories}
       />
     );
   }
@@ -527,6 +538,7 @@ export function StoryApp({ apiKeyConfigured, characters }: StoryAppProps) {
       activeStory={activeStory}
       apiKeyConfigured={apiKeyConfigured}
       automaticRun={automaticRun}
+      automaticRunPaused={automaticRunPaused}
       busy={busy === "turn"}
       chapterSource={chapterSource}
       error={failedRequestKind === "command" ? error : null}
@@ -538,6 +550,7 @@ export function StoryApp({ apiKeyConfigured, characters }: StoryAppProps) {
       libraryWarnings={libraryWarnings}
       onActivateStory={(storyId) => runLibraryCommand("activate", storyId)}
       onCommand={(command) => {
+        setAutomaticRunPaused(false);
         const rewriting = command.type === "reroll_latest";
         setGenerationMode(rewriting ? "rewrite" : "generate");
         setGenerationChapter(rewriting ? story.world.chapter : story.world.chapter + 1);

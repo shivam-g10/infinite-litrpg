@@ -7,7 +7,7 @@ import {
   inspectLiveSpendRecovery,
   type LiveSpendSnapshot,
 } from "./live-spend-ledger";
-import { STORY_REVIEW_TOTAL_CAP_USD } from "./story-review";
+import { STORY_REVIEW_HISTORICAL_LEDGER_CAP_USD } from "./story-review";
 
 const LEDGER_PATH = resolve(process.cwd(), "evals", "reports", "story-review-spend.db");
 
@@ -15,7 +15,7 @@ function main(): void {
   const runId = parseRunId(process.argv.slice(2));
   if (!existsSync(LEDGER_PATH)) throw new Error("Story-review spend ledger does not exist");
   const inspection = inspectLiveSpendRecovery(LEDGER_PATH, runId);
-  const ledger = new LiveSpendLedger(LEDGER_PATH, STORY_REVIEW_TOTAL_CAP_USD);
+  const ledger = new LiveSpendLedger(LEDGER_PATH, STORY_REVIEW_HISTORICAL_LEDGER_CAP_USD);
   let snapshot: LiveSpendSnapshot;
   try {
     if (inspection.unknownReservations.length > 0) {
@@ -39,6 +39,7 @@ function main(): void {
     JSON.stringify(
       {
         activeReservationCount: snapshot.activeReservationCount,
+        costLimitEnabled: false,
         providerRequests: 0,
         recoveredRunId: runId,
         totalExposureUsd: snapshot.totalExposureUsd,

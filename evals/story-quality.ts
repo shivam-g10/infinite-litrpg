@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { MAX_CONSECUTIVE_CHAPTERS_IN_ONE_SCENE } from "@infinite-litrpg/shared";
 import Database from "better-sqlite3";
 
-export const STORY_QUALITY_EVAL_VERSION = "1.1.0";
+export const STORY_QUALITY_EVAL_VERSION = "1.4.0";
 export const DIALOGUE_PRESENCE_MIN_WORDS = 8;
 export const OPENING_PHRASE_WORDS = 4;
 
@@ -25,7 +25,7 @@ export const STORY_QUALITY_THRESHOLDS = Object.freeze({
   }),
   dialogue: Object.freeze({
     maxDialogueFreeStreak: 2,
-    minDialogueChapterRatio: 0.5,
+    minDialogueChapterRatio: 0.6,
     minOverallDialogueWordRatio: 0.05,
   }),
   litrpgSystem: Object.freeze({
@@ -52,8 +52,15 @@ export const STORY_QUALITY_THRESHOLDS = Object.freeze({
     maxConsecutiveSameTitle: 1,
     maxLoopReturnRatio: 0.15,
     maxTitleRepeat: 2,
-    minUniqueTitleRatio: 0.7,
+    minUniqueTitleRatio: 0.8,
   }),
+});
+
+export const STORY_GOOD_ENOUGH_THRESHOLDS = Object.freeze({
+  consequentialDialogueChapters: 3,
+  consequentialSystemChapters: 4,
+  endingChangedDimensions: 3,
+  systemTradeoffChapters: 2,
 });
 
 export type DevelopmentCategory =
@@ -78,15 +85,21 @@ export interface StoryQualityChapterMetrics {
   readonly dialogueSpanCount: number;
   readonly dialogueWordCount: number;
   readonly dialogueWordRatio: number;
+  readonly consequentialDialogueEvidence: readonly string[];
   readonly explicitSystemSignalCount: number;
   readonly firstWord: string;
   readonly hasDialogue: boolean;
+  readonly hasConsequentialDialogue: boolean;
+  readonly hasConsequentialSystem: boolean;
   readonly hasExplicitSystemSignal: boolean;
+  readonly hasSystemTradeoff: boolean;
   readonly openingPhrase: string;
   readonly progressionMarkers: readonly string[];
   readonly progressionSignature: string;
   readonly sceneLocationId: string;
   readonly strongDevelopmentSignal: boolean;
+  readonly systemConsequenceEvidence: readonly string[];
+  readonly systemTradeoffEvidence: readonly string[];
   readonly title: string;
   readonly titleKey: string;
   readonly wordCount: number;
@@ -113,6 +126,7 @@ export interface StoryQualityMetrics {
     readonly uniqueSignatureRatio: number;
   };
   readonly chapterCount: number;
+  readonly arcPhases: ArcPhaseMetrics;
   readonly characterDevelopment: {
     readonly categoryChapterCounts: Readonly<Record<DevelopmentCategory, number>>;
     readonly developmentChapterCount: number;
@@ -122,20 +136,27 @@ export interface StoryQualityMetrics {
     readonly strongDevelopmentChapterRatio: number;
   };
   readonly dialogue: {
+    readonly chapterCountWithConsequentialDialogue: number;
     readonly chapterCountWithDialogue: number;
     readonly chapterRatioWithDialogue: number;
     readonly dialogueSpanCount: number;
     readonly dialogueWordCount: number;
     readonly dialogueWordRatio: number;
     readonly maxDialogueFreeStreak: number;
+    readonly consequentialDialogueChapters: readonly number[];
     readonly totalWordCount: number;
   };
   readonly litrpgSystem: {
+    readonly chapterCountWithConsequentialSystem: number;
     readonly chapterCountWithExplicitSystem: number;
+    readonly chapterCountWithSystemTradeoff: number;
+    readonly consequentialSystemChapters: readonly number[];
     readonly explicitSystemChapterRatio: number;
     readonly explicitSystemSignalCount: number;
     readonly maxSystemFreeStreak: number;
+    readonly systemTradeoffChapters: readonly number[];
   };
+  readonly endingChange: EndingChangeMetrics;
   readonly novelty: {
     readonly adjacent: readonly AdjacentNoveltyEntry[];
     readonly averageAdjacentLexicalNovelty: number;
@@ -186,6 +207,7 @@ export type StoryQualityGateId =
   | "character-development-presence"
   | "character-development-strength"
   | "dialogue-presence"
+  | "dialogue-consequences"
   | "dialogue-ratio"
   | "dialogue-streak"
   | "novelty-average"
@@ -199,12 +221,60 @@ export type StoryQualityGateId =
   | "progression-streak"
   | "progression-uniqueness"
   | "scene-movement-streak"
+  | "arc-phase-early"
+  | "arc-phase-middle"
+  | "arc-phase-late"
+  | "ending-material-change"
+  | "system-consequences"
   | "system-presence"
   | "system-streak"
+  | "system-tradeoffs"
   | "title-consecutive-repeat"
   | "title-looping"
   | "title-repeat"
   | "title-uniqueness";
+
+export type ArcPhaseName = "early" | "middle" | "late";
+
+export interface ArcPhaseEvidence {
+  readonly chapter: number;
+  readonly signal: string;
+}
+
+export interface ArcPhaseMetric {
+  readonly covered: boolean;
+  readonly evidence: readonly ArcPhaseEvidence[];
+  readonly missingSignals: readonly string[];
+  readonly observedSignals: readonly string[];
+  readonly requiredSignals: readonly string[];
+}
+
+export interface ArcPhaseMetrics {
+  readonly applicable: boolean;
+  readonly early: ArcPhaseMetric;
+  readonly late: ArcPhaseMetric;
+  readonly middle: ArcPhaseMetric;
+}
+
+export type EndingChangeDimension =
+  | "situation"
+  | "location"
+  | "relationship"
+  | "capabilityOrResource"
+  | "knowledge"
+  | "objective"
+  | "threat";
+
+export interface EndingChangeMetrics {
+  readonly applicable: boolean;
+  readonly changedDimensions: readonly EndingChangeDimension[];
+  readonly comparedChapters: readonly [number, number] | null;
+  readonly evidence: readonly {
+    readonly dimension: EndingChangeDimension;
+    readonly from: readonly string[];
+    readonly to: readonly string[];
+  }[];
+}
 
 export interface StoryQualityGateResult {
   readonly actual: number;
@@ -283,13 +353,56 @@ const DEVELOPMENT_CATEGORY_ORDER = Object.freeze([
   "vulnerability",
 ] as const satisfies readonly DevelopmentCategory[]);
 
-const EXPLICIT_SYSTEM_PATTERNS = Object.freeze([
-  /\bsystem\b/giu,
+const EXPLICIT_MECHANIC_PATTERNS = Object.freeze([
   /\b(?:experience|xp) (?:gained|increased)\s*:?\s*\d+\b/giu,
   /\blevel up\b/giu,
-  /\b(?:class|quest|skill) (?:accepted|acquired|complete|completed|unlocked)\b/giu,
+  /\b(?:class|quest|skill) (?:accepted|acquired|complete|completed|offered|unlocked)\b/giu,
   /\[[^\]\n]{0,120}\b(?:class|experience|health|level|mana|quest|skill|stat|xp)\b[^\]\n]{0,120}\]/giu,
 ]);
+
+const EXPLICIT_SYSTEM_PATTERNS = Object.freeze([/\bsystem\b/giu, ...EXPLICIT_MECHANIC_PATTERNS]);
+
+const SYSTEM_CONSEQUENCE_PATTERN =
+  /\b(?:allowed|changed|closed|completed|demanded|evolved|exposed|forced|freed|gained|identified|lost|opened|revealed|rewarded|unlocked)\b/iu;
+const SYSTEM_DECISION_PATTERN =
+  /\b(?:accepted|chose|committed|declined|forwent|gave up|refused|risked|sacrificed|spent|surrendered|traded)\b/iu;
+const SYSTEM_TRADEOFF_PATTERN =
+  /\b(?:at the cost|but|cost|exposure|forfeit|forego|gave up|in return|instead|loss|only if|penalty|risk|sacrifice|surrender|trade)\b/iu;
+
+const DIALOGUE_DECISION_PATTERN =
+  /\b(?:accept|admit|agree|ask|choose|confess|decide|do not|don't|follow|forgive|give|go|guard|help|keep|leave|let|lower|meet|promise|read|refuse|rescue|run|share|show|stand|stay|steer|stop|strike|take|tell|trade|trust|wait|watch|will|won't)\b/iu;
+const DIALOGUE_CONSEQUENCE_VERB_PATTERN =
+  /\b(?:abandoned|accepted|agreed|broke|changed|chose|collapsed|decided|escaped|exposed|failed|fell|forgave|formed|freed|held|joined|left|opened|refused|rescued|retreated|revealed|sealed|shifted|split|stayed|surrendered|trusted|won)\b/iu;
+const DIALOGUE_CONSEQUENCE_DOMAIN_PATTERN =
+  /\b(?:agreement|alliance|ambush|approach|argument|attack|battle|bond|captives?|conflict|course|defen[cs]e|distrust|enemies|enemy|escape|foes?|formation|guard|loyalty|monsters?|pact|plan|prisoners?|refugees?|rescue|retreat|rivals?|route|siege|trust|truce|watch|wolves)\b/iu;
+
+const CAUSAL_RELATION_MAX_CHARS = 360;
+const DIALOGUE_EXCHANGE_MAX_GAP_CHARS = 240;
+const DIALOGUE_CONSEQUENCE_MAX_GAP_CHARS = 280;
+const QUOTED_SPEECH_PATTERN = /“([^”]+)”|"([^"\n]+)"/gu;
+
+const ARC_PHASE_REQUIREMENTS = Object.freeze({
+  early: Object.freeze(["commitment", "setup"]),
+  middle: Object.freeze(["escalation", "cost", "reversal"]),
+  late: Object.freeze(["payoff", "convergence", "hook"]),
+} as const);
+
+const ENDING_DIMENSION_ORDER = Object.freeze([
+  "situation",
+  "location",
+  "relationship",
+  "capabilityOrResource",
+  "knowledge",
+  "objective",
+  "threat",
+] as const satisfies readonly EndingChangeDimension[]);
+const ENDING_MARKER_DIMENSION_ORDER = Object.freeze([
+  "relationship",
+  "capabilityOrResource",
+  "knowledge",
+  "objective",
+  "threat",
+] as const satisfies readonly Exclude<EndingChangeDimension, "situation" | "location">[]);
 
 const CONTENT_STOP_WORDS = new Set([
   "about",
@@ -565,36 +678,42 @@ function validateChapters(input: readonly StoryQualityChapter[]): readonly Story
   const chapters = [...input].sort((left, right) => left.chapter - right.chapter);
   for (let index = 0; index < chapters.length; index += 1) {
     const chapter = chapters[index]!;
-    if (!Number.isSafeInteger(chapter.chapter) || chapter.chapter < 1 || chapter.chapter > 350) {
-      throw new RangeError("Story-quality chapter number is invalid");
-    }
+    validateChapter(chapter);
     if (index > 0 && chapter.chapter !== chapters[index - 1]!.chapter + 1) {
       throw new Error("Story-quality evaluation requires contiguous chapters");
     }
-    if (chapter.title.trim() === "" || chapter.prose.trim() === "") {
-      throw new Error(`Story-quality chapter ${chapter.chapter} has empty title or prose`);
-    }
-    if (chapter.actionSignature.trim() === "") {
-      throw new Error(`Story-quality chapter ${chapter.chapter} has no action signature`);
-    }
-    if (chapter.progressionMarkers.length === 0) {
-      throw new Error(`Story-quality chapter ${chapter.chapter} has no progression markers`);
-    }
-    if (chapter.sceneLocationId.trim() === "") {
-      throw new Error(`Story-quality chapter ${chapter.chapter} has no scene location`);
-    }
   }
   return chapters;
+}
+
+function validateChapter(chapter: StoryQualityChapter): void {
+  if (!Number.isSafeInteger(chapter.chapter) || chapter.chapter < 1 || chapter.chapter > 350) {
+    throw new RangeError("Story-quality chapter number is invalid");
+  }
+  if (chapter.title.trim() === "" || chapter.prose.trim() === "") {
+    throw new Error(`Story-quality chapter ${chapter.chapter} has empty title or prose`);
+  }
+  if (chapter.actionSignature.trim() === "") {
+    throw new Error(`Story-quality chapter ${chapter.chapter} has no action signature`);
+  }
+  if (chapter.progressionMarkers.length === 0) {
+    throw new Error(`Story-quality chapter ${chapter.chapter} has no progression markers`);
+  }
+  if (chapter.sceneLocationId.trim() === "") {
+    throw new Error(`Story-quality chapter ${chapter.chapter} has no scene location`);
+  }
 }
 
 function analyzeChapter(chapter: StoryQualityChapter): StoryQualityChapterMetrics {
   const chapterWords = words(chapter.prose);
   const dialogueSpans = findDialogueSpans(chapter.prose);
   const dialogueWordCount = dialogueSpans.reduce((total, span) => total + words(span).length, 0);
+  const consequentialDialogueEvidence = findConsequentialDialogueEvidence(chapter.prose);
   const developmentCategories = DEVELOPMENT_CATEGORY_ORDER.filter((category) =>
     DEVELOPMENT_PATTERNS[category].some((pattern) => pattern.test(chapter.prose)),
   );
   const explicitSystemSignalCount = countPatternMatches(chapter.prose, EXPLICIT_SYSTEM_PATTERNS);
+  const systemEvidence = findSystemEvidence(chapter.prose, explicitSystemSignalCount);
   const proseWords = words(chapter.prose);
   const progressionMarkers = [...new Set(chapter.progressionMarkers)].sort((left, right) =>
     left.localeCompare(right),
@@ -603,18 +722,24 @@ function analyzeChapter(chapter: StoryQualityChapter): StoryQualityChapterMetric
     actionSignature: chapter.actionSignature,
     chapter: chapter.chapter,
     developmentCategories,
+    consequentialDialogueEvidence,
     dialogueSpanCount: dialogueSpans.length,
     dialogueWordCount,
     dialogueWordRatio: ratio(dialogueWordCount, chapterWords.length),
     explicitSystemSignalCount,
     firstWord: proseWords[0] ?? "",
     hasDialogue: dialogueWordCount >= DIALOGUE_PRESENCE_MIN_WORDS,
+    hasConsequentialDialogue: consequentialDialogueEvidence.length > 0,
+    hasConsequentialSystem: systemEvidence.consequences.length > 0,
     hasExplicitSystemSignal: explicitSystemSignalCount > 0,
+    hasSystemTradeoff: systemEvidence.tradeoffs.length > 0,
     openingPhrase: proseWords.slice(0, OPENING_PHRASE_WORDS).join(" "),
     progressionMarkers,
     progressionSignature: progressionMarkers.join(" | "),
     sceneLocationId: chapter.sceneLocationId,
     strongDevelopmentSignal: developmentCategories.length >= 2,
+    systemConsequenceEvidence: systemEvidence.consequences,
+    systemTradeoffEvidence: systemEvidence.tradeoffs,
     title: chapter.title,
     titleKey: normalizePhrase(chapter.title),
     wordCount: chapterWords.length,
@@ -631,6 +756,15 @@ function aggregateMetrics(
   const dialogueSpanCount = sum(chapterMetrics.map((chapter) => chapter.dialogueSpanCount));
   const dialoguePresence = chapterMetrics.map((chapter) => chapter.hasDialogue);
   const systemPresence = chapterMetrics.map((chapter) => chapter.hasExplicitSystemSignal);
+  const consequentialDialogueChapters = chapterMetrics
+    .filter((chapter) => chapter.hasConsequentialDialogue)
+    .map((chapter) => chapter.chapter);
+  const consequentialSystemChapters = chapterMetrics
+    .filter((chapter) => chapter.hasConsequentialSystem)
+    .map((chapter) => chapter.chapter);
+  const systemTradeoffChapters = chapterMetrics
+    .filter((chapter) => chapter.hasSystemTradeoff)
+    .map((chapter) => chapter.chapter);
   const developmentChapterCount = chapterMetrics.filter(
     (chapter) => chapter.developmentCategories.length > 0,
   ).length;
@@ -646,7 +780,8 @@ function aggregateMetrics(
   const titleKeys = chapterMetrics.map((chapter) => chapter.titleKey);
   const titleFrequency = frequencies(titleKeys);
   const titleLoopReturnCount = countLoopReturns(titleKeys);
-  const actionFrequency = frequencies(chapterMetrics.map((chapter) => chapter.actionSignature));
+  const actionTypes = chapterMetrics.map((chapter) => normalizeActionType(chapter.actionSignature));
+  const actionFrequency = frequencies(actionTypes);
   const progressionFrequency = frequencies(
     chapterMetrics.map((chapter) => chapter.progressionSignature),
   );
@@ -666,13 +801,12 @@ function aggregateMetrics(
       dominantSignature: dominantAction.value,
       dominantSignatureCount: dominantAction.count,
       dominantSignatureRatio: ratio(dominantAction.count, chapterCount),
-      maxSameSignatureStreak: longestSameValueStreak(
-        chapterMetrics.map((chapter) => chapter.actionSignature),
-      ),
+      maxSameSignatureStreak: longestSameValueStreak(actionTypes),
       uniqueSignatureCount: actionFrequency.length,
       uniqueSignatureRatio: ratio(actionFrequency.length, chapterCount),
     },
     chapterCount,
+    arcPhases: buildArcPhaseMetrics(chapters, chapterMetrics),
     characterDevelopment: {
       categoryChapterCounts,
       developmentChapterCount,
@@ -684,22 +818,29 @@ function aggregateMetrics(
       strongDevelopmentChapterRatio: ratio(strongDevelopmentChapterCount, chapterCount),
     },
     dialogue: {
+      chapterCountWithConsequentialDialogue: consequentialDialogueChapters.length,
       chapterCountWithDialogue: dialoguePresence.filter(Boolean).length,
       chapterRatioWithDialogue: ratio(dialoguePresence.filter(Boolean).length, chapterCount),
       dialogueSpanCount,
       dialogueWordCount,
       dialogueWordRatio: ratio(dialogueWordCount, totalWordCount),
       maxDialogueFreeStreak: longestFalseStreak(dialoguePresence),
+      consequentialDialogueChapters,
       totalWordCount,
     },
     litrpgSystem: {
+      chapterCountWithConsequentialSystem: consequentialSystemChapters.length,
       chapterCountWithExplicitSystem: systemPresence.filter(Boolean).length,
+      chapterCountWithSystemTradeoff: systemTradeoffChapters.length,
+      consequentialSystemChapters,
       explicitSystemChapterRatio: ratio(systemPresence.filter(Boolean).length, chapterCount),
       explicitSystemSignalCount: sum(
         chapterMetrics.map((chapter) => chapter.explicitSystemSignalCount),
       ),
       maxSystemFreeStreak: longestFalseStreak(systemPresence),
+      systemTradeoffChapters,
     },
+    endingChange: buildEndingChangeMetrics(chapters),
     novelty: {
       adjacent,
       averageAdjacentLexicalNovelty: average(adjacent.map((entry) => entry.lexicalNovelty)),
@@ -752,7 +893,7 @@ function aggregateMetrics(
 
 function buildGates(metrics: StoryQualityMetrics): readonly StoryQualityGateResult[] {
   const thresholds = STORY_QUALITY_THRESHOLDS;
-  return [
+  const gates: StoryQualityGateResult[] = [
     atLeast(
       "dialogue-presence",
       metrics.dialogue.chapterRatioWithDialogue,
@@ -767,6 +908,11 @@ function buildGates(metrics: StoryQualityMetrics): readonly StoryQualityGateResu
       "dialogue-streak",
       metrics.dialogue.maxDialogueFreeStreak,
       thresholds.dialogue.maxDialogueFreeStreak,
+    ),
+    atLeast(
+      "dialogue-consequences",
+      metrics.dialogue.chapterCountWithConsequentialDialogue,
+      STORY_GOOD_ENOUGH_THRESHOLDS.consequentialDialogueChapters,
     ),
     atLeast(
       "character-development-presence",
@@ -792,6 +938,16 @@ function buildGates(metrics: StoryQualityMetrics): readonly StoryQualityGateResu
       "system-streak",
       metrics.litrpgSystem.maxSystemFreeStreak,
       thresholds.litrpgSystem.maxSystemFreeStreak,
+    ),
+    atLeast(
+      "system-consequences",
+      metrics.litrpgSystem.chapterCountWithConsequentialSystem,
+      STORY_GOOD_ENOUGH_THRESHOLDS.consequentialSystemChapters,
+    ),
+    atLeast(
+      "system-tradeoffs",
+      metrics.litrpgSystem.chapterCountWithSystemTradeoff,
+      STORY_GOOD_ENOUGH_THRESHOLDS.systemTradeoffChapters,
     ),
     atMost(
       "opening-first-word",
@@ -876,6 +1032,265 @@ function buildGates(metrics: StoryQualityMetrics): readonly StoryQualityGateResu
       thresholds.novelty.maxReusedSentenceRatio,
     ),
   ];
+  if (metrics.arcPhases.applicable) {
+    gates.push(
+      atLeast("arc-phase-early", Number(metrics.arcPhases.early.covered), 1),
+      atLeast("arc-phase-middle", Number(metrics.arcPhases.middle.covered), 1),
+      atLeast("arc-phase-late", Number(metrics.arcPhases.late.covered), 1),
+    );
+  }
+  if (metrics.endingChange.applicable) {
+    gates.push(
+      atLeast(
+        "ending-material-change",
+        metrics.endingChange.changedDimensions.length,
+        STORY_GOOD_ENOUGH_THRESHOLDS.endingChangedDimensions,
+      ),
+    );
+  }
+  return gates;
+}
+
+function findConsequentialDialogueEvidence(prose: string): readonly string[] {
+  const evidence: string[] = [];
+  const dialogueSpans = findDialogueSpanMatches(prose);
+  for (let firstIndex = 0; firstIndex < dialogueSpans.length - 1; firstIndex += 1) {
+    const first = dialogueSpans[firstIndex]!;
+    for (let secondIndex = firstIndex + 1; secondIndex < dialogueSpans.length; secondIndex += 1) {
+      const second = dialogueSpans[secondIndex]!;
+      const exchangeGap = second.start - first.end;
+      if (exchangeGap > DIALOGUE_EXCHANGE_MAX_GAP_CHARS) break;
+      if (
+        exchangeGap < 0 ||
+        hasParagraphBreak(prose, first.end, second.start) ||
+        words(first.value).length + words(second.value).length < DIALOGUE_PRESENCE_MIN_WORDS ||
+        (!DIALOGUE_DECISION_PATTERN.test(first.value) &&
+          !DIALOGUE_DECISION_PATTERN.test(second.value))
+      ) {
+        continue;
+      }
+
+      const following = localFollowingText(prose, second.end, DIALOGUE_CONSEQUENCE_MAX_GAP_CHARS);
+      const consequence = DIALOGUE_CONSEQUENCE_VERB_PATTERN.exec(following)?.[0];
+      const domain = DIALOGUE_CONSEQUENCE_DOMAIN_PATTERN.exec(following)?.[0];
+      if (consequence !== undefined && domain !== undefined) {
+        evidence.push(
+          `exchange=${first.value.slice(0, 40)} | ${second.value.slice(0, 40)}; consequence=${consequence}; domain=${domain}`,
+        );
+        break;
+      }
+    }
+  }
+  return evidence;
+}
+
+function findSystemEvidence(
+  prose: string,
+  explicitSystemSignalCount: number,
+): { readonly consequences: readonly string[]; readonly tradeoffs: readonly string[] } {
+  if (explicitSystemSignalCount === 0) {
+    return { consequences: [], tradeoffs: [] };
+  }
+
+  const mechanics = findPatternMatches(prose, EXPLICIT_MECHANIC_PATTERNS);
+  if (mechanics.length === 0) return { consequences: [], tradeoffs: [] };
+  const excludedRanges = [...mechanics, ...findPatternMatches(prose, [/\[[^\]\n]{0,260}\]/gu])];
+  const decisions = findPatternMatches(prose, [SYSTEM_DECISION_PATTERN]).filter(
+    (match) => !overlapsAny(match, excludedRanges),
+  );
+  const consequences = findPatternMatches(prose, [SYSTEM_CONSEQUENCE_PATTERN]).filter(
+    (match) => !overlapsAny(match, excludedRanges),
+  );
+  const tradeoffs = findPatternMatches(prose, [SYSTEM_TRADEOFF_PATTERN]).filter(
+    (match) => !overlapsAny(match, excludedRanges),
+  );
+  const consequenceEvidence: string[] = [];
+  const tradeoffEvidence: string[] = [];
+  for (const mechanic of mechanics) {
+    const decision = decisions.find((candidate) => areLocallyRelated(prose, [mechanic, candidate]));
+    if (decision === undefined) continue;
+    const consequence = consequences.find(
+      (candidate) =>
+        candidate.start >= decision.end &&
+        !rangesOverlap(candidate, decision) &&
+        areLocallyRelated(prose, [mechanic, decision, candidate]),
+    );
+    if (consequence !== undefined) {
+      consequenceEvidence.push(
+        `mechanic=${mechanic.value}; decision=${decision.value}; consequence=${consequence.value}`,
+      );
+    }
+    const tradeoff = tradeoffs.find(
+      (candidate) =>
+        !rangesOverlap(candidate, decision) &&
+        areLocallyRelated(prose, [mechanic, decision, candidate]),
+    );
+    if (tradeoff !== undefined) {
+      tradeoffEvidence.push(
+        `mechanic=${mechanic.value}; decision=${decision.value}; tradeoff=${tradeoff.value}`,
+      );
+    }
+  }
+  return {
+    consequences: [...new Set(consequenceEvidence)],
+    tradeoffs: [...new Set(tradeoffEvidence)],
+  };
+}
+
+function buildArcPhaseMetrics(
+  chapters: readonly StoryQualityChapter[],
+  chapterMetrics: readonly StoryQualityChapterMetrics[],
+): ArcPhaseMetrics {
+  const applicable = chapterMetrics.length === 10;
+  return {
+    applicable,
+    early: buildArcPhaseMetric(
+      chapters.slice(0, 3),
+      chapterMetrics.slice(0, 3),
+      ARC_PHASE_REQUIREMENTS.early,
+      "early",
+    ),
+    middle: buildArcPhaseMetric(
+      chapters.slice(3, 7),
+      chapterMetrics.slice(3, 7),
+      ARC_PHASE_REQUIREMENTS.middle,
+      "middle",
+    ),
+    late: buildArcPhaseMetric(
+      chapters.slice(7, 10),
+      chapterMetrics.slice(7, 10),
+      ARC_PHASE_REQUIREMENTS.late,
+      "late",
+    ),
+  };
+}
+
+function buildArcPhaseMetric(
+  chapters: readonly StoryQualityChapter[],
+  chapterMetrics: readonly StoryQualityChapterMetrics[],
+  requiredSignals: readonly string[],
+  phase: ArcPhaseName,
+): ArcPhaseMetric {
+  const evidence = chapterMetrics.flatMap((chapter, index) =>
+    arcSignals(chapter, chapters[index]!.prose, phase).map((signal) => ({
+      chapter: chapter.chapter,
+      signal,
+    })),
+  );
+  const observedSignals = requiredSignals.filter((signal) =>
+    evidence.some((entry) => entry.signal === signal),
+  );
+  const missingSignals = requiredSignals.filter((signal) => !observedSignals.includes(signal));
+  return {
+    covered: missingSignals.length === 0,
+    evidence,
+    missingSignals,
+    observedSignals,
+    requiredSignals,
+  };
+}
+
+function arcSignals(
+  chapter: StoryQualityChapterMetrics,
+  prose: string,
+  phase: ArcPhaseName,
+): readonly string[] {
+  if (phase === "early") {
+    return compactSignals([
+      chapter.developmentCategories.includes("commitment") ||
+      /\b(?:accepted|chose|committed|decided|promised|resolved|vowed)\b/iu.test(prose)
+        ? "commitment"
+        : undefined,
+      chapter.hasConsequentialSystem ||
+      /\b(?:goal|map|objective|quest|threat|wanted|needed|envoy|captives|record)\b/iu.test(prose)
+        ? "setup"
+        : undefined,
+    ]);
+  }
+  if (phase === "middle") {
+    return compactSignals([
+      /\b(?:assassin|closed|danger|enemy|poison|stalked|threat|trapped|worse)\b/iu.test(prose)
+        ? "escalation"
+        : undefined,
+      /\b(?:before claiming|cost|cruelty|destroyed|lose|losing|loss|poison|regretted|restitution|surrender|trapped)\b/iu.test(
+        prose,
+      )
+        ? "cost"
+        : undefined,
+      /\b(?:but|exposed|identified|instead|opened|revealed|shut|uncovered|yet)\b/iu.test(prose)
+        ? "reversal"
+        : undefined,
+    ]);
+  }
+  return compactSignals([
+    /\b(?:closed|completed|evolved|forged|fulfilled|reached|restored|sealed|won)\b/iu.test(prose)
+      ? "payoff"
+      : undefined,
+    /\b(?:both|joined|pact|share|shared|together|their|our)\b/iu.test(prose)
+      ? "convergence"
+      : undefined,
+    /\b(?:coming|new (?:danger|enemy|problem|quest|road|threat)|next|opened home|stronger)\b/iu.test(
+      prose,
+    )
+      ? "hook"
+      : undefined,
+  ]);
+}
+
+function compactSignals(values: readonly (string | undefined)[]): readonly string[] {
+  return values.filter((value): value is string => value !== undefined);
+}
+
+function buildEndingChangeMetrics(chapters: readonly StoryQualityChapter[]): EndingChangeMetrics {
+  if (chapters.length !== 10) {
+    return { applicable: false, changedDimensions: [], comparedChapters: null, evidence: [] };
+  }
+  const first = chapters[0]!;
+  const last = chapters[9]!;
+  const values = new Map<EndingChangeDimension, readonly [readonly string[], readonly string[]]>([
+    ["situation", [[first.actionSignature], [last.actionSignature]]],
+    ["location", [[first.sceneLocationId], [last.sceneLocationId]]],
+    ...ENDING_MARKER_DIMENSION_ORDER.map(
+      (dimension) =>
+        [
+          dimension,
+          [
+            markerValues(first.progressionMarkers, dimension),
+            markerValues(last.progressionMarkers, dimension),
+          ],
+        ] as const,
+    ),
+  ]);
+  const evidence = ENDING_DIMENSION_ORDER.flatMap((dimension) => {
+    const [from, to] = values.get(dimension)!;
+    if ((from.length === 0 && to.length === 0) || arraysEqual(from, to)) return [];
+    return [{ dimension, from, to }];
+  });
+  return {
+    applicable: true,
+    changedDimensions: evidence.map((entry) => entry.dimension),
+    comparedChapters: [first.chapter, last.chapter],
+    evidence,
+  };
+}
+
+function markerValues(
+  markers: readonly string[],
+  dimension: Exclude<EndingChangeDimension, "situation" | "location">,
+): readonly string[] {
+  const patternByDimension: Readonly<Record<typeof dimension, RegExp>> = {
+    relationship: /\b(?:relationship|set_relationship)\b/iu,
+    capabilityOrResource:
+      /\b(?:adjust_inventory|adjust_stat|class|experience|grant_experience|inventory|resource|skill|unlock_skill|xp)\b/iu,
+    knowledge: /^(?:knowledge:)|\bknowledge\b/iu,
+    objective: /\b(?:milestone|objective|quest)\b/iu,
+    threat: /\b(?:set_threat|threat)\b/iu,
+  };
+  return markers.filter((marker) => patternByDimension[dimension].test(marker));
+}
+
+function arraysEqual(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 function adjacentNovelty(
@@ -957,13 +1372,88 @@ function countNovelMarkerChapters(chapters: readonly StoryQualityChapterMetrics[
   return count;
 }
 
+interface TextMatch {
+  readonly end: number;
+  readonly start: number;
+  readonly value: string;
+}
+
 function findDialogueSpans(text: string): readonly string[] {
-  const spans: string[] = [];
-  for (const match of text.matchAll(/“([^”]+)”|"([^"\n]+)"/gu)) {
+  return findDialogueSpanMatches(text).map((match) => match.value);
+}
+
+function findDialogueSpanMatches(text: string): readonly TextMatch[] {
+  const spans: TextMatch[] = [];
+  for (const match of text.matchAll(QUOTED_SPEECH_PATTERN)) {
     const span = match[1] ?? match[2];
-    if (span !== undefined) spans.push(span);
+    if (span === undefined || match.index === undefined) continue;
+    spans.push({
+      end: match.index + match[0].length,
+      start: match.index,
+      value: span,
+    });
   }
   return spans;
+}
+
+function findPatternMatches(text: string, patterns: readonly RegExp[]): readonly TextMatch[] {
+  return patterns.flatMap((pattern) => {
+    const globalPattern = new RegExp(
+      pattern.source,
+      pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`,
+    );
+    return [...text.matchAll(globalPattern)].flatMap((match) =>
+      match.index === undefined
+        ? []
+        : [
+            {
+              end: match.index + match[0].length,
+              start: match.index,
+              value: match[0],
+            },
+          ],
+    );
+  });
+}
+
+function areLocallyRelated(text: string, matches: readonly TextMatch[]): boolean {
+  const start = Math.min(...matches.map((match) => match.start));
+  const end = Math.max(...matches.map((match) => match.end));
+  return end - start <= CAUSAL_RELATION_MAX_CHARS && !hasParagraphBreak(text, start, end);
+}
+
+function hasParagraphBreak(text: string, start: number, end: number): boolean {
+  return /\n\s*\n/u.test(text.slice(start, end));
+}
+
+function localFollowingText(text: string, start: number, maxLength: number): string {
+  const bounded = text.slice(start, start + maxLength);
+  const paragraphBreak = bounded.search(/\n\s*\n/u);
+  return paragraphBreak === -1 ? bounded : bounded.slice(0, paragraphBreak);
+}
+
+function overlapsAny(match: TextMatch, ranges: readonly TextMatch[]): boolean {
+  return ranges.some((range) => rangesOverlap(match, range));
+}
+
+function rangesOverlap(left: TextMatch, right: TextMatch): boolean {
+  return left.start < right.end && right.start < left.end;
+}
+
+function normalizeActionType(actionSignature: string): string {
+  const normalized = actionSignature.trim().toLocaleLowerCase("en-US");
+  try {
+    const parsed = JSON.parse(normalized) as unknown;
+    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const type = (parsed as Readonly<Record<string, unknown>>).type;
+      if (typeof type === "string" && type.trim() !== "") {
+        return type.trim().toLocaleLowerCase("en-US");
+      }
+    }
+  } catch {
+    // Synthetic and legacy fixtures may use a compact type:target signature.
+  }
+  return /^([a-z][a-z0-9_-]*)(?=[:|/])/u.exec(normalized)?.[1] ?? normalized;
 }
 
 function countPatternMatches(text: string, patterns: readonly RegExp[]): number {

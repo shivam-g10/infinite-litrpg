@@ -3,6 +3,8 @@
 import type { CharacterId, PublicCharacterProfile } from "@infinite-litrpg/shared";
 import { useState } from "react";
 
+import type { StorySummary } from "./story-types";
+
 interface CharacterSelectionProps {
   readonly apiKeyConfigured: boolean;
   readonly busy: boolean;
@@ -11,7 +13,9 @@ interface CharacterSelectionProps {
   readonly error: string | null;
   readonly onCancel?: () => void;
   readonly onLock: (characterId: CharacterId) => void;
+  readonly onOpenStory?: (storyId: string) => void;
   readonly onRetry: () => void;
+  readonly savedStories?: readonly StorySummary[];
 }
 
 export function CharacterSelection({
@@ -22,7 +26,9 @@ export function CharacterSelection({
   error,
   onCancel,
   onLock,
+  onOpenStory,
   onRetry,
+  savedStories = [],
 }: CharacterSelectionProps) {
   const [selectedId, setSelectedId] = useState<CharacterId>("rowan-ashborn");
   const selectedCharacter =
@@ -120,8 +126,29 @@ export function CharacterSelection({
           </div>
           <p className="lock-warning">
             <span aria-hidden="true">!</span>
-            This viewpoint stays locked for all 350 chapters.
+            Viewpoint stays locked for the full 350-chapter canon. This demo auto-stops at chapter
+            100.
           </p>
+
+          {savedStories.length > 0 && onOpenStory ? (
+            <section className="safe-goals" aria-labelledby="saved-stories-heading">
+              <h3 id="saved-stories-heading">Continue a saved story</h3>
+              <ul>
+                {savedStories.map((savedStory) => (
+                  <li key={savedStory.id}>
+                    <button
+                      className="selection-secondary-action"
+                      disabled={busy}
+                      onClick={() => onOpenStory(savedStory.id)}
+                      type="button"
+                    >
+                      Open {savedStory.title} · Chapter {savedStory.chapterCount}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
 
           {error ? (
             <div className="error-rail" role="alert">

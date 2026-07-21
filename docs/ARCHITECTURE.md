@@ -17,8 +17,6 @@ flowchart LR
     F --> G["App-owned legal chapter frame"]
     T --> N["Sol POV narrator"]
     K["POV KnowledgeLedger"] --> N
-    N -->|bounded short draft only| L["Bounded Sol continuation"]
-    L --> Q["Terra narrative contract audit"]
     G --> Q
     N --> Q["Terra narrative contract audit"]
     Q --> C["Atomic commit vN+1"]
@@ -35,8 +33,8 @@ flowchart LR
 6. Recompute canonical intent disposition and require events, state mutations, and knowledge mutations to exactly equal deterministic resolver output.
 7. Stage prospective state in memory. Canon remains at current version.
 8. Give Sol the complete prior chapter history plus POV-safe prospective canon. Sol proposes the title and ranks legal option IDs. Application code owns terminal state, actions, choice IDs, descriptions, and milestone targets, then reruns deterministic safety and legality checks.
-9. Give Sol the same full history and only the selected viewpoint's allowed canon. Background Luna actors never receive hidden full prose; they receive their own POV-safe state.
-10. Target 900 to 925 words and reject outside the absolute 900 to 1,300 word range. One bounded tail-only recovery may repair an otherwise-valid short draft. The merged prose reruns every deterministic quality, canon, POV, and novelty gate.
+9. Give Sol the same full history and only the selected viewpoint's allowed canon. Background Luna actors never receive hidden full prose; they receive every prior chapter through their own POV-safe canon history.
+10. Ask for one complete scene at its natural length. No local output-token, prompt-byte, prose-length, or cost ceiling truncates it. Deterministic quality, canon, POV, completion, and novelty gates still reject bad prose.
 11. Run the independent Terra narrative contract audit over the final prose and full history.
 12. Atomically commit delta, knowledge, chapter, trace metadata, usage, cost, and next version.
 
@@ -52,14 +50,14 @@ Reader input follows that same deterministic milestone policy. The opening and a
 | ------------------------------------------ | --------------- | --------------- |
 | Custom-action translation                  | `gpt-5.6-terra` | none            |
 | Character intents                          | `gpt-5.6-luna`  | none            |
-| Story frame, narration, and recovery       | `gpt-5.6-sol`   | low             |
+| Story frame and narration                  | `gpt-5.6-sol`   | medium          |
 | Independent narrative and continuity audit | `gpt-5.6-terra` | low             |
 
 The seven-act world blueprint is a versioned local fixture. Chapter 350 uses the same validated narration path and deterministic terminal guard as every other chapter.
 
 Use Responses API. Use strict structured outputs for state-changing calls. Measure before changing effort.
 
-Product requests explicitly send the Standard provider tier. The release-only full eval explicitly sends Flex. Runtime schema `1.1.0-runtime-candidates-5` records both requested and observed tier. Standard returns provider value `default`; Flex returns `flex`. Missing, `auto`, or mismatched values fail closed. Tier-specific pricing covers measured usage, byte and counted bounds, chapter budgets, durable reservations, and release projections.
+Product requests explicitly send the Standard provider tier. The release-only review explicitly sends Flex. Runtime schema `1.1.0-runtime-candidates-5` records both requested and observed tier. Standard returns provider value `default`; Flex returns `flex`. Missing, `auto`, or mismatched values fail closed. Tier-specific pricing records measured usage and durable interruption telemetry without enforcing a local spend ceiling.
 
 ## Multi-Agent Adapter
 
@@ -104,32 +102,29 @@ Never store API key or raw environment.
 
 ## Planning Envelope
 
-These long-horizon estimates use Standard product pricing. Release-eval Flex pricing is a separate, exact, versioned projection.
+These long-horizon estimates use Standard product pricing. Release-eval Flex pricing is separate, versioned telemetry. These numbers inform the operator; they never stop generation.
 
 - Estimated full chapter before retries: about `$0.075`.
 - Estimated full chapter with 20 percent retry allowance: about `$0.09`.
 - Estimated 350 chapters: about `$31.50`, plus genesis and user regenerations.
-- Current six-story review budget: maximum `$5.088`, including carried exposure.
 - World tick p50 target: at most 15 seconds.
 - Streamed full chapter p95 target: at most 60 seconds.
 
 These are planning estimates. Runtime usage fields are token source of truth. OpenAI responses do not return cost. The clean Reader hides telemetry; secondary Developer details shows tokens, latency, and locally estimated cost from a versioned pricing table.
 
-Each generation request reserves its maximum estimated exposure before transport. The local byte bound is first. If that bound would block, stable Responses may call the official input-token counter with the exact input, instructions, model, reasoning, and schema. Counted reservations price the returned input plus 512 safety tokens at the request's explicit service tier and cache policy, then add maximum output. Invalid, failed, or timed-out counting falls back to the byte bound and blocks safely. Native Multi-agent keeps the byte bound because its counter schema does not include the multi-agent configuration.
-
-Known generation usage settles the reservation to measured estimated cost. An actual cost above the reservation aborts before commit and records exact usage and exposure. Timeouts and transport failures retain the full reservation because provider billing is unknown. Failed exposure carries into every retry for the same world version.
+Current product and six-story review requests omit `max_output_tokens`. They send the complete required story context and accept a complete scene at natural length, subject only to OpenAI's native model context and output limits. Local code records token usage and estimated cost after each request but does not block, truncate, or abort on either value. Finite validation retries, timeouts, canon checks, POV checks, and chapter 350 remain safety and correctness guards.
 
 ## Live Eval Spend Ledger
 
-Release evals add a durable global layer above the per-chapter budget:
+Release evals keep a durable accounting layer without an enforced spend limit:
 
 1. Acquire the single SQLite run lock.
 2. Reconcile the authenticated source report with the stored baseline and settled reservations.
-3. Reserve a generation request in integer nano-USD with `BEGIN IMMEDIATE` before transport.
+3. Record the request's estimated exposure in integer nano-USD with `BEGIN IMMEDIATE` before transport.
 4. Settle known usage before parsing or validating model output. Keep the maximum reservation when usage is unknown.
 5. Atomically replace the JSON report after every committed chapter and at run end.
 
-Ledger version 2 stores the requested service tier on every reservation. Opening a version 1 ledger adds Standard to historical rows in one immediate transaction and verifies that exact nano-USD exposure did not change. SQLite uses WAL and full synchronous writes. A killed process leaves both its request reservation and run lock intact. An active provider reservation requires external reconciliation; deleting the ledger would destroy the `$3` safety proof.
+Ledger version 2 stores the requested service tier on every request record. Opening a version 1 ledger adds Standard to historical rows in one immediate transaction and verifies that exact nano-USD exposure did not change. SQLite uses WAL and full synchronous writes. A killed process leaves both its request record and run lock intact. An active provider request requires external reconciliation; deleting the ledger would destroy provenance.
 
 An explicit stale-run takeover is allowed only when the recorded process is dead, the caller supplies the exact old run ID, and no provider reservation remains active. It transfers the lock in one immediate transaction without changing exposure. The new run must still reconcile its source report before it can reserve a request.
 
@@ -137,6 +132,6 @@ If one exact request remains active after process death, a separate tracked inte
 
 Version 7 reports retain authenticated contiguous chapter prefixes. Version 8 adds complete raw narrative and canonical transition evidence. Version 9 adds strict service-tier and projection provenance. Full version 9 reports require Flex and recompute a tier-evidence gate across current attempts, calls, traces, and sidecars. Historical reports remain readable as Standard evidence. Restoring chapter 1 restages the accepted `WorldDelta` from the seed fixture and verifies both state hashes. Retained results keep their source cap and Git SHA. New results use the current cap and Git SHA.
 
-Human-rejected prose can use the canon-preserving re-narration path. It authenticates and exactly restages the retained before state, action, intents, delta, after state, frame, fact partitions, and trace identity before provider access. It runs only the configured narrator, bounded continuation when required, and full audit; it never reruns agents or resolves new canon. A replacement gets new prose, audit, usage, request, turn, and stream evidence but keeps the exact canonical-source hash. The app archives the prior narration revision and atomically replaces only the latest prose.
+Human-rejected prose can use the canon-preserving reroll path. It authenticates and exactly restages the retained before state, action, intents, delta, after state, frame, fact partitions, and trace identity before provider access. It reruns only the configured narrator and full audit; it never reruns agents or resolves new canon. A replacement gets new prose, audit, usage, request, turn, and stream evidence but keeps the exact canonical-source hash. The app archives the prior narration revision and atomically replaces only the latest prose.
 
 This ledger covers locally estimated Responses generation exposure. It does not claim provider-invoice equality because the project key cannot read organization usage and the input-token counting endpoint exposes no cost.

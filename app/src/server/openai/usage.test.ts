@@ -162,6 +162,20 @@ describe("OpenAI runtime models and accounting", () => {
     expectRuntimeError(() => budget.assertRequestAllowed(0.001), "COST_CAP_EXCEEDED");
   });
 
+  it("tracks unlimited chapter spend without raising a cost-cap error", () => {
+    const budget = new ChapterCostBudget(null);
+
+    budget.assertRequestAllowed(10_000);
+    budget.reserve(10_000);
+    budget.settleReservation(10_000, 4_000);
+    budget.charge(7_000);
+
+    expect(budget.capUsd).toBeNull();
+    expect(budget.remainingUsd).toBe(Number.POSITIVE_INFINITY);
+    expect(budget.spentUsd).toBe(11_000);
+    budget.assertRequestAllowed(1_000_000);
+  });
+
   it("rejects impossible usage", () => {
     const usage = openAIUsage();
     usage.input_tokens_details.cached_tokens = usage.input_tokens + 1;

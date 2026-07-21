@@ -11,6 +11,7 @@ export type RuntimeModel = ModelCallTrace["model"];
 export type RuntimeReasoningEffort = ModelCallTrace["reasoningEffort"];
 
 export const RUNTIME_MODELS = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"] as const;
+export const GPT_5_6_MAX_OUTPUT_TOKENS = 128_000 as const;
 
 export function parseRuntimeModel(input: unknown): RuntimeModel {
   const parsed = RuntimeModelSchema.safeParse(input);

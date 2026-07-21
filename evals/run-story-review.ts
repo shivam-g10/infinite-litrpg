@@ -35,11 +35,12 @@ import {
 } from "./live-spend-ledger";
 import {
   STORY_REVIEW_CHAPTERS_PER_STORY,
-  STORY_REVIEW_CHAPTER_CAP_USD,
   STORY_REVIEW_BRANCH_POLICY,
+  STORY_REVIEW_HISTORICAL_LEDGER_CAP_USD,
   STORY_REVIEW_SCHEMA_VERSION,
   STORY_REVIEW_SOURCE_BRIDGE_FROM_GIT_SHA,
-  STORY_REVIEW_TOTAL_CAP_USD,
+  STORY_REVIEW_SOURCE_BRIDGE_INTERMEDIATE_GIT_SHA,
+  STORY_REVIEW_SOURCE_VARIANT_CONFIG_SHA256,
   STORY_REVIEW_TOTAL_CHAPTERS,
   STORY_REVIEW_VARIANT_CONFIG_SHA256,
   StoryReviewSourceEvidenceSchema,
@@ -99,7 +100,7 @@ async function main(): Promise<void> {
   const durableExposureUsd = ledgerSnapshot.totalExposureUsd;
   const preflight = buildStoryReviewPreflight(progress.byCharacter, durableExposureUsd);
   const worktreeClean = isCleanWorktree();
-  const paidCommand = `npm run review:stories:live -- --confirm-cost --chapter-cap-usd ${STORY_REVIEW_CHAPTER_CAP_USD} --total-cap-usd ${STORY_REVIEW_TOTAL_CAP_USD}`;
+  const paidCommand = "npm run review:stories:live -- --confirm-unbounded-cost";
 
   if (args.preflightOnly) {
     console.log(
@@ -107,7 +108,6 @@ async function main(): Promise<void> {
         {
           ...preflight,
           branchPolicy: STORY_REVIEW_BRANCH_POLICY,
-          chapterCapUsd: args.chapterCapUsd,
           chaptersPerStory: STORY_REVIEW_CHAPTERS_PER_STORY,
           paidCommand,
           priorVariantExposureUsd: ledgerSnapshot.priorSpendUsd,
@@ -116,7 +116,6 @@ async function main(): Promise<void> {
           sourceGitSha,
           ...(sourceBridge === undefined ? {} : { sourceBridge }),
           stories: CHARACTER_IDS.length,
-          totalCapUsd: args.totalCapUsd,
           uncertainExposureUsd: ledgerSnapshot.uncertainReservationCostUsd,
           worktreeClean,
         },
@@ -146,10 +145,6 @@ async function main(): Promise<void> {
   if (progress.completedChapters === STORY_REVIEW_TOTAL_CHAPTERS) {
     throw new Error("All sixty chapters are committed; run npm run review:stories:finalize");
   }
-  if (preflight.effectiveChapterCapUsd <= 0 || !preflight.fullPlanFitsAuthorizedCap) {
-    throw new Error("Authorized story-review headroom cannot fund the remaining fair-share plan");
-  }
-
   if (!worktreeClean) {
     throw new Error("Paid story-review generation requires a clean committed worktree");
   }
@@ -159,21 +154,22 @@ async function main(): Promise<void> {
   if (!apiKey) throw new Error("OPENAI_API_KEY is not configured");
 
   const runId = STORY_REVIEW_RUN_ID;
-  const ledger = new LiveSpendLedger(LEDGER_PATH, STORY_REVIEW_TOTAL_CAP_USD);
+  const ledger = new LiveSpendLedger(LEDGER_PATH, STORY_REVIEW_HISTORICAL_LEDGER_CAP_USD);
   let workspace: StoryWorkspace | null = null;
   let ownsRun = false;
   try {
     ledger.acquireRun(runId);
     ownsRun = true;
-    const costHooks = ledger.createCostHooks(runId);
+    const costHooks = ledger.createCostHooks(runId, { enforceLimit: false });
     const client = createStoryReviewClient(apiKey);
-    workspace = createStoryReviewWorkspace(client, costHooks, preflight.effectiveChapterCapUsd);
+    const activeWorkspace = createStoryReviewWorkspace(client, costHooks);
+    workspace = activeWorkspace;
     process.env.GIT_SHA = sourceGitSha;
 
-    for (const characterId of CHARACTER_IDS) {
-      await generateStory(characterId, workspace);
-    }
-    await workspace.close();
+    await runStoryReviewGenerationSchedule((characterId) =>
+      generateStory(characterId, activeWorkspace),
+    );
+    await activeWorkspace.close();
     workspace = null;
 
     const snapshot = ledger.snapshot();
@@ -197,6 +193,19 @@ async function main(): Promise<void> {
   } finally {
     await workspace?.close();
     ledger.close();
+  }
+}
+
+export async function runStoryReviewGenerationSchedule(
+  generate: (characterId: CharacterId) => Promise<void>,
+): Promise<void> {
+  for (let index = 0; index < CHARACTER_IDS.length; index += 2) {
+    const batch = CHARACTER_IDS.slice(index, index + 2);
+    const results = await Promise.allSettled(batch.map(generate));
+    const failure = results.find(
+      (result): result is PromiseRejectedResult => result.status === "rejected",
+    );
+    if (failure !== undefined) throw failure.reason;
   }
 }
 
@@ -252,9 +261,19 @@ function collectSourceEvidence(
   qualityVariantArchive: StoryReviewVariantArchiveReference,
   sourceBridge?: StoryReviewSourceBridge,
 ): StoryReviewSourceEvidence {
+  const qualityFailures: string[] = [];
+  for (const characterId of CHARACTER_IDS) {
+    try {
+      assertStoryReviewDatabaseQuality(characterId, storyReviewDatabasePath(characterId));
+    } catch (error) {
+      qualityFailures.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+  if (qualityFailures.length > 0) {
+    throw new Error(`Fresh six-story quality review failed: ${qualityFailures.join(" | ")}`);
+  }
   const stories = CHARACTER_IDS.map((characterId) => {
     const databasePath = storyReviewDatabasePath(characterId);
-    assertStoryReviewDatabaseQuality(characterId, databasePath);
     const store = new StoryStore(databasePath);
     try {
       const state = store.loadWorldState(WORLD_ID);
@@ -285,8 +304,8 @@ function collectSourceEvidence(
   });
   return StoryReviewSourceEvidenceSchema.parse({
     branchPolicy: STORY_REVIEW_BRANCH_POLICY,
-    chapterCapUsd: STORY_REVIEW_CHAPTER_CAP_USD,
     chaptersPerStory: STORY_REVIEW_CHAPTERS_PER_STORY,
+    costLimitEnabled: false,
     durableExposureUsd: snapshot.totalExposureUsd,
     generatedAt: new Date().toISOString(),
     priorVariantExposureUsd: snapshot.priorSpendUsd,
@@ -297,7 +316,6 @@ function collectSourceEvidence(
     sourceGitSha,
     ...(sourceBridge === undefined ? {} : { sourceBridge }),
     stories,
-    totalCapUsd: STORY_REVIEW_TOTAL_CAP_USD,
     variantConfigSha256: STORY_REVIEW_VARIANT_CONFIG_SHA256,
   });
 }
@@ -334,13 +352,12 @@ export function createStoryReviewClient(apiKey: string): OpenAI {
 export function buildStoryReviewServiceOptions(
   characterId: CharacterId,
   costHooks: NonNullable<StoryServiceOptions["costHooks"]>,
-  chapterCapUsd: number,
 ): StoryServiceOptions {
   return {
     costHooks,
     enforceNarrativeQuality: true,
     maxBackgroundAgents: 3,
-    maxCostUsdPerChapter: chapterCapUsd,
+    maxCostUsdPerChapter: null,
     modelConfig: REVIEW_STORY_MODELS,
     nativeMultiAgent: false,
     promptCacheKey: storyReviewPromptCacheKey(characterId),
@@ -351,30 +368,22 @@ export function buildStoryReviewServiceOptions(
 export function buildStoryReviewWorkspaceOptions(
   client: OpenAI,
   costHooks: NonNullable<StoryServiceOptions["costHooks"]>,
-  chapterCapUsd: number,
   rootDirectory = STORY_REVIEW_STORIES_DIRECTORY,
 ): StoryWorkspaceOptions {
   return {
     client,
     rootDirectory: resolve(rootDirectory),
     serviceOptions: ({ povCharacterId }) =>
-      buildStoryReviewServiceOptions(
-        requireReviewCharacterId(povCharacterId),
-        costHooks,
-        chapterCapUsd,
-      ),
+      buildStoryReviewServiceOptions(requireReviewCharacterId(povCharacterId), costHooks),
   };
 }
 
 export function createStoryReviewWorkspace(
   client: OpenAI,
   costHooks: NonNullable<StoryServiceOptions["costHooks"]>,
-  chapterCapUsd: number,
   rootDirectory = STORY_REVIEW_STORIES_DIRECTORY,
 ): StoryWorkspace {
-  return new StoryWorkspace(
-    buildStoryReviewWorkspaceOptions(client, costHooks, chapterCapUsd, rootDirectory),
-  );
+  return new StoryWorkspace(buildStoryReviewWorkspaceOptions(client, costHooks, rootDirectory));
 }
 
 export function storyReviewPromptCacheKey(characterId: CharacterId): string {
@@ -601,6 +610,7 @@ function currentVariantContext(sourceGitSha: string): {
         VARIANT_MARKER_PATH,
         STORY_ARCHIVE_DIRECTORY,
         sourceGitSha,
+        STORY_REVIEW_SOURCE_VARIANT_CONFIG_SHA256,
       ),
     };
   }
@@ -608,10 +618,18 @@ function currentVariantContext(sourceGitSha: string): {
     VARIANT_MARKER_PATH,
     STORY_ARCHIVE_DIRECTORY,
     STORY_REVIEW_SOURCE_BRIDGE_FROM_GIT_SHA,
+    STORY_REVIEW_SOURCE_VARIANT_CONFIG_SHA256,
   );
   const parentGitSha = gitText(["rev-parse", `${sourceGitSha}^`]);
-  if (parentGitSha !== STORY_REVIEW_SOURCE_BRIDGE_FROM_GIT_SHA) {
-    throw new Error("Story-review source bridge must be the direct child of its failed run");
+  const intermediateParentGitSha = gitText([
+    "rev-parse",
+    `${STORY_REVIEW_SOURCE_BRIDGE_INTERMEDIATE_GIT_SHA}^`,
+  ]);
+  if (
+    parentGitSha !== STORY_REVIEW_SOURCE_BRIDGE_INTERMEDIATE_GIT_SHA ||
+    intermediateParentGitSha !== STORY_REVIEW_SOURCE_BRIDGE_FROM_GIT_SHA
+  ) {
+    throw new Error("Story-review source bridge must preserve both failed run commits exactly");
   }
   const changedPaths = gitText([
     "diff",
@@ -643,6 +661,7 @@ function currentVariantContext(sourceGitSha: string): {
       changedPaths,
       diffSha256,
       fromSourceGitSha: STORY_REVIEW_SOURCE_BRIDGE_FROM_GIT_SHA,
+      intermediateSourceGitSha: STORY_REVIEW_SOURCE_BRIDGE_INTERMEDIATE_GIT_SHA,
       toSourceGitSha: sourceGitSha,
     }),
     variantMarker,

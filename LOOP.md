@@ -59,7 +59,7 @@ Run relevant gates in this order:
 4. unit and invariant tests
 5. offline evals
 6. integration tests
-7. live capped evals when required
+7. explicitly confirmed live evals when required
 8. build
 9. browser smoke and end-to-end tests
 10. secret scan

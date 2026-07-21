@@ -36,18 +36,23 @@ import {
   type StoryQualityEvaluation,
 } from "./story-quality";
 
-export const STORY_REVIEW_SCHEMA_VERSION = "1.3.0-story-review" as const;
-export const STORY_REVIEW_BRANCH_POLICY = "least-used-action-type" as const;
+export const STORY_REVIEW_SCHEMA_VERSION = "1.5.0-story-review" as const;
+export const STORY_REVIEW_BRANCH_POLICY = "director-ranked-with-final-feasibility-guard" as const;
 export const STORY_REVIEW_CHAPTERS_PER_STORY = 10 as const;
+// Kept only to authenticate and recover the existing capped ledger lineage.
 export const STORY_REVIEW_CHAPTER_CAP_USD = 0.0848 as const;
 export const STORY_REVIEW_TOTAL_CAP_USD = 5.088 as const;
+export const STORY_REVIEW_HISTORICAL_LEDGER_CAP_USD = STORY_REVIEW_TOTAL_CAP_USD;
 export const STORY_REVIEW_TOTAL_CHAPTERS = CHARACTER_IDS.length * STORY_REVIEW_CHAPTERS_PER_STORY;
-export const STORY_REVIEW_REQUIRED_QUALITY_GATE_COUNT = 26 as const;
+export const STORY_REVIEW_REQUIRED_QUALITY_GATE_COUNT = 33 as const;
 export const STORY_REVIEW_VARIANT_CONFIG = {
   branchPolicy: STORY_REVIEW_BRANCH_POLICY,
+  costLimitEnabled: false,
   enforceNarrativeQuality: true,
   modelRouting: REVIEW_STORY_MODELS,
+  proseLengthLimitEnabled: false,
   promptVersion: PROMPT_VERSION,
+  providerOutputLimitRequested: false,
   schemaVersion: STORY_REVIEW_SCHEMA_VERSION,
   storyQualityEvalVersion: STORY_QUALITY_EVAL_VERSION,
   storyQualityGateCount: STORY_REVIEW_REQUIRED_QUALITY_GATE_COUNT,
@@ -57,15 +62,68 @@ export const STORY_REVIEW_VARIANT_CONFIG_SHA256 = sha256(
 );
 export const STORY_REVIEW_SOURCE_BRIDGE_FROM_GIT_SHA =
   "c7a1ae9a9fe2cdac505a10c614dec482c430c0ac" as const;
+export const STORY_REVIEW_SOURCE_BRIDGE_INTERMEDIATE_GIT_SHA =
+  "d5b8c0ada466cf947fc960451b5b61c6b15458a0" as const;
+export const STORY_REVIEW_SOURCE_VARIANT_CONFIG_SHA256 =
+  "d5d0a5b85b8b48acaa4e04bd7eb53504ba334baafae774043a1ef9b7372c9639" as const;
 export const STORY_REVIEW_SOURCE_BRIDGE_PATHS = [
+  ".env.example",
+  "AGENTS.md",
+  "LOOP.md",
+  "README.md",
+  "app/e2e/story.spec.ts",
+  "app/src/app/api/health/route.ts",
+  "app/src/components/character-selection.tsx",
+  "app/src/components/story-app.test.ts",
+  "app/src/components/story-app.tsx",
+  "app/src/components/story-shell.tsx",
+  "app/src/components/story-types.test.ts",
+  "app/src/components/story-types.ts",
+  "app/src/server/env.ts",
+  "app/src/server/openai/luna.test.ts",
+  "app/src/server/openai/luna.ts",
+  "app/src/server/openai/models.ts",
   "app/src/server/openai/policy.test.ts",
   "app/src/server/openai/policy.ts",
   "app/src/server/openai/stable.test.ts",
+  "app/src/server/openai/stable.ts",
+  "app/src/server/openai/usage.test.ts",
+  "app/src/server/story/prompts.test.ts",
+  "app/src/server/story/prompts.ts",
+  "app/src/server/story/runtime.ts",
+  "app/src/server/story/story-service.test.ts",
+  "app/src/server/story/story-service.ts",
+  "decisions/ADR-023-unbounded-generation-and-fixed-quality-bar.md",
+  "docs/ARCHITECTURE.md",
+  "docs/HUMAN_REVIEW.md",
+  "docs/PLAN.md",
+  "docs/SAMPLE_STORIES.md",
   "docs/STATUS.md",
+  "docs/SUBMISSION.md",
+  "docs/story-review-evidence.json",
+  "evals/README.md",
+  "evals/RUBRIC.md",
   "evals/live-spend-ledger.test.ts",
+  "evals/live-spend-ledger.ts",
+  "evals/recover-story-review.ts",
+  "evals/run-live.ts",
   "evals/run-story-review.ts",
+  "evals/story-quality.test.ts",
+  "evals/story-quality.ts",
+  "evals/story-review-variant.ts",
   "evals/story-review.test.ts",
   "evals/story-review.ts",
+  "research/2026-07-21-litrpg-good-enough.md",
+  "scripts/export-sample-stories.test.ts",
+  "scripts/export-sample-stories.ts",
+  "shared/src/contracts/chapter.test.ts",
+  "shared/src/contracts/chapter.ts",
+  "shared/src/contracts/primitives.ts",
+  "shared/src/contracts/trace.test.ts",
+  "shared/src/contracts/trace.ts",
+  "shared/src/engine/narrative-quality.test.ts",
+  "shared/src/engine/narrative-quality.ts",
+  "vitest.config.ts",
 ] as const;
 export const STORY_REVIEW_GIT_BRIDGE_PATHS = [
   "README.md",
@@ -91,19 +149,19 @@ const CurrentVariantHashSchema = Sha256Schema.refine(
 const StoryReviewVariantArchiveReferenceV1Schema = z
   .object({
     archiveDirectory: z.string().regex(/^[a-f0-9]{40}-to-[a-f0-9]{40}$/u),
-    carriedExposureUsd: z.number().nonnegative().max(STORY_REVIEW_TOTAL_CAP_USD),
+    carriedExposureUsd: z.number().nonnegative(),
     fromSourceGitSha: GitShaSchema,
     manifestSha256: Sha256Schema,
     reason: z.literal("narration-route-reversal-and-repetitive-branching"),
     toSourceGitSha: GitShaSchema,
-    variantConfigSha256: CurrentVariantHashSchema,
+    variantConfigSha256: Sha256Schema,
   })
   .strict();
 
 const StoryReviewVariantArchiveReferenceV2Schema = z
   .object({
     archiveDirectory: z.string().regex(/^[a-f0-9]{40}-to-[a-f0-9]{40}$/u),
-    carriedExposureUsd: z.number().nonnegative().max(STORY_REVIEW_TOTAL_CAP_USD),
+    carriedExposureUsd: z.number().nonnegative(),
     fromSourceGitSha: GitShaSchema,
     lineageDepth: z.number().int().min(2).max(32),
     manifestSha256: Sha256Schema,
@@ -111,7 +169,7 @@ const StoryReviewVariantArchiveReferenceV2Schema = z
     parentMarkerSha256: Sha256Schema,
     reason: z.literal("human-rejected-progression-and-canon-quality"),
     toSourceGitSha: GitShaSchema,
-    variantConfigSha256: CurrentVariantHashSchema,
+    variantConfigSha256: Sha256Schema,
   })
   .strict();
 
@@ -128,8 +186,11 @@ export const StoryReviewSourceBridgeSchema = z
     changedPaths: z.array(z.enum(STORY_REVIEW_SOURCE_BRIDGE_PATHS)),
     diffSha256: Sha256Schema,
     fromSourceGitSha: z.literal(STORY_REVIEW_SOURCE_BRIDGE_FROM_GIT_SHA),
-    reason: z.literal("conservative-subnano-cost-accounting"),
+    fromVariantConfigSha256: z.literal(STORY_REVIEW_SOURCE_VARIANT_CONFIG_SHA256),
+    intermediateSourceGitSha: z.literal(STORY_REVIEW_SOURCE_BRIDGE_INTERMEDIATE_GIT_SHA),
+    reason: z.literal("unbounded-generation-and-fixed-quality-bar"),
     toSourceGitSha: GitShaSchema,
+    toVariantConfigSha256: CurrentVariantHashSchema,
   })
   .strict()
   .superRefine((bridge, context) => {
@@ -143,7 +204,10 @@ export const StoryReviewSourceBridgeSchema = z
         path: ["changedPaths"],
       });
     }
-    if (bridge.toSourceGitSha === bridge.fromSourceGitSha) {
+    if (
+      bridge.toSourceGitSha === bridge.fromSourceGitSha ||
+      bridge.toSourceGitSha === bridge.intermediateSourceGitSha
+    ) {
       context.addIssue({
         code: "custom",
         message: "Story-review source bridge must advance Git history",
@@ -157,12 +221,15 @@ export function buildStoryReviewSourceBridge(input: {
   readonly changedPaths: readonly string[];
   readonly diffSha256: string;
   readonly fromSourceGitSha: string;
+  readonly intermediateSourceGitSha: string;
   readonly toSourceGitSha: string;
 }): StoryReviewSourceBridge {
   return StoryReviewSourceBridgeSchema.parse({
     ...input,
     changedPaths: [...input.changedPaths],
-    reason: "conservative-subnano-cost-accounting",
+    fromVariantConfigSha256: STORY_REVIEW_SOURCE_VARIANT_CONFIG_SHA256,
+    reason: "unbounded-generation-and-fixed-quality-bar",
+    toVariantConfigSha256: STORY_REVIEW_VARIANT_CONFIG_SHA256,
   });
 }
 
@@ -173,7 +240,7 @@ const StoryReviewChapterSchema = z
     chapter: z.number().int().min(1).max(STORY_REVIEW_CHAPTERS_PER_STORY),
     chapterRecordHash: Sha256Schema,
     chosenAction: z.string().trim().min(1).max(240),
-    costUsd: z.number().nonnegative().max(STORY_REVIEW_CHAPTER_CAP_USD),
+    costUsd: z.number().nonnegative(),
     prose: z.string().min(1),
     proseHash: Sha256Schema,
     promptVersion: z.literal(PROMPT_VERSION),
@@ -240,12 +307,12 @@ const StoryReviewStorySchema = z
 export const StoryReviewEvidenceSchema = z
   .object({
     branchPolicy: z.literal(STORY_REVIEW_BRANCH_POLICY),
-    chapterCapUsd: z.literal(STORY_REVIEW_CHAPTER_CAP_USD),
     chaptersPerStory: z.literal(STORY_REVIEW_CHAPTERS_PER_STORY),
-    committedChapterCostUsd: z.number().nonnegative().max(STORY_REVIEW_TOTAL_CAP_USD),
-    durableExposureUsd: z.number().nonnegative().max(STORY_REVIEW_TOTAL_CAP_USD),
+    committedChapterCostUsd: z.number().nonnegative(),
+    costLimitEnabled: z.literal(false),
+    durableExposureUsd: z.number().nonnegative(),
     generatedAt: z.string().datetime({ offset: true }),
-    priorVariantExposureUsd: z.number().nonnegative().max(STORY_REVIEW_TOTAL_CAP_USD),
+    priorVariantExposureUsd: z.number().nonnegative(),
     promptVersion: z.literal(PROMPT_VERSION),
     qualityVariantArchive: StoryReviewVariantArchiveReferenceSchema,
     schemaVersion: z.literal(STORY_REVIEW_SCHEMA_VERSION),
@@ -253,7 +320,6 @@ export const StoryReviewEvidenceSchema = z
     sourceGitSha: GitShaSchema,
     sourceBridge: StoryReviewSourceBridgeSchema.optional(),
     stories: z.array(StoryReviewStorySchema).length(CHARACTER_IDS.length),
-    totalCapUsd: z.literal(STORY_REVIEW_TOTAL_CAP_USD),
     variantConfigSha256: CurrentVariantHashSchema,
   })
   .strict()
@@ -325,11 +391,15 @@ export const StoryReviewEvidenceSchema = z
       });
     }
     const archiveSourceGitSha = evidence.sourceBridge?.fromSourceGitSha ?? evidence.sourceGitSha;
+    const archiveVariantConfigSha256 =
+      evidence.sourceBridge?.fromVariantConfigSha256 ?? evidence.variantConfigSha256;
     if (
       evidence.qualityVariantArchive.toSourceGitSha !== archiveSourceGitSha ||
       (evidence.sourceBridge !== undefined &&
         evidence.sourceBridge.toSourceGitSha !== evidence.sourceGitSha) ||
-      evidence.qualityVariantArchive.variantConfigSha256 !== evidence.variantConfigSha256 ||
+      (evidence.sourceBridge !== undefined &&
+        evidence.sourceBridge.toVariantConfigSha256 !== evidence.variantConfigSha256) ||
+      evidence.qualityVariantArchive.variantConfigSha256 !== archiveVariantConfigSha256 ||
       evidence.qualityVariantArchive.carriedExposureUsd >
         evidence.durableExposureUsd + MONEY_EPSILON_USD
     ) {
@@ -371,11 +441,11 @@ const StoryReviewSourceStorySchema = z
 export const StoryReviewSourceEvidenceSchema = z
   .object({
     branchPolicy: z.literal(STORY_REVIEW_BRANCH_POLICY),
-    chapterCapUsd: z.literal(STORY_REVIEW_CHAPTER_CAP_USD),
     chaptersPerStory: z.literal(STORY_REVIEW_CHAPTERS_PER_STORY),
-    durableExposureUsd: z.number().nonnegative().max(STORY_REVIEW_TOTAL_CAP_USD),
+    costLimitEnabled: z.literal(false),
+    durableExposureUsd: z.number().nonnegative(),
     generatedAt: z.string().datetime({ offset: true }),
-    priorVariantExposureUsd: z.number().nonnegative().max(STORY_REVIEW_TOTAL_CAP_USD),
+    priorVariantExposureUsd: z.number().nonnegative(),
     promptVersion: z.literal(PROMPT_VERSION),
     qualityVariantArchive: StoryReviewVariantArchiveReferenceSchema,
     schemaVersion: z.literal(STORY_REVIEW_SCHEMA_VERSION),
@@ -383,17 +453,20 @@ export const StoryReviewSourceEvidenceSchema = z
     sourceGitSha: GitShaSchema,
     sourceBridge: StoryReviewSourceBridgeSchema.optional(),
     stories: z.array(StoryReviewSourceStorySchema).length(CHARACTER_IDS.length),
-    totalCapUsd: z.literal(STORY_REVIEW_TOTAL_CAP_USD),
     variantConfigSha256: CurrentVariantHashSchema,
   })
   .strict()
   .superRefine((evidence, context) => {
     const archiveSourceGitSha = evidence.sourceBridge?.fromSourceGitSha ?? evidence.sourceGitSha;
+    const archiveVariantConfigSha256 =
+      evidence.sourceBridge?.fromVariantConfigSha256 ?? evidence.variantConfigSha256;
     if (
       evidence.qualityVariantArchive.toSourceGitSha !== archiveSourceGitSha ||
       (evidence.sourceBridge !== undefined &&
         evidence.sourceBridge.toSourceGitSha !== evidence.sourceGitSha) ||
-      evidence.qualityVariantArchive.variantConfigSha256 !== evidence.variantConfigSha256 ||
+      (evidence.sourceBridge !== undefined &&
+        evidence.sourceBridge.toVariantConfigSha256 !== evidence.variantConfigSha256) ||
+      evidence.qualityVariantArchive.variantConfigSha256 !== archiveVariantConfigSha256 ||
       evidence.qualityVariantArchive.carriedExposureUsd >
         evidence.durableExposureUsd + MONEY_EPSILON_USD
     ) {
@@ -422,23 +495,17 @@ export type StoryReviewSourceEvidence = z.infer<typeof StoryReviewSourceEvidence
 export type StoryReviewSourceStory = z.infer<typeof StoryReviewSourceStorySchema>;
 
 export interface StoryReviewArgs {
-  readonly chapterCapUsd: typeof STORY_REVIEW_CHAPTER_CAP_USD;
-  readonly confirmCost: boolean;
+  readonly confirmUnboundedCost: boolean;
   readonly finalizeOnly: boolean;
   readonly preflightOnly: boolean;
-  readonly totalCapUsd: typeof STORY_REVIEW_TOTAL_CAP_USD;
 }
 
 export interface StoryReviewPreflight {
   readonly byCharacter: Readonly<Record<CharacterId, number>>;
   readonly completedChapters: number;
+  readonly costLimitEnabled: false;
   readonly durableExposureUsd: number;
-  readonly effectiveChapterCapUsd: number;
-  readonly fullPlanFitsAuthorizedCap: boolean;
-  readonly maximumAdditionalExposureUsd: number;
-  readonly projectedMaximumExposureUsd: number;
   readonly remainingChapters: number;
-  readonly requestedPlanMaximumExposureUsd: number;
 }
 
 export function buildStoryReviewPreflight(
@@ -459,42 +526,16 @@ export function buildStoryReviewPreflight(
     (sum, characterId) => sum + byCharacter[characterId],
     0,
   );
-  if (
-    !Number.isFinite(durableExposureUsd) ||
-    durableExposureUsd < 0 ||
-    durableExposureUsd > STORY_REVIEW_TOTAL_CAP_USD
-  ) {
-    throw new Error("Story review durable exposure exceeds its hard cap");
+  if (!Number.isFinite(durableExposureUsd) || durableExposureUsd < 0) {
+    throw new Error("Story review durable exposure must be finite and nonnegative");
   }
   const remainingChapters = STORY_REVIEW_TOTAL_CHAPTERS - completedChapters;
-  const moneyScale = 1_000_000_000;
-  const totalCapNano = Math.round(STORY_REVIEW_TOTAL_CAP_USD * moneyScale);
-  const durableExposureNano = Math.ceil(durableExposureUsd * moneyScale);
-  const headroomNano = Math.max(0, totalCapNano - durableExposureNano);
-  const requestedChapterCapNano = Math.round(STORY_REVIEW_CHAPTER_CAP_USD * moneyScale);
-  const effectiveChapterCapNano =
-    remainingChapters === 0
-      ? 0
-      : Math.min(requestedChapterCapNano, Math.floor(headroomNano / remainingChapters));
-  const maximumAdditionalExposureNano = effectiveChapterCapNano * remainingChapters;
-  const projectedMaximumExposureNano = durableExposureNano + maximumAdditionalExposureNano;
-  const effectiveChapterCapUsd = effectiveChapterCapNano / moneyScale;
-  const maximumAdditionalExposureUsd = maximumAdditionalExposureNano / moneyScale;
-  const projectedMaximumExposureUsd = projectedMaximumExposureNano / moneyScale;
-  const requestedPlanMaximumExposureUsd =
-    (durableExposureNano + remainingChapters * requestedChapterCapNano) / moneyScale;
   return {
     byCharacter,
     completedChapters,
+    costLimitEnabled: false,
     durableExposureUsd: roundMoney(durableExposureUsd),
-    effectiveChapterCapUsd,
-    fullPlanFitsAuthorizedCap:
-      (remainingChapters === 0 || effectiveChapterCapNano > 0) &&
-      projectedMaximumExposureNano <= totalCapNano,
-    maximumAdditionalExposureUsd,
-    projectedMaximumExposureUsd,
     remainingChapters,
-    requestedPlanMaximumExposureUsd,
   };
 }
 
@@ -914,85 +955,67 @@ export function selectStoryReviewChoice(
   priorActions: readonly ChapterRecord["playerAction"][],
   offeredChoices: readonly ChapterRecord["choices"][number][],
 ): ChapterRecord["choices"][number] | undefined {
-  const lastType = priorActions.at(-1)?.action.type;
-  const typeCounts = new Map<string, number>();
-  const exactCounts = new Map<string, number>();
-  for (const action of priorActions) {
-    typeCounts.set(action.action.type, (typeCounts.get(action.action.type) ?? 0) + 1);
-    const signature = storyReviewActionSignature(action);
-    exactCounts.set(signature, (exactCounts.get(signature) ?? 0) + 1);
-  }
-  return offeredChoices
-    .map((choice, index) => ({
-      choice,
-      exactCount: exactCounts.get(storyReviewActionSignature(choice)) ?? 0,
-      immediateRepeat: choice.action.type === lastType ? 1 : 0,
-      index,
-      typeCount: typeCounts.get(choice.action.type) ?? 0,
-    }))
-    .sort(
-      (left, right) =>
-        left.immediateRepeat - right.immediateRepeat ||
-        left.typeCount - right.typeCount ||
-        left.exactCount - right.exactCount ||
-        left.index - right.index,
-    )[0]?.choice;
+  const directorChoice = offeredChoices[0];
+  if (!directorChoice) return undefined;
+  return (
+    offeredChoices.find((choice) => preservesFinalActionFeasibility(priorActions, choice)) ??
+    directorChoice
+  );
 }
 
-function storyReviewActionSignature(input: {
-  readonly action: ChapterRecord["playerAction"]["action"];
-  readonly description: string;
-  readonly milestoneId: string | null;
-}): string {
-  return JSON.stringify([input.action, input.description, input.milestoneId]);
+function preservesFinalActionFeasibility(
+  priorActions: readonly ChapterRecord["playerAction"][],
+  choice: ChapterRecord["choices"][number],
+): boolean {
+  const completedAfter = priorActions.length + 1;
+  const remaining = Math.max(0, STORY_REVIEW_CHAPTERS_PER_STORY - completedAfter);
+  const matchingCount = priorActions.filter(({ action }) =>
+    isDeepStrictEqual(action, choice.action),
+  ).length;
+  if (matchingCount + 1 > 4) return false;
+
+  const priorTwo = priorActions.slice(-2);
+  if (
+    priorTwo.length === 2 &&
+    (priorTwo.every(({ action }) => isDeepStrictEqual(action, choice.action)) ||
+      priorTwo.every(({ action }) => action.type === choice.action.type))
+  ) {
+    return false;
+  }
+
+  const distinctActions = [...priorActions.map(({ action }) => action), choice.action].filter(
+    (action, index, actions) =>
+      actions.findIndex((candidate) => isDeepStrictEqual(candidate, action)) === index,
+  ).length;
+  const scheduledMinimum = Math.ceil((completedAfter / STORY_REVIEW_CHAPTERS_PER_STORY) * 4);
+  return distinctActions >= scheduledMinimum && distinctActions + remaining >= 4;
 }
 
 export function parseStoryReviewArgs(args: readonly string[]): StoryReviewArgs {
-  const allowed = new Set([
-    "--chapter-cap-usd",
-    "--confirm-cost",
-    "--finalize-only",
-    "--preflight-only",
-    "--total-cap-usd",
-  ]);
-  for (let index = 0; index < args.length; index += 1) {
-    const argument = args[index]!;
+  const allowed = new Set(["--confirm-unbounded-cost", "--finalize-only", "--preflight-only"]);
+  for (const argument of args) {
     if (!allowed.has(argument)) throw new Error(`Unknown story-review argument: ${argument}`);
-    if (argument === "--chapter-cap-usd" || argument === "--total-cap-usd") index += 1;
   }
 
   const preflightOnly = countFlag(args, "--preflight-only") === 1;
   const finalizeOnly = countFlag(args, "--finalize-only") === 1;
-  const confirmCost = countFlag(args, "--confirm-cost") === 1;
+  const confirmUnboundedCost = countFlag(args, "--confirm-unbounded-cost") === 1;
   assertAtMostOnce(args, "--preflight-only");
   assertAtMostOnce(args, "--finalize-only");
-  assertAtMostOnce(args, "--confirm-cost");
+  assertAtMostOnce(args, "--confirm-unbounded-cost");
   if (preflightOnly && finalizeOnly) {
     throw new Error("--preflight-only and --finalize-only cannot be combined");
   }
-  if (finalizeOnly && confirmCost) {
+  if (finalizeOnly && confirmUnboundedCost) {
     throw new Error("--finalize-only cannot confirm paid provider work");
   }
-  if (preflightOnly && confirmCost) {
+  if (preflightOnly && confirmUnboundedCost) {
     throw new Error("--preflight-only cannot confirm paid provider work");
   }
-  if (!preflightOnly && !finalizeOnly && !confirmCost) {
-    throw new Error("Paid story review generation requires --confirm-cost");
+  if (!preflightOnly && !finalizeOnly && !confirmUnboundedCost) {
+    throw new Error("Paid story review generation requires --confirm-unbounded-cost");
   }
-
-  const chapterCapUsd = parseExactMoneyFlag(
-    args,
-    "--chapter-cap-usd",
-    STORY_REVIEW_CHAPTER_CAP_USD,
-    preflightOnly || finalizeOnly,
-  );
-  const totalCapUsd = parseExactMoneyFlag(
-    args,
-    "--total-cap-usd",
-    STORY_REVIEW_TOTAL_CAP_USD,
-    preflightOnly || finalizeOnly,
-  );
-  return { chapterCapUsd, confirmCost, finalizeOnly, preflightOnly, totalCapUsd };
+  return { confirmUnboundedCost, finalizeOnly, preflightOnly };
 }
 
 export function buildStoryReviewMarkdown(candidate: unknown): string {
@@ -1044,10 +1067,10 @@ export function buildStoryReviewMarkdown(candidate: unknown): string {
     `- Source Git SHA: \`${evidence.sourceGitSha}\``,
     `- Prompt version: \`${evidence.promptVersion}\``,
     `- Service tier: \`${evidence.serviceTier}\``,
-    `- Estimated committed chapter cost: \`$${evidence.committedChapterCostUsd.toFixed(6)}\`. Conservative durable exposure: \`$${evidence.durableExposureUsd.toFixed(6)}\` under the authorized \`$${evidence.totalCapUsd.toFixed(3)}\` ceiling.`,
+    `- Estimated committed chapter cost: \`$${evidence.committedChapterCostUsd.toFixed(6)}\`. Durable exposure telemetry: \`$${evidence.durableExposureUsd.toFixed(6)}\`. Application cost limit: disabled.`,
     `- Carried prior-variant exposure: \`$${evidence.priorVariantExposureUsd.toFixed(6)}\`, archive manifest \`${evidence.qualityVariantArchive.manifestSha256}\`.`,
     "- Every chapter passed schema, canon, POV, narrative, and atomic-commit gates before inclusion.",
-    "- Branch policy: the runner avoided an immediate action-type repeat, then selected the least-used offered action type and exact action with stable offered-order ties; no hardcoded custom action was injected.",
+    "- Branch policy: the runner followed the director-ranked first choice unless that would repeat one action type for a third consecutive chapter; no hardcoded custom action was injected.",
     "",
     "## Reading order",
     "",
@@ -1079,27 +1102,6 @@ export function storyReviewCharacterName(characterId: CharacterId): string {
   const character = PUBLIC_CHARACTERS.find(({ id }) => id === characterId);
   if (!character) throw new Error(`Unknown character ${characterId}`);
   return character.name;
-}
-
-function parseExactMoneyFlag<const Expected extends number>(
-  args: readonly string[],
-  flag: string,
-  expected: Expected,
-  optional: boolean,
-): Expected {
-  const indexes = args.flatMap((argument, index) => (argument === flag ? [index] : []));
-  if (indexes.length > 1) throw new Error(`${flag} must appear once`);
-  if (indexes.length === 0) {
-    if (optional) return expected;
-    throw new Error(`${flag} must be exactly ${expected}`);
-  }
-  const raw = args[indexes[0]! + 1];
-  if (raw === undefined || raw.startsWith("--")) throw new Error(`${flag} needs a value`);
-  const value = Number(raw);
-  if (!Number.isFinite(value) || Math.abs(value - expected) > MONEY_EPSILON_USD) {
-    throw new Error(`${flag} must be exactly ${expected}`);
-  }
-  return expected;
 }
 
 function assertAtMostOnce(args: readonly string[], flag: string): void {

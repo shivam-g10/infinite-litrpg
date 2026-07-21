@@ -22,7 +22,7 @@ Check:
 6. Desktop and phone widths have no horizontal overflow.
 7. Markdown and Reader JSON exports contain no hidden canon.
 
-Final narrative signoff requires six contiguous ten-chapter stories. The current tracked pack is a human-rejected baseline until prompt `1.5.0` replaces it.
+Final narrative signoff requires six contiguous ten-chapter stories. The rejected pack is absent from the active workspace. Git history preserves it. [SAMPLE_STORIES.md](SAMPLE_STORIES.md) is only a pending marker until prompt `1.6.0` replaces it.
 
 The long-form gate must pass first:
 
@@ -30,7 +30,7 @@ The long-form gate must pass first:
 npm run review:stories:check
 ```
 
-It fails unless every viewpoint has a provenance-checked chapter 1 through 10 and all 26 quality gates pass. The tracked source artifact contains every canonical chapter record, committed world delta, matching trace, and final state. The check rebuilds each state chain and readable pack. When green, read [SAMPLE_STORIES.md](SAMPLE_STORIES.md) in order, compare each chosen action with the next chapter, then complete each story verdict.
+It fails unless every viewpoint has a provenance-checked chapter 1 through 10 and every current quality gate passes. The tracked source artifact contains every canonical chapter record, committed world delta, matching trace, and final state. The check rebuilds each state chain and readable pack. When green, read [SAMPLE_STORIES.md](SAMPLE_STORIES.md) in order, compare each chosen action with the next chapter, then complete each story verdict using the fixed bar in [LitRPG good-enough research](../research/2026-07-21-litrpg-good-enough.md).
 
 For release review, use the complete authenticated [review packet set](review-packets/). Its manifest is `human-reviewed-rejected`: Rowan chapter 2, Elara chapter 1, and Lucan chapter 1 failed. The curated samples use different passing chapters and do not replace that rejected evidence.
 
@@ -56,21 +56,21 @@ The reproducible six-story review run is separate from interactive browser testi
 npm run review:stories:preflight
 ```
 
-The exact paid command is authorized with a hard `$5.088` aggregate Responses generation-exposure ceiling across the rejected archived branch, 60 replacement chapters, and any resumed attempts:
+The exact paid command requires explicit confirmation and records actual Responses usage without an application cost ceiling:
 
 ```powershell
-npm run review:stories:live -- --confirm-cost --chapter-cap-usd 0.0848 --total-cap-usd 5.088
+npm run review:stories:live -- --confirm-unbounded-cost
 ```
 
-It avoids an immediate repeated action type, then selects the least-used offered action type and exact action with stable offered-order ties. It retains up to three sequential background agents, checkpoints each atomic commit, and publishes only chapters whose runtime audit and all story gates pass. The `$0.0848` flag is an upper bound. With `$0.86713` carried exposure, fair-share lowers the effective ceiling to `$0.070347833` so all 60 slots fit below `$5.088`. Canonical review stories and chapter Markdown live under ignored `stories/review-<character-id>/`; the spend ledger stays under ignored `evals/reports/`. Input-token count endpoint billing, if any, is outside the local ledger and provider invoice reconciliation.
+It follows the director-ranked choice unless rank would make the fixed final action-diversity or repetition bar impossible. It retains up to three sequential background agents and checkpoints each atomic commit. All six stories run once in batches of at most two. After all 60 chapters commit, the runner evaluates every story against all 33 fixed gates once. It does not run a pilot, stop for per-story tuning, or feed old `docs/SAMPLE_STORIES.md` content into generation. Canonical review stories and chapter Markdown live under ignored `stories/review-<character-id>/`; usage telemetry stays under ignored `evals/reports/`.
 
-The completed, human-rejected prompt `1.4.12` databases must first move through the provider-free, hash-bound lineage migration after the new source commit:
+The completed, human-rejected prompt `1.4.12` databases are already archived. The single prompt `1.6.0` source commit carries an exact hash-bound bridge from that archive marker to the current variant. Verify it without a provider call:
 
 ```powershell
-npm run review:stories:migrate-variant -- --from-source-git-sha 90ca3462ea8c456cedc8f63d357b05970b5168aa --confirm-archive
+npm run review:stories:preflight
 ```
 
-It archives every old database, verifies both prior manifests and unique response cost, carries `$0.86713` as prior spend, keeps the authorized `$5.088` cap unchanged, and makes zero provider requests.
+Preflight verifies prior manifests, both intervening commits, the old and new variant hashes, every changed path, the durable ledger, and current progress. It makes zero provider requests and must not mutate the archive or ledger.
 
 After a killed process, use only the run ID printed by the lock error and only after that process is dead:
 
@@ -78,7 +78,7 @@ After a killed process, use only the run ID printed by the lock error and only a
 npm run review:stories:recover -- --run-id <uuid>
 ```
 
-Recovery makes no provider request. It charges an unknown active request at its full reservation, releases the stale lock, and leaves less headroom for the same stable run. Because a hard-killed request has no failed-turn record, a resumed attempt for that chapter can take its lifetime exposure above `$0.0848`; the hard `$5.088` aggregate still cannot be exceeded. Preflight then shows the committed count for every viewpoint. Resume the exact paid command only while chapters remain.
+Recovery makes no provider request. It marks an unknown active request at its full reservation for conservative telemetry, releases the stale lock, and preserves exact lineage. Preflight then shows the committed count for every viewpoint. Resume the exact paid command only while chapters remain.
 
 If all 60 chapters committed but the process stopped before both review files were written, finalize them without a key or provider request:
 
@@ -90,11 +90,10 @@ Finalization accepts only the two story-review output paths as worktree changes 
 
 For ad hoc interactive review, use a separate clean clone so existing local story data stays safe.
 
-Put the API key and the per-chapter ceiling you accept in root `.env`, then start the app:
+Put the API key in root `.env`, then start the app:
 
 ```dotenv
 OPENAI_API_KEY=
-OPENAI_MAX_COST_USD_PER_CHAPTER=0.20
 ```
 
 ```powershell
@@ -110,7 +109,7 @@ Choose a character and make the opening decision. Then use `Continue to next dec
 - A failed chapter exposes `Retry same chapter`, which reuses the exact request ID.
 - Chapter 100 ends the demo run. The underlying story remains nonterminal and still supports the hard chapter-350 ending.
 
-Cost is bounded per chapter, not per multi-chapter run. From a new world, chapter 100 can authorize up to `100 × OPENAI_MAX_COST_USD_PER_CHAPTER`; from the chapter-1 demo seed, up to `99 ×` that ceiling. Actual usage can be lower. Set the ceiling before the run and stop when needed.
+Actual usage remains visible in Developer details. Reader stays focused on story. `Stop after this chapter` controls the next request, not the provider call already in flight.
 
 ## Human verdict
 

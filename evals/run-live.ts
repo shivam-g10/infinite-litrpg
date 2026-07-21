@@ -3076,7 +3076,6 @@ async function main(): Promise<void> {
             try {
               const service = new StoryService(store, client, {
                 auditReasoningEffort: RENARRATION_AUDIT_REASONING_EFFORT,
-                canonicalAuditMaxOutputTokens: RENARRATION_AUDIT_MAX_OUTPUT_TOKENS,
                 canonicalNarrationDirective: RENARRATION_NARRATION_DIRECTIVE,
                 costHooks,
                 maxBackgroundAgents: 0,

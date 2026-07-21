@@ -48,6 +48,43 @@ describe("stable Responses adapter", () => {
     expect((body as { service_tier?: string }).service_tier).toBe("default");
   });
 
+  it("omits an unset structured output cap while reserving the provider maximum", async () => {
+    const unboundedReserve = vi.fn();
+    const boundedReserve = vi.fn();
+    const parse = vi.fn().mockResolvedValue(parsedResponse({ answer: "ash" }));
+    const unbounded = structuredRequest({ maxRetries: 0 });
+    delete unbounded.maxOutputTokens;
+    unbounded.policy = {
+      budget: new ChapterCostBudget(null),
+      costHooks: {
+        markUncertain: vi.fn(),
+        reserve: unboundedReserve,
+        settle: vi.fn(),
+      },
+      maxRetries: 0,
+    };
+    const bounded = structuredRequest({ maxRetries: 0 });
+    bounded.maxOutputTokens = 128_000;
+    bounded.policy = {
+      budget: new ChapterCostBudget(null),
+      costHooks: {
+        markUncertain: vi.fn(),
+        reserve: boundedReserve,
+        settle: vi.fn(),
+      },
+      maxRetries: 0,
+    };
+
+    await runStructuredResponse(stableClient({ parse }), unbounded);
+    await runStructuredResponse(stableClient({ parse }), bounded);
+
+    expect(parse.mock.calls[0]?.[0]).not.toHaveProperty("max_output_tokens");
+    expect(parse.mock.calls[1]?.[0]).toMatchObject({ max_output_tokens: 128_000 });
+    expect(unboundedReserve.mock.calls[0]?.[0].maximumCostUsd).toBe(
+      boundedReserve.mock.calls[0]?.[0].maximumCostUsd,
+    );
+  });
+
   it("opts a structured request into stable implicit prompt caching", async () => {
     const parse = vi.fn().mockResolvedValue(parsedResponse({ answer: "cached ash" }));
     const request = structuredRequest({ maxRetries: 0 });
@@ -559,6 +596,23 @@ describe("stable Responses adapter", () => {
       prompt_cache_options: { mode: "explicit" },
     });
     expect(stream.mock.calls[0]?.[0]).not.toHaveProperty("prompt_cache_key");
+  });
+
+  it("omits an unset narration output cap", async () => {
+    const stream = vi
+      .fn()
+      .mockReturnValue(fakeStream(["Ash crown"], narrationResponse("Ash crown")));
+
+    await createAuditedNarrationReplay(stableClient({ stream }), {
+      audit: () => ({ accepted: true }),
+      input: "safe POV context",
+      instructions: "Narrate.",
+      model: "gpt-5.6-sol",
+      policy: { budget: new ChapterCostBudget(null), maxRetries: 0 },
+      reasoningEffort: "high",
+    });
+
+    expect(stream.mock.calls[0]?.[0]).not.toHaveProperty("max_output_tokens");
   });
 
   it("rejects an unsafe narration prompt cache key before streaming", async () => {

@@ -13,14 +13,54 @@ export interface NarrativeQualityInput {
   readonly title: string;
 }
 
+export interface TenChapterQualityPlan {
+  readonly arcNumber: number;
+  readonly beats: {
+    readonly characterTurn: boolean;
+    readonly consequentialDialogue: boolean;
+    readonly systemConsequence: boolean;
+    readonly systemTradeoff: boolean;
+  };
+  readonly character: string;
+  readonly dialogue: string;
+  readonly novelty: string;
+  readonly position: number;
+  readonly sceneShape: string;
+  readonly system: string;
+  readonly targets: {
+    readonly characterTurns: 4;
+    readonly consequentialDialogueChapters: 6;
+    readonly distinctFourWordOpenings: 7;
+    readonly systemConsequenceChapters: 4;
+    readonly systemTradeoffChapters: 2;
+    readonly uniqueTitles: 8;
+  };
+}
+
 const DIALOGUE_HISTORY_WINDOW = 20;
 const OPENING_WORD_WINDOW = 3;
 const OPENING_TEMPLATE_WORDS = 8;
 const MIN_DIALOGUE_WORDS = 20;
 const MIN_DIALOGUE_RATIO = 0.025;
 const MIN_DIALOGUE_TURNS = 2;
+const DIALOGUE_BEAT_POSITIONS = new Set([1, 2, 4, 6, 8, 10]);
+const SYSTEM_CONSEQUENCE_POSITIONS = new Set([1, 3, 6, 9]);
+const SYSTEM_TRADEOFF_POSITIONS = new Set([3, 6, 9]);
+const CHARACTER_TURN_POSITIONS = new Set([1, 4, 7, 10]);
+const SCENE_SHAPES = [
+  "forced commitment",
+  "discovery under interpersonal obstruction",
+  "System constraint test",
+  "relationship confrontation",
+  "tactical complication",
+  "tradeoff under time pressure",
+  "costly reversal",
+  "converging pursuit",
+  "sacrifice before payoff",
+  "earned payoff opening a stronger problem",
+] as const;
 const CHARACTER_BEAT_PATTERN =
-  /\b(?:admit(?:ted|s)?|chose|confess(?:ed|es)?|decid(?:e|ed|es)|doubt(?:ed|s)?|fear(?:ed|s)?|forgav(?:e|en)|promise(?:d|s)?|refus(?:e|ed|es)|regret(?:ted|s)?|trust(?:ed|s)?|want(?:ed|s)?|would not|could not)\b/iu;
+  /\b(?:accept(?:ed|s)?|admit(?:ted|s)?|chose|confess(?:ed|es)?|decid(?:e|ed|es)|doubt(?:ed|s)?|fear(?:ed|s)?|flinch(?:ed|es)?|forgav(?:e|en)|hesitat(?:e|ed|es)|refus(?:e|ed|es)|regret(?:ted|s)?|relent(?:ed|s)?|trust(?:ed|s)?|want(?:ed|s)?|would not|could not)\b/iu;
 const SYSTEM_NOTICE_PATTERN =
   /(?:\[(?=[^\]\n]{2,160}\])(?=[^\]\n]*\b(?:System|XP|Experience|Level|Skill|Stat|Quest|Class|Title|Status|Health|Mana)\b)[^\]\n]+\]|\b(?:the\s+)?System\s+(?:alert|announc(?:ed|es)|award(?:ed|s)|chimed|confirm(?:ed|s)|declar(?:ed|es)|display(?:ed|s)|flash(?:ed|es)|grant(?:ed|s)|mark(?:ed|s)|message|notice|notif(?:ied|ies)|panel|record(?:ed|s)|register(?:ed|s)|report(?:ed|s)|reveal(?:ed|s)|update(?:d|s)|window)\b)/iu;
 const TITLE_ACTION_VERBS = new Set([
@@ -51,6 +91,57 @@ const TITLE_ACTION_VERBS = new Set([
   "survive",
   "trace",
 ]);
+
+export function buildTenChapterQualityPlan(
+  chapter: number,
+  dialoguePossible: boolean,
+): TenChapterQualityPlan {
+  if (!Number.isSafeInteger(chapter) || chapter < 1) {
+    throw new RangeError("Chapter must be a positive safe integer");
+  }
+  const position = ((chapter - 1) % 10) + 1;
+  const consequentialDialogue = DIALOGUE_BEAT_POSITIONS.has(position);
+  const characterTurn = CHARACTER_TURN_POSITIONS.has(position);
+  const systemConsequence = SYSTEM_CONSEQUENCE_POSITIONS.has(position);
+  const systemTradeoff = SYSTEM_TRADEOFF_POSITIONS.has(position);
+  return {
+    arcNumber: Math.ceil(chapter / 10),
+    beats: {
+      characterTurn,
+      consequentialDialogue,
+      systemConsequence,
+      systemTradeoff,
+    },
+    character: characterTurn
+      ? "Use supplied beliefs, goals, plan, relationships, current effects, and prior behavior for a visible turn. Never invent durable character canon."
+      : "Keep behavior consistent with supplied character anchors and prior choices.",
+    dialogue:
+      consequentialDialogue && dialoguePossible
+        ? "Use a substantial present-character exchange that changes the current plan, relationship pressure, or conflict."
+        : consequentialDialogue
+          ? "Dialogue is due. Do not invent a remote speaker. Have the viewpoint speak a consequential choice aloud to the canonical System; it may answer only with supplied quest or mechanic language, never personality or a new fact. Route the next choice toward a reachable character."
+          : dialoguePossible
+            ? "Dialogue is optional this chapter; vary the scene shape and never allow three quiet chapters in sequence."
+            : "Do not invent a remote speaker or impossible conversation.",
+    novelty:
+      "Use a new scene construction and a distinct first four words. Never reuse a prior title template or opening phrase.",
+    position,
+    sceneShape: SCENE_SHAPES[position - 1]!,
+    system: systemTradeoff
+      ? "Make supplied System information force a decision with a cost, risk, sacrifice, or foregone option."
+      : systemConsequence
+        ? "Make supplied System information change pressure, capability, risk, or the next objective."
+        : "Keep mechanics scene-relevant; never add a decorative notice solely to mention the System.",
+    targets: {
+      characterTurns: 4,
+      consequentialDialogueChapters: 6,
+      distinctFourWordOpenings: 7,
+      systemConsequenceChapters: 4,
+      systemTradeoffChapters: 2,
+      uniqueTitles: 8,
+    },
+  };
+}
 
 export function validateNarrativeQuality(input: NarrativeQualityInput): ValidationIssue[] {
   const issues = validateTitleNovelty(input.title, input.history);
@@ -97,7 +188,7 @@ export function validateNarrativeQuality(input: NarrativeQualityInput): Validati
     issues.push(
       issue(
         "CHARACTER_BEAT_MISSING",
-        "Chapter must dramatize a choice, vulnerability, changed belief, promise, or relationship movement",
+        "Chapter must dramatize a choice or vulnerable reaction anchored to canonical character state",
         "prose",
       ),
     );

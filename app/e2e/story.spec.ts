@@ -158,8 +158,6 @@ function storyAtChapter(chapter: number, title: string, canContinue = false) {
       ? {
           chapterCount: endChapter - chapter,
           endChapter,
-          maxCostUsd: Math.round((endChapter - chapter) * 0.1 * 1_000_000_000) / 1_000_000_000,
-          maxCostUsdPerChapter: 0.1,
         }
       : null,
     world: { ...baseStory.world, chapter, version: chapter + 1 },
@@ -310,6 +308,9 @@ test("selects one of six characters, locks POV, and enters reader", async ({ pag
   await expect(
     page.getByRole("radiogroup", { name: "Selectable characters" }).getByRole("radio"),
   ).toHaveCount(6);
+  await expect(page.locator(".lock-warning")).toContainText(
+    "Viewpoint stays locked for the full 350-chapter canon. This demo auto-stops at chapter 100.",
+  );
 
   await page.getByRole("radio", { name: /Rowan Ashborn/ }).focus();
   await page.keyboard.press("ArrowDown");
@@ -473,7 +474,7 @@ test("switches stories, updates scoped exports, and clears the chapter cache", a
   expect(lifecycleBody).toEqual({ storyId: "story-b", type: "activate" });
 });
 
-test("starts a new story and rejects it before showing another picker", async ({ page }) => {
+test("starts a new story and exposes remaining stories after rejecting it", async ({ page }) => {
   const firstSummary = storySummary("story-a", "First Path", 1);
   const secondSummary = storySummary("story-b", "Elara's Path", 1, "active", "elara-voss");
   const elaraStory = {
@@ -508,6 +509,17 @@ test("starts a new story and rejects it before showing another picker", async ({
       );
       return;
     }
+    if (body.type === "activate") {
+      await fulfillJson(
+        route,
+        storyEnvelope(
+          baseStory,
+          [firstSummary, { ...secondSummary, status: "rejected" }],
+          "story-a",
+        ),
+      );
+      return;
+    }
     await fulfillJson(
       route,
       storyEnvelope(null, [firstSummary, { ...secondSummary, status: "rejected" }], null),
@@ -533,12 +545,13 @@ test("starts a new story and rejects it before showing another picker", async ({
   await page.getByLabel("Open story library. Current story: Elara's Path").click();
   await page.getByRole("button", { name: "Try another" }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Choose one life." })).toBeVisible();
-  await page.getByRole("button", { name: "Reopen previous draft" }).click();
-  await expect(page.getByLabel("Open story library. Current story: Elara's Path")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Continue a saved story" })).toBeVisible();
+  await page.getByRole("button", { name: "Open First Path · Chapter 1" }).click();
+  await expect(page.getByLabel("Open story library. Current story: First Path")).toBeVisible();
   expect(lifecycleBodies).toEqual([
     { povCharacterId: "elara-voss", type: "create" },
     { storyId: "story-b", type: "reject" },
-    { storyId: "story-b", type: "reopen" },
+    { storyId: "story-a", type: "activate" },
   ]);
 });
 
@@ -641,6 +654,54 @@ test("keeps the active chapter readable while later chapters generate", async ({
   await expect(page.getByRole("button", { name: "Return to chapter 3" })).toBeVisible();
 });
 
+test("keeps the reader pinned and resumes after a mid-batch failure", async ({ page }) => {
+  let chapter = 1;
+  let failedOnce = false;
+  const postedVersions: number[] = [];
+  await page.route("**/api/story", async (route) => {
+    if (route.request().method() === "GET") {
+      await fulfillJson(route, storyEnvelope(storyAtChapter(1, "Embers Remember", true)));
+      return;
+    }
+
+    const body = route.request().postDataJSON() as { expectedWorldVersion: number };
+    postedVersions.push(body.expectedWorldVersion);
+    if (chapter === 2 && !failedOnce) {
+      failedOnce = true;
+      await fulfillJson(route, { error: "OpenAI was temporarily unavailable." }, 503);
+      return;
+    }
+
+    chapter += 1;
+    const nextStory = storyAtChapter(chapter, `Chapter ${chapter}`, chapter === 2);
+    await fulfillJson(
+      route,
+      storyEnvelope(chapter === 3 ? { ...nextStory, continuationPlan: null } : nextStory),
+    );
+  });
+
+  await page.goto("/");
+  await confirmContinuation(page);
+
+  await expect(
+    page.getByText("Generation paused before chapter 3. Saved chapters are safe.", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("OpenAI was temporarily unavailable.", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Embers Remember" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Return to chapter 2" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Retry and resume generation" }).click();
+
+  await expect(page.getByText("Decision ready at chapter 3.", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Embers Remember" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Return to chapter 3" })).toBeVisible();
+  expect(postedVersions).toEqual([2, 3, 3]);
+});
+
 test("rewrites only the latest saved chapter and keeps canon in place", async ({ page }) => {
   let finishRewrite!: () => void;
   const rewriteMayFinish = new Promise<void>((resolve) => {
@@ -693,6 +754,29 @@ test("rewrites only the latest saved chapter and keeps canon in place", async ({
 
   await page.getByRole("button", { name: "Previous saved chapter" }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Older Chapter" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Rewrite latest chapter" })).toHaveCount(0);
+});
+
+test("does not offer rewrite before chapter one commits", async ({ page }) => {
+  const zeroChapterStory = {
+    ...baseStory,
+    chapterHistory: [],
+    world: { ...baseStory.world, chapter: 0, version: 1 },
+  };
+  await page.route("**/api/story", async (route) => {
+    await fulfillJson(
+      route,
+      storyEnvelope(
+        zeroChapterStory,
+        [storySummary("rowan-story", "Unwritten Path", 0)],
+        "rowan-story",
+      ),
+    );
+  });
+
+  await page.goto("/");
+
+  await expect(page.getByText("Chapter 0 of 100", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Rewrite latest chapter" })).toHaveCount(0);
 });
 
@@ -1005,6 +1089,7 @@ test("reports key readiness without exposing a key", async ({ request }) => {
 
   expect(response.ok()).toBe(true);
   expect(body.maxBackgroundAgents).toBe(3);
+  expect(body).not.toHaveProperty("maxCostUsdPerChapter");
   expect(text).not.toContain("OPENAI_API_KEY");
   expect(text).not.toMatch(/sk-[A-Za-z0-9_-]{20,}/u);
 });

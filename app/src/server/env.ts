@@ -10,7 +10,6 @@ let loaded = false;
 export interface ServerEnvironment {
   readonly openAiApiKey: string | undefined;
   readonly maxBackgroundAgents: number;
-  readonly maxCostUsdPerChapter: number;
   readonly nativeMultiAgent: boolean;
 }
 
@@ -23,12 +22,6 @@ export function getServerEnvironment(): ServerEnvironment {
   return {
     openAiApiKey: process.env.OPENAI_API_KEY,
     maxBackgroundAgents: parseBoundedNumber(process.env.OPENAI_MAX_BACKGROUND_AGENTS, 3, 0, 3),
-    maxCostUsdPerChapter: parseBoundedNumber(
-      process.env.OPENAI_MAX_COST_USD_PER_CHAPTER,
-      0.2,
-      0.01,
-      3,
-    ),
     nativeMultiAgent: process.env.OPENAI_NATIVE_MULTI_AGENT === "true",
   };
 }

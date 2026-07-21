@@ -48,7 +48,7 @@ async function initializeRuntime(): Promise<StoryRuntime> {
     serviceOptions: (story) => ({
       enforceNarrativeQuality: true,
       maxBackgroundAgents: environment.maxBackgroundAgents,
-      maxCostUsdPerChapter: environment.maxCostUsdPerChapter,
+      maxCostUsdPerChapter: null,
       modelConfig: REVIEW_STORY_MODELS,
       nativeMultiAgent: environment.nativeMultiAgent,
       promptCacheKey: storyPromptCacheKey(story.id),

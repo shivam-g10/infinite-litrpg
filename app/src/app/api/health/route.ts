@@ -8,7 +8,6 @@ export function GET() {
   return Response.json({
     apiKeyConfigured: Boolean(environment.openAiApiKey?.trim()),
     maxBackgroundAgents: environment.maxBackgroundAgents,
-    maxCostUsdPerChapter: environment.maxCostUsdPerChapter,
     nativeMultiAgent: environment.nativeMultiAgent,
   });
 }

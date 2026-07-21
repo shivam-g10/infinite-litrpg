@@ -4,10 +4,12 @@ import {
   RUNTIME_SCHEMA_VERSION,
   buildChapterChoiceOptions,
   buildPovContext,
+  buildTenChapterQualityPlan,
   getClockPolicy,
   type CharacterState,
   type Choice,
   type PlayerAction,
+  type PersistedTraceEnvelope,
   type WorldDelta,
   type WorldState,
 } from "@infinite-litrpg/shared";
@@ -41,16 +43,20 @@ export function selectBackgroundActors(state: WorldState): CharacterState[] {
 export function buildLunaAgentInputs(
   state: WorldState,
   actors: readonly CharacterState[],
+  history: readonly BackgroundStoryHistoryEntry[] = [],
 ): LunaAgentInput[] {
+  assertCompleteBackgroundHistory(state, history);
   return actors.map((actor) => ({
     actorId: actor.id,
     instructions: [
       `Ashen Crown ${actor.id}. Return BackgroundIntent.`,
       "Intent only. Never mutate canon. Use only supplied facts.",
+      "povSafeChapterHistory is ordered memory, not omniscience. Continue from the actor's own intent results, known events, learned facts, and canonical changes. Empty fields license no inference. Never reconstruct selected-viewpoint prose or hidden facts.",
       'Output={"a":{"t":type,"v":[args]},"g":goal,"e":expectedEffect,"r":{"f":factIds,"i":itemIds,"s":skillIds}}. goal/expectedEffect <=12 words. Shortest JSON.',
       "action args order: move dest; use_item item,qty,target; use_skill skill,target; investigate subject; interact target,approach; defend target; rally faction,location; wait none.",
       JSON.stringify({
         legalActionTargets: legalActionTargets(state, actor.id),
+        povSafeChapterHistory: compactPovSafeChapterHistory(state, actor.id, history),
         world: compactPublicWorldContext(state),
         viewpoint: compactCompletePovContext(state, actor.id),
       }),
@@ -115,11 +121,19 @@ export interface StoryHistoryEntry {
   readonly title: string;
 }
 
+export interface BackgroundStoryHistoryEntry {
+  readonly chapter: number;
+  readonly delta: PersistedTraceEnvelope["acceptedDelta"];
+  readonly intents: PersistedTraceEnvelope["intents"];
+}
+
 export function buildChapterFramePrompt(
   state: WorldState,
   history: readonly StoryHistoryEntry[] = [],
 ): string {
   if (state.lockedPovId === null) throw new Error("POV must be locked");
+  const presentCharacters = presentCharactersForPov(state, state.lockedPovId);
+  const options = buildChapterChoiceOptions(state);
   return JSON.stringify({
     ...(history.length > 0
       ? {
@@ -129,9 +143,16 @@ export function buildChapterFramePrompt(
         }
       : {}),
     optionsByIdAsDescription: Object.fromEntries(
-      buildChapterChoiceOptions(state).map(({ description, id }) => [id, description]),
+      options.map(({ description, id }) => [id, description]),
+    ),
+    optionActionsById: Object.fromEntries(options.map(({ action, id }) => [id, action])),
+    serialArc: serialArcGuide(Math.max(1, state.chapter)),
+    tenChapterQualityPlan: buildTenChapterQualityPlan(
+      Math.max(1, state.chapter),
+      presentCharacters.length > 0,
     ),
     terminal: state.terminal,
+    presentCharacters,
     viewpoint: compactCompletePovContext(state, state.lockedPovId),
     world: compactPublicWorldContext(state),
   });
@@ -146,6 +167,7 @@ export function buildNarrationPrompt(
 ): string {
   if (prospective.lockedPovId === null) throw new Error("POV must be locked");
   const povId = prospective.lockedPovId;
+  const presentCharacters = presentCharactersForPov(prospective, povId);
   const movement = narrationMovement(before, prospective, delta, povId);
   const exhaustiveWhitelist = movement
     ? "afterCanon, visibleEvents, currentEffects, movement, and world"
@@ -155,9 +177,11 @@ export function buildNarrationPrompt(
     afterCanon: compactPovContext(prospective, povId, currentEventIds(delta)),
     beforeValues: beforeTurnEffectValues(before, delta, povId),
     currentEffects: canonicalEffectsForPov(delta, povId),
+    characterAnchors: characterTurnAnchors(prospective, povId),
     movement,
+    presentCharacters,
     rules: [
-      "No viewpoint action beyond playerAction and currentEffects; a background intent is never a viewpoint action.",
+      "Use non-canonical scene craft for gestures, sensory detail, moment-to-moment movement, natural speech, reactions, and failed tactical beats consistent with canon. No consequential viewpoint action beyond playerAction and currentEffects; a background intent is never a viewpoint action.",
       "No unlisted skill or item use, resource or inventory change, clue, discovery, reward, injury, relationship change, or new named entity. Supplied names may be recalled, not acted on unless an effect.",
       "Remote characters act only in visibleEvents. Participants and observers witness only. Plans and goals permit intention only, never contact, delivery, awareness, response, or effect. A move permits arrival only, never notice by others. Another character event permits only its summary; any result requires afterCanon.allowedPovFactsByIdAsCertaintyClaim.",
       "No time beyond calendar. No durable fact beyond the whitelist. Sensory texture adds no canon. Never combine identity, threat, location, plan, belief, goal, history, names, or themes into an unlisted relationship, cause, mechanism, or memory.",
@@ -167,7 +191,12 @@ export function buildNarrationPrompt(
           ]
         : []),
     ],
-    instruction: `Write only complete close-third chapter prose, 900 to 925 words. Never stop before 900; stop before 950. Valid range is 900 to 1300. Dramatize exactly playerAction and currentEffects. currentEffects and visibleEvents happen now; afterCanon includes their results; beforeValues are prior and must be compared for a new change. Show every supplied LitRPG change as a concise in-world System notice. Treat world.systemQuest as the named current System quest, but never complete it unless currentEffects says so. ${exhaustiveWhitelist} are the exhaustive whitelist. Every world field is public canon and may be restated or paraphrased. POV-private afterCanon may appear internally in close third; reader access is not an in-world disclosure, but never reveal it to another character without an allowed currentEffects knowledge mutation or visibleEvent. Use storyHistory as exact continuity: advance rather than recap it, preserve established voices, and never repeat a prior opening, title pattern, scene structure, or paragraph. Include a consequential spoken exchange when another character is present; after two quiet chapters, use meaningful speech, memory, or a System exchange even in a solo scene. Give the viewpoint a dramatized choice, vulnerability, changed belief, promise, or relationship movement. End with a concrete consequence that changes the next scene. Avoid character-sheet recap or repeated identity exposition; mention allowed identity, stats, skills, and inventory only when scene-relevant. Any relationship between people, threats, places, events, or history requires one exact whitelist field. Never infer causes, mechanisms, relationships, consequences, or remembered history from identities, plans, beliefs, goals, shared terms, or facts. Build depth only with immediate sensory texture, supplied beliefs, goals, facts, and exact storyHistory at face value. Append no choices or notes.`,
+    serialArc: serialArcGuide(delta.clock.toChapter),
+    tenChapterQualityPlan: buildTenChapterQualityPlan(
+      delta.clock.toChapter,
+      presentCharacters.length > 0,
+    ),
+    instruction: `Write only a complete scene in close third at the natural length needed to dramatize playerAction and currentEffects. The scene needs a clear immediate goal, resistance, a meaningful choice, a consequence, and a forward hook. Follow serialArc and tenChapterQualityPlan: advance their phase and scheduled beats instead of repeating the last scene. currentEffects and visibleEvents happen now; afterCanon includes their results; beforeValues are prior and must be compared for a new change. Make the LitRPG System active rather than decorative: show supplied quest, stat, resource, skill, class, or progression information only when it creates pressure, a tradeoff, or a decision. Show every supplied mechanical change as a concise in-world System notice. Treat world.systemQuest as the named current System quest, but never complete it unless currentEffects says so. ${exhaustiveWhitelist} are the exhaustive whitelist. Every world field is public canon and may be restated or paraphrased. POV-private afterCanon may appear internally in close third; reader access is not an in-world disclosure, but never reveal it to another character without an allowed currentEffects knowledge mutation or visibleEvent. Use storyHistory as exact continuity: advance rather than recap it, preserve established voices, and never repeat a prior opening, title pattern, scene structure, or paragraph. Follow tenChapterQualityPlan.beats.consequentialDialogue. When it is true and presentCharacters is nonempty, use distinct present-character voices in an exchange that changes the current plan, supplied relationship pressure, or conflict. When it is true and presentCharacters is empty, never invent a remote speaker: have the viewpoint speak a consequential choice aloud to the canonical System; the System may answer only with exact supplied quest or mechanic language, never personality or a new fact. Make nextChoices route toward a reachable character. When it is false, dialogue is optional and the scene shape must still vary. Ground every character turn in characterAnchors and earlier behavior in storyHistory. Show a choice, hesitation, admission, refusal, tactical adjustment, or reaction that tests or confirms supplied beliefs, goals, plan, relationships, or currentEffects. Do not invent a durable belief, promise, relationship change, memory, or later behavior. A durable change may appear only when currentEffects or afterCanon supplies it; otherwise the turn is momentary behavior consistent with canon. End after a concrete consequence and stronger next problem. Avoid character-sheet recap or repeated identity exposition; mention allowed identity, stats, skills, and inventory only when scene-relevant. Use non-canonical scene craft for gestures, sensory detail, moment-to-moment movement, tactical failed attempts, natural dialogue, and reactions consistent with canon. Non-canonical scene craft cannot add a durable fact, relationship, state, resource, capability, discovery, named entity, or consequence. Any relationship between people, threats, places, events, or history requires one exact whitelist field. Never infer causes, mechanisms, relationships, consequences, or remembered history from identities, plans, beliefs, goals, shared terms, or facts. Append no choices or notes.`,
     playerAction: compactPlayerAction(playerAction),
     visibleEvents: visibleEventsForPov(delta, povId),
     world: localWorldContext(before, prospective, povId, delta),
@@ -210,69 +239,6 @@ function narrationMovement(
   };
 }
 
-export const MAX_NARRATION_RECOVERY_PROMPT_BYTES = 1_200;
-export const MIN_NARRATION_RECOVERY_DRAFT_WORDS = 750;
-export const MAX_NARRATION_RECOVERY_DRAFT_WORDS = 899;
-export const MAX_NARRATION_RECOVERY_MERGED_WORDS = 949;
-export const NARRATION_RECOVERY_INSTRUCTIONS = "Return continuation only.";
-
-export interface NarrationRecoveryPrompt {
-  readonly acceptanceMaximumAdditionalWords: number;
-  readonly input: string;
-  readonly instructions: string;
-  readonly maxOutputTokens: number;
-  readonly maximumAdditionalWords: number;
-  readonly minimumAdditionalWords: number;
-}
-
-export function buildNarrationRecoveryPrompt(prose: string): NarrationRecoveryPrompt {
-  const words = prose.trim().split(/\s+/u).filter(Boolean);
-  if (
-    words.length < MIN_NARRATION_RECOVERY_DRAFT_WORDS ||
-    words.length > MAX_NARRATION_RECOVERY_DRAFT_WORDS
-  ) {
-    throw new Error(
-      `Narration recovery requires a draft between ${MIN_NARRATION_RECOVERY_DRAFT_WORDS} and ${MAX_NARRATION_RECOVERY_DRAFT_WORDS} words`,
-    );
-  }
-  const minimumAdditionalWords = 900 - words.length;
-  const maximumAdditionalWords = 925 - words.length;
-  const acceptanceMaximumAdditionalWords = MAX_NARRATION_RECOVERY_MERGED_WORDS - words.length;
-  const maxOutputTokens = Math.min(230, maximumAdditionalWords * 2);
-  let excerptWords = words.slice(-120);
-  const serialize = () =>
-    JSON.stringify({
-      existingEnding: excerptWords.join(" "),
-      instruction:
-        "Return only a seamless continuation. Add no new action, event, entity, dialogue, mechanic, fact, relationship, cause, discovery, decision, time passage, or state change. Reuse only established details from existingEnding. No title, heading, note, or choices.",
-      maximumAdditionalWords,
-      minimumAdditionalWords,
-    });
-  let input = serialize();
-  while (
-    recoveryPromptBytes(input) > MAX_NARRATION_RECOVERY_PROMPT_BYTES &&
-    excerptWords.length > 1
-  ) {
-    excerptWords = excerptWords.slice(1);
-    input = serialize();
-  }
-  if (recoveryPromptBytes(input) > MAX_NARRATION_RECOVERY_PROMPT_BYTES) {
-    throw new Error("Narration recovery prompt exceeds its byte cap");
-  }
-  return {
-    acceptanceMaximumAdditionalWords,
-    input,
-    instructions: NARRATION_RECOVERY_INSTRUCTIONS,
-    maxOutputTokens,
-    maximumAdditionalWords,
-    minimumAdditionalWords,
-  };
-}
-
-function recoveryPromptBytes(input: string): number {
-  return new TextEncoder().encode(`${NARRATION_RECOVERY_INSTRUCTIONS}\n${input}\n`).byteLength;
-}
-
 export function buildAuditPrompt(
   before: WorldState,
   prospective: WorldState,
@@ -288,12 +254,14 @@ export function buildAuditPrompt(
 ): string {
   if (prospective.lockedPovId === null) throw new Error("POV must be locked");
   const povId = prospective.lockedPovId;
+  const presentCharacters = presentCharactersForPov(prospective, povId);
   const allowedFactIds = new Set(buildPovContext(prospective, povId).factIds);
   return JSON.stringify({
     ...(history.length > 0 ? { storyHistory: compactStoryHistory(history) } : {}),
     afterCanon: compactPovContext(prospective, povId, currentEventIds(delta)),
     beforeValues: beforeTurnEffectValues(before, delta, povId),
     currentEffects: canonicalEffectsForPov(delta, povId),
+    characterAnchors: characterTurnAnchors(prospective, povId),
     forbiddenFacts: Object.fromEntries(
       prospective.facts
         .filter(({ id }) => !allowedFactIds.has(id))
@@ -301,8 +269,14 @@ export function buildAuditPrompt(
     ),
     forbiddenRemote: compactForbiddenRemoteEffects(delta, povId),
     frame: { terminal: chapterFrame.terminal, title: chapterFrame.title },
+    presentCharacters,
+    serialArc: serialArcGuide(delta.clock.toChapter),
+    tenChapterQualityPlan: buildTenChapterQualityPlan(
+      delta.clock.toChapter,
+      presentCharacters.length > 0,
+    ),
     instruction:
-      "Audit frame, nextChoices, prose, and storyHistory; do not alter canon. nextChoices tuples=[action,description,milestoneId]. scores/evidence order: choiceFulfillment, characterAutonomy, povSafety, litrpgMechanics, continuity, arcProgress, prose. Scores 0-2. For each score 0, copy an exact prose substring into matching evidence. Set every positive evidence string to pass. Any 0 or leak rejects. choiceFulfillment judges only playerAction; nextChoices are future and may be absent. characterAutonomy is 0 when the viewpoint has no dramatized choice, vulnerability, changed belief, promise, or relationship movement. litrpgMechanics is 0 when a supplied mechanical change lacks an explicit in-world System notice. arcProgress is 0 when the chapter does not move a concrete objective, thread, relationship, knowledge state, threat, location, resource, or capability beyond storyHistory. prose is 0 for an empty consequential dialogue beat when one is possible, a repeated opening or title pattern, recap, scene-loop, or copied language from storyHistory. currentEffects/visibleEvents happen now; afterCanon is the result; beforeValues are prior; a listed effect is not pre-existing. Allowed canon is exactly afterCanon, visibleEvents, currentEffects, world, and storyHistory. afterCanon is selected POV knowledge, including private facts, identity, role, beliefs, goals, and plan; internal close-third reader access is not a leak. Another character learning it requires allowed currentEffects or visibleEvents; forbiddenRemote never licenses narration. Allowed fields take precedence: never score povSafety 0 for an exact restatement or faithful paraphrase of one allowed field. World fields may be restated or paraphrased despite forbiddenFacts overlap; reject only exclusive details. Never combine fields to invent cause, mechanism, relationship, motive, thought, or history. A plan or goal permits intent only; participants/observers witness only. Listed mutations may be System notices. forbiddenFacts and forbiddenRemote are detection-only. For content exclusive to forbiddenFacts, set povSafety to 0 and add leakEvidence with its factId and an exact proseQuote. Every leakEvidence factId must come from forbiddenFacts. Score unsupported synthesis under continuity. continuity 0 only for contradiction or unsupported durable canon, not sensory texture.",
+      "Audit frame, nextChoices, prose, storyHistory, serialArc, and tenChapterQualityPlan; do not alter canon. Reject an incomplete or abruptly cut-off scene. nextChoices tuples=[action,description,milestoneId]. scores/evidence order: choiceFulfillment, characterAutonomy, povSafety, litrpgMechanics, continuity, arcProgress, prose. Scores 0-2. For each score 0, copy an exact prose substring into matching evidence. Set every positive evidence string to pass. Any 0 or leak rejects. choiceFulfillment judges only playerAction; nextChoices are future and may be absent. characterAutonomy is 0 when the viewpoint has no dramatized choice or vulnerable reaction anchored to characterAnchors, currentEffects, or prior behavior. Do not invent a durable belief, promise, relationship change, memory, or later behavior, and do not demand or approve one unless currentEffects supplies it. When tenChapterQualityPlan.beats.consequentialDialogue is true and presentCharacters is nonempty, characterAutonomy is 0 if their exchange does not change the current plan, supplied relationship pressure, or conflict. When the dialogue beat is due and presentCharacters is empty, reject an invented remote speaker; accept only the viewpoint speaking a consequential choice aloud to the canonical System and a System answer copied from supplied quest or mechanic language. Reject System personality or a new fact. litrpgMechanics is 0 when a supplied mechanical change lacks an explicit in-world System notice, a scheduled System consequence changes nothing, or a scheduled System tradeoff lacks both a decision and cost, risk, sacrifice, or foregone option. arcProgress is 0 when the scene misses serialArc or tenChapterQualityPlan requirements or fails to move a concrete objective, thread, relationship, knowledge state, threat, location, resource, or capability beyond storyHistory. prose is 0 for a missing scheduled dialogue beat, repeated opening, title pattern or scene construction, recap, scene-loop, copied language from storyHistory, missing consequence, or missing forward hook. currentEffects/visibleEvents happen now; afterCanon is the result; beforeValues are prior; a listed effect is not pre-existing. Allowed canon is exactly afterCanon, visibleEvents, currentEffects, world, and storyHistory. afterCanon is selected POV knowledge, including private facts, identity, role, beliefs, goals, and plan; internal close-third reader access is not a leak. Another character learning it requires allowed currentEffects or visibleEvents; forbiddenRemote never licenses narration. Allowed fields take precedence: never score povSafety 0 for an exact restatement or faithful paraphrase of one allowed field. World fields may be restated or paraphrased despite forbiddenFacts overlap; reject only exclusive details. Never combine fields to invent cause, mechanism, relationship, motive, thought, or history. A plan or goal permits intent only; participants/observers witness only. Listed mutations may be System notices. Non-canonical scene craft such as gestures, sensory detail, moment-to-moment movement, natural speech, reactions, and failed tactical beats is allowed when it adds no durable canon. forbiddenFacts and forbiddenRemote are detection-only. For content exclusive to forbiddenFacts, set povSafety to 0 and add leakEvidence with its factId and an exact proseQuote. Every leakEvidence factId must come from forbiddenFacts. Score unsupported synthesis under continuity. continuity 0 only for contradiction or unsupported durable canon, not scene craft.",
     playerAction: compactPlayerAction(playerAction),
     prose,
     schemaVersion: RUNTIME_SCHEMA_VERSION,
@@ -314,6 +288,190 @@ export function buildAuditPrompt(
     visibleEvents: visibleEventsForPov(delta, povId),
     world: localWorldContext(before, prospective, povId, delta),
   });
+}
+
+function serialArcGuide(chapter: number) {
+  const position = ((Math.max(1, chapter) - 1) % 10) + 1;
+  const arcNumber = Math.ceil(Math.max(1, chapter) / 10);
+  if (position === 1) {
+    return {
+      arcNumber,
+      phase: "commitment",
+      position,
+      requirements: [
+        "Apply immediate System pressure.",
+        "Expose the viewpoint's present want or flaw through a choice.",
+        "Commit the viewpoint to a concrete short-term problem.",
+      ],
+    };
+  }
+  if (position <= 3) {
+    return {
+      arcNumber,
+      phase: "setup",
+      position,
+      requirements: [
+        "Deepen the problem instead of restating it.",
+        "Test a supplied relationship or System tradeoff that can pay off later.",
+        "Change the next objective.",
+      ],
+    };
+  }
+  if (position <= 7) {
+    return {
+      arcNumber,
+      phase: "escalation",
+      position,
+      requirements: [
+        "Increase cost, danger, or relationship friction.",
+        "Force a consequential choice using current System information.",
+        "Deliver a reversal or close one route forward.",
+      ],
+    };
+  }
+  if (position <= 9) {
+    return {
+      arcNumber,
+      phase: "convergence",
+      position,
+      requirements: [
+        "Bring prior choices and relationship pressure into the same conflict.",
+        "Spend or risk something accumulated earlier.",
+        "Prepare a specific payoff without delaying the scene's own consequence.",
+      ],
+    };
+  }
+  return {
+    arcNumber,
+    phase: "payoff",
+    position,
+    requirements: [
+      "Pay off a setup from this ten-chapter arc.",
+      "Materially change situation, relationship, capability, knowledge, objective, or threat.",
+      "End on a stronger next problem rather than resetting the premise.",
+    ],
+  };
+}
+
+function presentCharactersForPov(state: WorldState, povId: string) {
+  const pov = state.characters.find(({ id }) => id === povId);
+  if (!pov) return [];
+  return state.characters
+    .filter(
+      ({ id, locationId, status }) =>
+        id !== povId && locationId === pov.locationId && status !== "dead" && status !== "terminal",
+    )
+    .map(({ id, name, publicRole }) => {
+      const relationship = pov.relationships.find(({ characterId }) => characterId === id);
+      return {
+        id,
+        name,
+        publicRole,
+        relationship: relationship
+          ? { label: relationship.label, score: relationship.score }
+          : null,
+      };
+    });
+}
+
+function assertCompleteBackgroundHistory(
+  state: WorldState,
+  history: readonly BackgroundStoryHistoryEntry[],
+): void {
+  if (history.length !== state.chapter) {
+    throw new Error("Background chapter memory must cover every prior chapter");
+  }
+  for (const [index, entry] of history.entries()) {
+    if (entry.chapter !== index + 1 || entry.delta.clock.toChapter !== entry.chapter) {
+      throw new Error("Background chapter memory must be contiguous and match canonical deltas");
+    }
+  }
+}
+
+function compactPovSafeChapterHistory(
+  state: WorldState,
+  povId: string,
+  history: readonly BackgroundStoryHistoryEntry[],
+) {
+  const context = buildPovContext(state, povId);
+  const knownFacts = new Map(context.facts.map((fact) => [fact.id, fact] as const));
+  return history.map(({ chapter, delta, intents }) => {
+    const ownIntent = intents.find(({ actorId }) => actorId === povId);
+    const rejection = ownIntent
+      ? delta.rejectedIntents.find(({ intentId }) => intentId === ownIntent.id)
+      : undefined;
+    return {
+      actorStateChanges: delta.stateMutations.filter((mutation) =>
+        stateMutationVisibleToActor(mutation, povId),
+      ),
+      chapter,
+      learnedFacts: context.facts
+        .filter(({ discoveredChapter }) => discoveredChapter === chapter)
+        .map(({ certainty, claim, id, source }) => [id, certainty, claim, source]),
+      learnedFactChanges: delta.knowledgeMutations
+        .filter(({ characterId }) => characterId === povId)
+        .map((mutation) => {
+          if (mutation.type === "discover_fact") {
+            return [
+              mutation.fact.id,
+              mutation.fact.certainty,
+              mutation.fact.claim,
+              mutation.fact.source,
+            ];
+          }
+          const known = knownFacts.get(mutation.factId);
+          return [mutation.factId, mutation.certainty, known?.claim ?? null, mutation.source];
+        }),
+      observedEvents: delta.events
+        .filter((event) => eventVisibleToPov(event, povId))
+        .map(({ id, kind, locationId, summary }) => [id, kind, locationId, summary]),
+      ownIntent: ownIntent
+        ? {
+            action: ownIntent.action,
+            expectedEffect: ownIntent.expectedEffect,
+            goal: ownIntent.goal,
+            prerequisites: ownIntent.prerequisites,
+            ...(rejection
+              ? {
+                  rejection: { code: rejection.code, reason: rejection.reason },
+                  result: "rejected" as const,
+                }
+              : {
+                  result: delta.acceptedIntentIds.includes(ownIntent.id)
+                    ? ("accepted" as const)
+                    : ("not-applied" as const),
+                }),
+          }
+        : null,
+    };
+  });
+}
+
+function stateMutationVisibleToActor(
+  mutation: PersistedTraceEnvelope["acceptedDelta"]["stateMutations"][number],
+  actorId: string,
+): boolean {
+  if ("characterId" in mutation) return mutation.characterId === actorId;
+  return (
+    mutation.type === "complete_milestone" ||
+    mutation.type === "end_story" ||
+    mutation.type === "set_threat"
+  );
+}
+
+function characterTurnAnchors(state: WorldState, povId: string) {
+  const character = state.characters.find(({ id }) => id === povId);
+  if (!character) throw new Error("POV character is missing");
+  return {
+    beliefs: character.beliefs,
+    goals: character.goals,
+    plan: character.plan,
+    relationships: character.relationships.map(({ characterId, label, score }) => ({
+      characterId,
+      label,
+      score,
+    })),
+  };
 }
 
 function compactStoryHistory(history: readonly StoryHistoryEntry[]) {

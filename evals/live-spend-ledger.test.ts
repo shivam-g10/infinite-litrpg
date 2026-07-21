@@ -78,6 +78,25 @@ describe("durable live spend ledger", () => {
     ledger.close();
   });
 
+  it("records unbounded telemetry without enforcing the historical ledger ceiling", () => {
+    const filename = temporaryLedgerPath();
+    const ledger = new LiveSpendLedger(filename, 0.01);
+    const runId = randomUUID();
+    ledger.acquireRun(runId);
+    const hooks = ledger.createCostHooks(runId, { enforceLimit: false });
+
+    hooks.reserve(reservation("unbounded-reservation", 0.25));
+    hooks.settle({ actualCostUsd: 0.2, id: "unbounded-reservation" });
+
+    expect(ledger.snapshot()).toMatchObject({
+      activeReservationCount: 0,
+      knownReservationCostUsd: 0.2,
+      totalExposureUsd: 0.2,
+    });
+    ledger.releaseRun(runId);
+    ledger.close();
+  });
+
   it("inspects and conservatively releases an isolated interrupted run", () => {
     const filename = temporaryLedgerPath();
     const ledger = new LiveSpendLedger(filename, 2.544);

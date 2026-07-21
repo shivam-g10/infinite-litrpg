@@ -564,8 +564,12 @@ export class LiveSpendLedger {
     transaction.immediate();
   }
 
-  createCostHooks(runId: string): RuntimeCostHooks {
+  createCostHooks(
+    runId: string,
+    options: { readonly enforceLimit?: boolean } = {},
+  ): RuntimeCostHooks {
     validateRunId(runId);
+    const enforceLimit = options.enforceLimit ?? true;
     return {
       reserve: (reservation) => {
         const maximumNano = usdToNano(reservation.maximumCostUsd, "request reservation");
@@ -573,7 +577,7 @@ export class LiveSpendLedger {
           this.assertRunOwner(runId);
           const exposureNano = this.totalExposureNano();
           const totalCapNano = this.readMeta().total_cap_nano;
-          if (exposureNano + maximumNano > totalCapNano) {
+          if (enforceLimit && exposureNano + maximumNano > totalCapNano) {
             throw new OpenAIRuntimeError(
               "COST_CAP_EXCEEDED",
               `Global live exposure has $${nanoToUsd(totalCapNano - exposureNano).toFixed(6)} left but request may cost $${reservation.maximumCostUsd.toFixed(6)}`,

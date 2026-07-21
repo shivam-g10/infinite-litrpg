@@ -10,6 +10,7 @@ import {
   buildChapterChoiceOptions,
   buildPovContext,
   validateWorldState,
+  type PersistedTraceEnvelope,
   type PovContext,
   type WorldDelta,
   type WorldState,
@@ -17,16 +18,12 @@ import {
 import { zodTextFormat } from "openai/helpers/zod";
 import { describe, expect, it } from "vitest";
 
-import { estimateMaximumRequestCostUsd } from "../openai";
-
 import {
   buildAuditPrompt,
   buildChapterFramePrompt,
   buildCustomActionPrompt,
   buildLunaAgentInputs,
   buildNarrationPrompt,
-  buildNarrationRecoveryPrompt,
-  MAX_NARRATION_RECOVERY_PROMPT_BYTES,
   selectBackgroundActors,
 } from "./prompts";
 
@@ -34,12 +31,10 @@ const ROWAN_IDENTITY_PROSE = `Rowan knew he was Malachar reincarnated. ${"Ash ".
 
 describe("background actor selection", () => {
   it("versions and losslessly compacts every live agent and frame prompt", () => {
-    expect(PROMPT_VERSION).toBe("1.5.0");
+    expect(PROMPT_VERSION).toBe("1.6.0");
     const backgroundFormat = zodTextFormat(BackgroundIntentCandidateSchema, "background_intent");
     const frameFormat = zodTextFormat(ChapterFrameModelCandidateSchema, "chapter_frame_candidate");
     expect(JSON.stringify(frameFormat)).not.toMatch(/"items":\[/u);
-    let totalBackgroundRequestBytes = 0;
-
     for (const povId of CHARACTER_IDS) {
       const state = seed();
       state.lockedPovId = povId;
@@ -67,10 +62,6 @@ describe("background actor selection", () => {
         );
         expect(input.instructions).toContain("use_item item,qty,target");
         expect(JSON.stringify(backgroundFormat)).not.toMatch(/"items":\[/u);
-        expect(new TextEncoder().encode(input.instructions).byteLength).toBeLessThanOrEqual(4_600);
-        totalBackgroundRequestBytes += new TextEncoder().encode(
-          `${input.instructions}\nUse assigned actor instructions. Intent only.\n${JSON.stringify(backgroundFormat)}`,
-        ).byteLength;
       }
 
       const frameText = buildChapterFramePrompt(state);
@@ -87,9 +78,7 @@ describe("background actor selection", () => {
       expect(frame).not.toHaveProperty("instruction");
       expect(frame).not.toHaveProperty("options");
       expect(frame).not.toHaveProperty("stateVersion");
-      expect(new TextEncoder().encode(frameText).byteLength).toBeLessThanOrEqual(4_220);
     }
-    expect(totalBackgroundRequestBytes).toBeLessThanOrEqual(79_300);
   });
 
   it("selects relevant actors only and never fills empty slots", () => {
@@ -154,7 +143,12 @@ describe("background actor selection", () => {
     expect(JSON.stringify(prompt)).toContain("No durable fact beyond the whitelist");
     expect(JSON.stringify(prompt)).toContain("a background intent is never a viewpoint action");
     expect(prompt.instruction).toContain("the exhaustive whitelist");
-    expect(prompt.instruction).toContain("900 to 925 words");
+    expect(prompt.instruction).toContain("complete scene");
+    expect(prompt.instruction).not.toMatch(/\b\d+\s+(?:to\s+\d+\s+)?words?\b/iu);
+    expect(prompt).toHaveProperty("serialArc.position", 1);
+    expect(prompt).toHaveProperty("serialArc.phase", "commitment");
+    expect(prompt).toHaveProperty("presentCharacters.0.id", "nyra-vale");
+    expect(prompt.instruction).toContain("non-canonical scene craft");
     expect(prompt.instruction).toContain("requires one exact whitelist field");
     expect(JSON.stringify(prompt)).not.toContain("Malachar contained the Void beneath his throne");
     expect(JSON.stringify(prompt)).not.toContain("malachar-contained-the-void");
@@ -655,7 +649,7 @@ describe("background actor selection", () => {
     }
   });
 
-  it("sends every prior POV chapter to frame, narrator, and audit but never background actors", () => {
+  it("sends every prior POV chapter to story agents and POV-safe chapter memory to background actors", () => {
     const state = seed();
     state.lockedPovId = "rowan-ashborn";
     const history = [
@@ -706,53 +700,175 @@ describe("background actor selection", () => {
       expect(prompt).toContain(secondHistory.title);
     }
 
-    const background = buildLunaAgentInputs(state, selectBackgroundActors(state));
+    state.chapter = 2;
+    const firstDelta = emptyDelta(state) as PersistedTraceEnvelope["acceptedDelta"];
+    firstDelta.clock.fromChapter = 0;
+    firstDelta.clock.toChapter = 1;
+    firstDelta.acceptedIntentIds = ["intent-nyra-1"];
+    firstDelta.events = [
+      {
+        id: "event-nyra-witnessed",
+        kind: "warning",
+        locationId: "cinder-village",
+        observerIds: ["nyra-vale"],
+        participantIds: ["rowan-ashborn"],
+        summary: "Nyra saw Rowan refuse the ash road bargain.",
+        visibility: "participants",
+      },
+      {
+        id: "event-rowan-private",
+        kind: "memory",
+        locationId: "cinder-village",
+        observerIds: [],
+        participantIds: ["rowan-ashborn"],
+        summary: "Rowan privately remembered the sealed throne.",
+        visibility: "private",
+      },
+    ];
+    firstDelta.knowledgeMutations = [
+      {
+        characterId: "nyra-vale",
+        fact: {
+          certainty: "certain",
+          claim: "The blue sigil answers to Nyra's class.",
+          discoveredChapter: 1,
+          id: "nyra-blue-sigil-answer",
+          ownerCharacterId: "nyra-vale",
+          source: "System response",
+          visibility: "private",
+        },
+        type: "discover_fact",
+      },
+      {
+        characterId: "rowan-ashborn",
+        fact: {
+          certainty: "certain",
+          claim: "Rowan alone heard the crown name him.",
+          discoveredChapter: 1,
+          id: "rowan-crown-name",
+          ownerCharacterId: "rowan-ashborn",
+          source: "Private System notice",
+          visibility: "private",
+        },
+        type: "discover_fact",
+      },
+    ];
+    firstDelta.stateMutations = [
+      { amount: 25, characterId: "nyra-vale", type: "grant_experience" },
+      { amount: 99, characterId: "rowan-ashborn", type: "grant_experience" },
+      { threat: "The ash rift is widening.", type: "set_threat" },
+    ];
+    const secondDelta = emptyDelta(state) as PersistedTraceEnvelope["acceptedDelta"];
+    secondDelta.clock.fromChapter = 1;
+    secondDelta.clock.toChapter = 2;
+    secondDelta.rejectedIntents = [
+      {
+        code: "PRECONDITION_FAILED",
+        intentId: "intent-nyra-2",
+        reason: "The sigil stayed sealed.",
+      },
+    ];
+    const backgroundHistory = [
+      {
+        chapter: 1,
+        delta: firstDelta,
+        intents: [backgroundIntent("intent-nyra-1", "nyra-vale", "Read the blue sigil")],
+      },
+      {
+        chapter: 2,
+        delta: secondDelta,
+        intents: [
+          backgroundIntent("intent-nyra-2", "nyra-vale", "Open the sealed sigil"),
+          backgroundIntent("intent-rowan-2", "rowan-ashborn", "Hide the crown's answer"),
+        ],
+      },
+    ] satisfies Parameters<typeof buildLunaAgentInputs>[2];
+    const background = buildLunaAgentInputs(
+      state,
+      selectBackgroundActors(state),
+      backgroundHistory,
+    );
     expect(JSON.stringify(background)).not.toContain(firstHistory.prose);
     expect(JSON.stringify(background)).not.toContain(secondHistory.prose);
+    const backgroundPayload = JSON.parse(
+      background[0]?.instructions.split("\n").at(-1) ?? "null",
+    ) as Record<string, unknown>;
+    expect(backgroundPayload.povSafeChapterHistory).toHaveLength(2);
+    expect(backgroundPayload).toHaveProperty("povSafeChapterHistory.0.chapter", 1);
+    expect(backgroundPayload).toHaveProperty("povSafeChapterHistory.1.chapter", 2);
+    expect(backgroundPayload).toHaveProperty(
+      "povSafeChapterHistory.0.ownIntent.goal",
+      "Read the blue sigil",
+    );
+    expect(backgroundPayload).toHaveProperty(
+      "povSafeChapterHistory.0.ownIntent.result",
+      "accepted",
+    );
+    expect(backgroundPayload).toHaveProperty(
+      "povSafeChapterHistory.1.ownIntent.rejection.reason",
+      "The sigil stayed sealed.",
+    );
+    expect(JSON.stringify(backgroundPayload)).toContain(
+      "Nyra saw Rowan refuse the ash road bargain.",
+    );
+    expect(JSON.stringify(backgroundPayload)).toContain("The blue sigil answers to Nyra's class.");
+    expect(JSON.stringify(backgroundPayload)).toContain('"amount":25');
+    expect(JSON.stringify(backgroundPayload)).toContain("The ash rift is widening.");
+    expect(JSON.stringify(backgroundPayload)).not.toContain("Rowan privately remembered");
+    expect(JSON.stringify(backgroundPayload)).not.toContain("Rowan alone heard");
+    expect(JSON.stringify(backgroundPayload)).not.toContain('"amount":99');
+    expect(JSON.stringify(backgroundPayload)).not.toContain("Hide the crown's answer");
   });
 
-  it("bounds a tail-only 750-word narration recovery request", () => {
-    const prose = Array.from({ length: 750 }, (_, index) => `ember${index}`).join(" ");
-    const recovery = buildNarrationRecoveryPrompt(prose);
-    const requestBytes = new TextEncoder().encode(
-      `${recovery.instructions}\n${recovery.input}\n`,
-    ).byteLength;
+  it("makes the ten-chapter quality schedule explicit without licensing new durable canon", () => {
+    const before = seed();
+    before.lockedPovId = "rowan-ashborn";
+    const prospective = structuredClone(before);
+    prospective.chapter = 1;
+    prospective.version += 1;
+    const delta = emptyDelta(before);
+    const action = {
+      action: { type: "wait" } as const,
+      actorId: "rowan-ashborn",
+      description: "Wait and watch.",
+      milestoneId: null,
+      source: "suggested" as const,
+      stateVersion: before.version,
+    };
+    const narration = JSON.parse(
+      buildNarrationPrompt(before, prospective, action, delta),
+    ) as Record<string, unknown>;
+    const audit = JSON.parse(
+      buildAuditPrompt(
+        before,
+        prospective,
+        action,
+        delta,
+        {
+          choices: buildChapterChoiceOptions(prospective).slice(0, 2),
+          terminal: false,
+          title: "A Crown Under Pressure",
+        },
+        "Candidate prose.",
+      ),
+    ) as Record<string, unknown>;
 
-    expect(recovery.minimumAdditionalWords).toBe(150);
-    expect(recovery.maximumAdditionalWords).toBe(175);
-    expect(recovery.acceptanceMaximumAdditionalWords).toBe(199);
-    expect(recovery.maxOutputTokens).toBe(230);
-    expect(requestBytes).toBeLessThanOrEqual(MAX_NARRATION_RECOVERY_PROMPT_BYTES);
-    expect(
-      estimateMaximumRequestCostUsd("gpt-5.6-luna", requestBytes, recovery.maxOutputTokens, {
-        inputBilling: "uncached",
-      }),
-    ).toBeLessThanOrEqual(0.00355);
-    expect(
-      estimateMaximumRequestCostUsd("gpt-5.6-luna", requestBytes, recovery.maxOutputTokens, {
-        inputBilling: "uncached",
-        serviceTier: "flex",
-      }),
-    ).toBeLessThanOrEqual(0.001546);
-    expect(recovery.input).not.toContain("ember0");
-    expect(recovery.input).toContain("ember749");
-    expect(() => buildNarrationRecoveryPrompt("ember ".repeat(749))).toThrow("750 and 899");
-
-    for (const liveDraftWordCount of [768, 789]) {
-      expect(buildNarrationRecoveryPrompt("ember ".repeat(liveDraftWordCount))).toMatchObject({
-        acceptanceMaximumAdditionalWords: 949 - liveDraftWordCount,
-        minimumAdditionalWords: 900 - liveDraftWordCount,
-      });
+    for (const payload of [narration, audit]) {
+      expect(payload).toHaveProperty("tenChapterQualityPlan.position", 1);
+      expect(payload).toHaveProperty(
+        "tenChapterQualityPlan.targets.consequentialDialogueChapters",
+        6,
+      );
+      expect(payload).toHaveProperty("tenChapterQualityPlan.beats.consequentialDialogue", true);
+      expect(payload).toHaveProperty("characterAnchors.beliefs");
+      expect(payload).toHaveProperty("characterAnchors.goals");
+      expect(payload).toHaveProperty("characterAnchors.plan");
+      expect(payload).toHaveProperty("characterAnchors.relationships");
+      expect(String(payload.instruction)).toContain("Do not invent a durable belief");
+      expect(String(payload.instruction)).not.toContain(
+        "changed belief, promise, or relationship movement that can affect later behavior",
+      );
     }
-
-    const observedGap = buildNarrationRecoveryPrompt("ember ".repeat(850));
-    expect(observedGap.minimumAdditionalWords).toBe(50);
-    expect(observedGap.maximumAdditionalWords).toBe(75);
-    expect(observedGap.acceptanceMaximumAdditionalWords).toBe(99);
-    expect(observedGap.maxOutputTokens).toBe(150);
-    expect(JSON.parse(observedGap.input)).toMatchObject({ maximumAdditionalWords: 75 });
-    expect(91).toBeGreaterThanOrEqual(observedGap.minimumAdditionalWords);
-    expect(91).toBeLessThanOrEqual(observedGap.acceptanceMaximumAdditionalWords);
   });
 });
 
@@ -866,6 +982,20 @@ function emptyDelta(state: WorldState): WorldDelta {
     rejectedIntents: [],
     stateMutations: [],
     surfacedClueFactIds: [],
+  };
+}
+
+function backgroundIntent(id: string, actorId: string, goal: string) {
+  return {
+    action: { type: "wait" } as const,
+    actorId,
+    contractVersion: CONTRACT_VERSION,
+    expectedEffect: "Observe what changes.",
+    goal,
+    id,
+    prerequisites: { requiredFactIds: [], requiredItemIds: [], requiredSkillIds: [] },
+    promptVersion: PROMPT_VERSION,
+    stateVersion: 1,
   };
 }
 
