@@ -81,7 +81,7 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 - [ ] Current prompt native Multi-agent live smoke path green. Sequential Rowan proof is current; native proof predates prompt `1.4.11`.
 - [x] Strict offline review-packet generator rejects partial, false-gate, and mixed-tier reports.
 - [x] Six POV review packets generated and agent-reviewed. Full report approval remains separate.
-- [ ] Six ten-chapter progression stories generated, provenance-checked, and human-reviewed.
+- [ ] Six ten-chapter progression stories pass provenance and human progression review. Prompt `1.4.12` generated and passed provenance, but all six human verdicts are `revise`.
 - [x] Secret scan and dependency-license check green.
 - [x] Clean-clone setup verified.
 
@@ -166,6 +166,7 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 - Progression review invalidated the one-chapter excerpt bar. Authentic local prose stops at chapter 2 for every POV; browser chapter-100 fixtures are mocked and cannot fill the gap. A provider-free exact-choice regression now proves all six runtime states can commit through chapter 10 without changing model behavior.
 - The long-form runner is isolated from the strict two-chapter release matrix. It uses the least-used offered action type while avoiding an immediate type repeat, up to three sequential background agents, one atomic commit per chapter, strict current-prompt audit evidence, a separate durable ledger, a `$0.0848` chapter ceiling, and a `$5.088` Responses generation-exposure ceiling. SDK retries are disabled. One stable run ID preserves recovery across suffix resumes. Its read-only preflight makes zero provider requests.
 - The first paid branch exposed two quality defects before final evidence: repeated first-choice actions and Elara narration that placed the departed capital ahead. Prompt `1.4.12` sends the exact named route. ADR-022 freezes all old databases, deduplicates restored response receipts, and binds their manifest hash and `$0.1635525` exposure into the replacement lineage. A copied-real-data migration probe preserved exposure exactly and made no provider request.
+- The authorized prompt `1.4.12` run completed all six ten-chapter branches. Automated provenance passed at `$0.86713` durable exposure, with `$4.22087` headroom. Human review rejected every story: only 13 of 60 chapters passed. Repetition, no-result XP, uncommitted skill and state claims, invented knowledge, route drift, and a private-class leak now define the next test-first quality slice.
 
 ## Decision Log
 
@@ -194,8 +195,8 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 
 ## Outcomes and Retrospective
 
-- Phases 1 through 4 and Phase 6 are implemented. Offline contracts, deterministic transitions, knowledge boundaries, atomic storage, both OpenAI adapters, the simplified reader, chapter-100 demo path, README, architecture, and current screenshots are green. The prior one-chapter pack remains reproducible but no longer satisfies narrative review. Phase 5 now awaits the provider-free quality migration, six authentic prompt `1.4.12` ten-chapter runs, and human progression verdicts, plus the corrected strict release report. The public real-click video and current native live proof remain open user and paid gates.
+- Phases 1 through 4 and Phase 6 are implemented. Offline contracts, deterministic transitions, knowledge boundaries, atomic storage, both OpenAI adapters, the simplified reader, chapter-100 demo path, README, architecture, and current screenshots are green. Prompt `1.4.12` proved the six-by-ten evidence pipeline but failed human quality review. Phase 5 now requires a test-first quality variant and six replacement stories that pass. The corrected strict release report, current native live proof, and public demo evidence remain open.
 
 ## Current Milestone
 
-Reader UX is ready for local testing. Narrative progression review is not ready: the required six-by-ten artifact does not exist. Prompt `1.4.12`, the varied branch policy, the no-provider migration, crash recovery, carried-spend lineage, and required-marker preflight passed final non-live review and gates. The full gate now stops only at the intentionally missing six-by-ten evidence. Next: commit the quality variant, migrate the rejected branch without a provider request, run the exact authorized `$0.0848` chapter and `$5.088` aggregate command, then review all 60 chapters. The separate `$0.027` release correction, native smoke, push, video, feedback, and submission gates remain unchanged.
+Reader UX is ready for local testing. Narrative progression is not ready. The full prompt `1.4.12` six-by-ten artifact exists and passes provenance, but all six human verdicts are `revise`. Next: preserve this rejected baseline, add exact regressions, implement and review the next variant, prove its archive migration without provider access, then regenerate within the existing `$5.088` authorization. Stop only after the replacement pack passes human review and the demo path is reverified.

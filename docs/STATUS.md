@@ -7,7 +7,7 @@
 - Remote: public `https://github.com/shivam-g10/infinite-litrpg`; current local build not pushed
 - Initial commit: `39b19a2` (`chore: scaffold agent workflow`)
 - App: strict Next.js Reader with meaningful-decision continuation, deterministic engine, and SQLite store
-- Live API: prompt `1.4.11` sequential twelve-cycle automation green; prompt `1.4.12` six-by-ten quality variant is under non-live verification and authorized up to its exact doubled caps
+- Live API: prompt `1.4.12` produced all 60 long-form chapters at `$0.86713` total durable exposure; human progression review rejected all six stories
 - Evals: offline suite green
 - Build Week deadline: 2026-07-22 05:30 IST
 
@@ -21,11 +21,12 @@
 
 ## Current Blockers
 
-- The old `docs/SAMPLE_STORIES.md` contains one excerpt per viewpoint. It is not enough to judge progression and is no longer accepted as the human-review packet.
+- `docs/SAMPLE_STORIES.md` and `docs/story-review-evidence.json` contain six authenticated ten-chapter stories. Automated provenance passes. Human review marked every story `revise`, so this is rejected baseline evidence, not demo copy.
 - The first paid long-form attempt produced ten Rowan chapters, then repeated an Elara route reversal. The Rowan branch also overused the first offered action. Both branches are frozen as rejected quality evidence; no chapter from them will enter the final packet.
 - A separate long-form runner now requires six exact chapter-1-through-10 prefixes, one passed runtime audit per chapter, current prompt and Git provenance, Flex receipts, canonical chapter, delta, trace, and final-state payloads, derived hashes, and one durable aggregate ledger. The strict two-chapter release matrix remains unchanged.
-- Story-review durable exposure is `$0.1635525`, with zero active or uncertain request. Prompt `1.4.12` names the exact departed and destination route. The deterministic review policy now selects the least-used offered action type and avoids an immediate type repeat when an alternative exists. A provider-free migration archives every old database, binds file and manifest hashes into the ledger lineage, carries every dollar of exposure, and restarts all six branches from chapter 1.
+- Story-review durable exposure is `$0.86713`, including `$0.1635525` carried from the first rejected branch and `$0.7035775` from the complete prompt `1.4.12` branch. The ledger has zero lock, zero active reservation, and zero uncertain exposure. `$4.22087` remains under the authorized `$5.088` cap.
 - The user authorized a 100% increase. New hard ceilings are `$0.0848` per uninterrupted chapter chain and `$5.088` aggregate. Existing `$0.1635525` exposure stays charged. Input-token count endpoint billing, if any, remains outside the local ledger.
+- Human review passed only Rowan chapters 1–2, Elara chapter 1, Maelin chapters 1–3, Varek chapters 1–3 and 6, Lucan chapter 1, and Nyra chapters 1–2. Failures include stalled arcs, repeated no-result actions, uncommitted skill and mana claims, wrong inventory and mana snapshots, route reversals, invented knowledge, and Varek learning Nyra's private class.
 
 - Human review originally rejected Rowan chapter 2, Elara chapter 1, and Lucan chapter 1 in automated-green report `fb9295d7c33ca154c7e407894b807d4a371b83d5ef066d78eee05ee42d4c49d2`.
 - The authorized re-narration chain retained a corrected Rowan chapter 2. Elara did not commit and Lucan was not reached. Failure report SHA-256 `d935b56ed039e560ac067c2ec268ed7780b9daf196497e3ffde6349be2c02e0a` is registered under `prompt-1-4-11-flex-elara-renarration-failure-3` with 43 exact bridge hashes.
@@ -35,13 +36,7 @@
 
 ## Next Action
 
-Finish the non-live quality-variant gates, commit the source, run the provider-free archive migration, then run:
-
-```powershell
-npm run review:stories:live -- --confirm-cost --chapter-cap-usd 0.0848 --total-cap-usd 5.088
-```
-
-It permits at most `$5.088` Responses generation exposure across the rejected archived attempt, all 60 replacement chapters, and resumes. It uses a separate ledger and does not spend or modify the release-eval `$3.021` ledger. SDK retries are disabled so every generation attempt has one durable reservation. A killed run can be recovered at the unknown request's full reservation without a provider call; retrying that chapter can exceed its `$0.0848` uninterrupted-chain budget but cannot exceed the aggregate. If all 60 chapters committed before an output-write crash, `npm run review:stories:finalize` rebuilds both artifacts without a provider call. The earlier `$0.027` Elara and Lucan correction command remains separate. After generation, `npm run review:stories:check` must pass before human review starts.
+Preserve the rejected prompt `1.4.12` pack, turn every concrete human-review escape into a failing regression, and implement the next quality variant. It must improve chapter-action diversity, reject uncommitted skill and state claims, block paraphrased private facts, and keep quality-critical model routing inside the authorized cap. Run every non-live gate and provider-free migration proof before another paid request.
 
 ## Evidence Log
 
@@ -216,5 +211,8 @@ It permits at most `$5.088` Responses generation exposure across the rejected ar
 - 2026-07-21 doubled-cap baseline: the new ledger regression failed first because only the historical `$3` to `$3.021` migration was recognized. The ledger now also accepts only the exact authorized `$2.544` to `$5.088` transition, requires zero active reservation, and proves exposure is byte-for-byte unchanged. Five focused files pass 121 tests; the full unit suite passes 317 tests across 20 files.
 - 2026-07-21 quality-variant review hardening: independent review found a filesystem move before ledger lock, an optional marker path that could reset carried spend, a movement-only route rule present on non-movement prompts, missing crash-window coverage, and a recovery check that rejected conservatively charged uncertain requests. Regressions failed first. Migration now locks before every archive mutation, requires the bound marker and migrated ledger before key or client creation, keeps archive lineage non-null, emits route authority only for movement, resumes after archive, manifest, marker, cap, and stale-lock interruptions, prints the exact recovery command before other ledger checks, blocks orphaned active work, and permits charged uncertainty against remaining headroom. Two final read-only rechecks found no P0 through P2 defect. Typecheck, lint, diff hygiene, 121 focused tests, and all 317 unit tests pass. No provider call ran.
 - 2026-07-21 quality-variant full non-live gate: `npm run check` passed format, lint, all three strict TypeScript projects, 317 tests across 20 files, all six offline gates with 1,000 simulations and chapter 351 blocked, production build, 21 E2E passes with one intentional desktop skip, both security scans across 234 working files, and 526 licenses. It exited 1 only at the intentional `review:stories:check` gate because replacement six-by-ten evidence does not exist yet. Separate low-level audit found zero vulnerabilities; both diff checks passed. No provider call ran.
+- 2026-07-21 quality migration: `npm run review:stories:migrate-variant -- --from-source-git-sha 5c92e7a75629d0d39e6edea676b4cf4ad44fb12c --confirm-archive` archived the rejected databases, carried `$0.1635525` exactly, bound manifest SHA-256 `1a402358550617f502fafedf66a493fa9896ce13d4478d449990ab64093a7cde`, and made no provider request. The idempotent rerun passed.
+- 2026-07-21 authorized six-by-ten run: `npm run review:stories:live -- --confirm-cost --chapter-cap-usd 0.0848 --total-cap-usd 5.088` completed through authenticated resumes. All 60 chapters committed. Current-variant attempt cost is `$0.7035775`; durable exposure is `$0.86713`; remaining headroom is `$4.22087`; the ledger has zero lock, active, or uncertain reservation. `npm run review:stories:check` exits 0.
+- 2026-07-21 progression review: three independent story-pair reviews plus root synthesis read all 60 chapters. Rowan passed 2 of 10, Elara 1 of 10, Maelin 3 of 10, Varek 4 of 10, Lucan 1 of 10, and Nyra 2 of 10. All six overall verdicts are `revise`. The human blocks in `docs/SAMPLE_STORIES.md` record chapter-level evidence. No provider request ran during review.
 
 Add exact command, date, exit code, cost, and report path after every future milestone gate.
