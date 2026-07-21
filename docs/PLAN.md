@@ -73,6 +73,9 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 - [x] Replace routine chapter prompts with deterministic continuation to meaningful decisions.
 - [x] Stop the demo run after chapter 100 without changing the chapter-350 engine.
 - [x] Keep committed prose visible with truthful progress, stop, retry, and cost-bound copy.
+- [x] Review every committed chapter in Reader with Previous, Next, and chapter picker controls without a model call.
+- [x] Label local saved evidence separately from live OpenAI generation and show key readiness without exposing the key.
+- [x] Make one live chapter the primary action and keep multi-chapter continuation behind exact-cost progressive disclosure.
 
 ### Phase 7: Hardening
 
@@ -113,6 +116,7 @@ Update this file during work. Checkboxes need evidence in `docs/STATUS.md`.
 - Audit then found invented skills, clues, elapsed years, and semantic private-role hints. Narration now receives exact before/delta/after projections; remote public-role teasers were removed from agent context and semantic leak cases doubled from six to twelve.
 - Native Multi-agent beta is available for this API key. Both native and sequential capped live chapters committed successfully.
 - Next.js hot reload retained an obsolete global service during browser QA. A clean server restart removed the mismatch; clean-start real Reader, God Mode, exports, and two chapter commits passed.
+- The tracked Rowan demo chapter is restored authenticated evidence, not a request from the current browser session. Reader now states this directly and identifies the next chapter action as the first live key test.
 - The first twelve-cycle run stopped after four commits. One chapter exceeded the `$0.10` cap and Maelin exposed remote-character claims, contradictory audit evidence, and an 897-word draft. Cost preflight, structured audit issue codes, tighter remote-character rules, retry feedback, and a 975 to 1,025 word target now have regressions.
 - Read-only release review found replay retry double-commit risk, arbitrary action targets, unreachable knowledge progression, hidden Reader JSON state, missing failed-attempt trace cost, and missing live streaming proof. Expected-version UUID idempotency, target allowlists, deterministic clues and relationships, safe exports, attempt traces, and exact stream reconstruction now close them.
 - Stable Next `16.2.10` pins vulnerable PostCSS `8.4.31`. Pinned Next `16.3.0-canary.89` carries PostCSS `8.5.10`; the full build and both dependency audits are green.

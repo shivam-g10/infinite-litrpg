@@ -6,7 +6,7 @@ export function GET() {
   const environment = getServerEnvironment();
 
   return Response.json({
-    apiKeyConfigured: environment.openAiApiKey !== undefined,
+    apiKeyConfigured: Boolean(environment.openAiApiKey?.trim()),
     maxBackgroundAgents: environment.maxBackgroundAgents,
     maxCostUsdPerChapter: environment.maxCostUsdPerChapter,
     nativeMultiAgent: environment.nativeMultiAgent,

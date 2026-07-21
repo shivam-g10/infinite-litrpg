@@ -42,6 +42,7 @@ describe("StoryService", () => {
 
     expect(view.pov.id).toBe(characterId);
     expect(view.chapter.choices).toHaveLength(2);
+    expect(view.chapterHistory).toEqual([]);
     expect(view.continuationPlan).toBeNull();
     expect(view.world).toMatchObject({ chapter: 0, terminal: false, version: 1 });
     store.close();
@@ -334,6 +335,14 @@ describe("StoryService", () => {
 
       expect(result.world).toMatchObject({ chapter: 1, version: 2 });
       expect(result.chapter).toMatchObject({ title: "The Ash Road" });
+      expect(result.chapterHistory).toEqual([{ chapter: 1, title: "The Ash Road" }]);
+      expect(service.getReaderChapter(1)).toMatchObject({
+        chapter: 1,
+        title: "The Ash Road",
+      });
+      expect(() => service.getReaderChapter(2)).toThrowError(
+        expect.objectContaining({ status: 404 }),
+      );
       expect(result.chapter.prose.split(/\s+/u)).toHaveLength(900);
       expect(result.godMode).toMatchObject({ gateResult: "passed" });
       expect(result.godMode).toMatchObject({ schemaVersion: RUNTIME_SCHEMA_VERSION });

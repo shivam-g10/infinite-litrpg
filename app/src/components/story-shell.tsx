@@ -3,7 +3,8 @@
 import { DEMO_CHAPTER_LIMIT } from "@infinite-litrpg/shared";
 import { useEffect, useRef, useState } from "react";
 
-import type { StoryView } from "./story-types";
+import { ChapterHistory } from "./chapter-history";
+import type { ReaderChapterView, StoryView } from "./story-types";
 
 const ACT_NAMES = [
   "Reincarnation and survival",
@@ -23,18 +24,24 @@ export type StoryCommand =
   | { readonly approvedThroughChapter: number; readonly type: "continue_story" };
 
 interface StoryShellProps {
+  readonly apiKeyConfigured: boolean;
   readonly automaticRun: boolean;
   readonly busy: boolean;
+  readonly chapterSource: "live" | "local";
   readonly error: string | null;
   readonly generationChapter: number | null;
   readonly onCommand: (command: StoryCommand) => void;
   readonly onContinue: () => void;
+  readonly onReviewChapter: (chapter: number) => void;
   readonly onRetry: () => void;
   readonly onStop: () => void;
+  readonly receivedProse: boolean;
+  readonly reviewBusy: boolean;
+  readonly reviewError: string | null;
+  readonly reviewedChapter: ReaderChapterView | null;
   readonly runMessage: string | null;
   readonly story: StoryView;
   readonly stopRequested: boolean;
-  readonly streamedProse: string;
 }
 
 type Mode = "reader" | "god";
@@ -173,12 +180,21 @@ function StoryHeader({
   );
 }
 
-function ReaderContext({ story }: { readonly story: StoryView }) {
+function ReaderContext({
+  activeChapter,
+  apiKeyConfigured,
+  chapterSource,
+  reviewingSavedChapter,
+  story,
+}: {
+  readonly activeChapter: number;
+  readonly apiKeyConfigured: boolean;
+  readonly chapterSource: "live" | "local";
+  readonly reviewingSavedChapter: boolean;
+  readonly story: StoryView;
+}) {
   const activeActIndex = Math.max(0, Math.min(ACT_NAMES.length - 1, story.world.act - 1));
-  const chapterProgress = Math.min(
-    100,
-    Math.max(0, (story.world.chapter / DEMO_CHAPTER_LIMIT) * 100),
-  );
+  const chapterProgress = Math.min(100, Math.max(0, (activeChapter / DEMO_CHAPTER_LIMIT) * 100));
 
   return (
     <section className="reader-context" aria-label="Story position">
@@ -188,21 +204,49 @@ function ReaderContext({ story }: { readonly story: StoryView }) {
           <small>Viewpoint locked</small>
         </strong>
         <span>
-          Chapter {story.world.chapter} of {DEMO_CHAPTER_LIMIT}
+          Chapter {activeChapter} of {DEMO_CHAPTER_LIMIT}
         </span>
       </div>
-      <p>
-        Act {ROMAN_NUMERALS[activeActIndex]} · {ACT_NAMES[activeActIndex]}
-      </p>
+      {reviewingSavedChapter ? (
+        <p>Saved chapter · latest is chapter {story.world.chapter}</p>
+      ) : (
+        <p>
+          Act {ROMAN_NUMERALS[activeActIndex]} · {ACT_NAMES[activeActIndex]}
+        </p>
+      )}
       <div
-        aria-label={`Chapter ${story.world.chapter} of ${DEMO_CHAPTER_LIMIT}`}
+        aria-label={"Chapter " + activeChapter + " of " + DEMO_CHAPTER_LIMIT}
         aria-valuemax={DEMO_CHAPTER_LIMIT}
         aria-valuemin={0}
-        aria-valuenow={Math.min(story.world.chapter, DEMO_CHAPTER_LIMIT)}
+        aria-valuenow={Math.min(activeChapter, DEMO_CHAPTER_LIMIT)}
         className="progress-line"
         role="progressbar"
       >
         <span style={{ width: `${chapterProgress}%` }} />
+      </div>
+      <div className="chapter-source" role="status">
+        <span aria-hidden="true" />
+        <p>
+          {reviewingSavedChapter ? (
+            <>Loaded from your local save. Opening chapter history made no OpenAI call.</>
+          ) : chapterSource === "live" ? (
+            <>
+              Generated live with OpenAI in this session ·{" "}
+              {story.usage.totalTokens.toLocaleString()} tokens ·{" "}
+              {formatMoney(story.estimatedCostUsd)}
+            </>
+          ) : apiKeyConfigured ? (
+            <>
+              Loaded from your local save. Opening this page made no OpenAI call. API key detected.
+              Create chapter {story.world.chapter + 1} to test it.
+            </>
+          ) : (
+            <>
+              Loaded from your local save. Add your OpenAI API key to the server before creating
+              another chapter.
+            </>
+          )}
+        </p>
       </div>
     </section>
   );
@@ -372,10 +416,10 @@ function ReaderActions({
   onCommand,
   onContinue,
   onStop,
+  receivedProse,
   runMessage,
   story,
   stopRequested,
-  streamedProse,
 }: {
   readonly automaticRun: boolean;
   readonly busy: boolean;
@@ -383,10 +427,10 @@ function ReaderActions({
   readonly onCommand: (command: StoryCommand) => void;
   readonly onContinue: () => void;
   readonly onStop: () => void;
+  readonly receivedProse: boolean;
   readonly runMessage: string | null;
   readonly story: StoryView;
   readonly stopRequested: boolean;
-  readonly streamedProse: string;
 }) {
   const [customAction, setCustomAction] = useState("");
   const [confirmingContinuation, setConfirmingContinuation] = useState(false);
@@ -437,7 +481,7 @@ function ReaderActions({
             Creating chapter {generationChapter ?? story.world.chapter + 1} of {DEMO_CHAPTER_LIMIT}
           </h2>
           <p>
-            {streamedProse
+            {receivedProse
               ? "Canon checked. Loading the chapter."
               : "Resolving the next world turn and checking canon."}
           </p>
@@ -460,7 +504,10 @@ function ReaderActions({
     );
   }
 
-  if (story.continuationPlan) {
+  const routineChoice =
+    story.chapter.choices.find(({ id }) => id === "choice-1") ?? story.chapter.choices.at(0);
+
+  if (story.continuationPlan && routineChoice) {
     const plan = story.continuationPlan;
     return (
       <section
@@ -500,22 +547,36 @@ function ReaderActions({
           </>
         ) : (
           <>
-            <h2 id="continue-heading">Ready for the story to move?</h2>
-            <p className="continue-budget">
-              Up to {plan.chapterCount} {plan.chapterCount === 1 ? "chapter" : "chapters"} · maximum{" "}
-              {formatMoney(plan.maxCostUsd)}
-            </p>
+            <p className="decision-label">Next routine chapter</p>
+            <h2 id="continue-heading">Continue {firstName}&apos;s story</h2>
             <button
               className="continue-action"
-              onClick={() => setConfirmingContinuation(true)}
+              onClick={() => onCommand({ choiceId: routineChoice.id, type: "take_action" })}
               type="button"
             >
-              Continue to next decision
+              Create chapter {story.world.chapter + 1}
             </button>
-            <p className="continue-note">
-              Uses your API key one chapter at a time. Keep this tab open. You can stop after the
-              active chapter.
-            </p>
+            <p className="continue-note">Recommended next step: {routineChoice.description}</p>
+            <details className="continuation-disclosure">
+              <summary>Create several chapters</summary>
+              <div>
+                <p className="continue-budget">
+                  Up to {plan.chapterCount} {plan.chapterCount === 1 ? "chapter" : "chapters"} ·
+                  maximum {formatMoney(plan.maxCostUsd)}
+                </p>
+                <button
+                  className="batch-action"
+                  onClick={() => setConfirmingContinuation(true)}
+                  type="button"
+                >
+                  Continue to next decision
+                </button>
+                <p className="continue-note">
+                  Uses your API key one chapter at a time. Keep this tab open. You can stop after
+                  the active chapter.
+                </p>
+              </div>
+            </details>
           </>
         )}
       </section>
@@ -553,6 +614,7 @@ function ReaderActions({
             const description = customAction.trim();
             if (!description || busy) return;
             onCommand({ description, type: "custom_action" });
+            setCustomAction("");
           }}
         >
           <label className="sr-only" htmlFor="custom-action">
@@ -578,31 +640,73 @@ function ReaderActions({
 }
 
 function ReaderView(props: StoryShellProps) {
-  const { error, onRetry, story } = props;
+  const {
+    apiKeyConfigured,
+    chapterSource,
+    error,
+    onReviewChapter,
+    onRetry,
+    reviewBusy,
+    reviewError,
+    reviewedChapter,
+    story,
+  } = props;
   const chapterHeading = useRef<HTMLHeadingElement>(null);
-  const previousChapter = useRef(story.world.chapter);
-  const paragraphs = (story.chapter?.prose ?? "").split(/\n\s*\n/gu).filter(Boolean);
+  const latestChapter = story.chapter
+    ? {
+        chapter: story.world.chapter,
+        prose: story.chapter.prose,
+        title: story.chapter.title,
+      }
+    : null;
+  const displayedChapter = reviewedChapter ?? latestChapter;
+  const activeChapter = displayedChapter?.chapter ?? story.world.chapter;
+  const reviewingSavedChapter = activeChapter !== story.world.chapter;
+  const previousChapter = useRef(activeChapter);
+  const paragraphs = (displayedChapter?.prose ?? "").split(/\n\s*\n/gu).filter(Boolean);
 
   useEffect(() => {
-    if (previousChapter.current !== story.world.chapter) chapterHeading.current?.focus();
-    previousChapter.current = story.world.chapter;
-  }, [story.world.chapter]);
+    if (previousChapter.current !== activeChapter) chapterHeading.current?.focus();
+    previousChapter.current = activeChapter;
+  }, [activeChapter]);
 
   return (
     <main className="reader-layout">
       <article className="chapter-column">
-        <ReaderContext story={story} />
-        {story.chapter ? (
+        <ReaderContext
+          activeChapter={activeChapter}
+          apiKeyConfigured={apiKeyConfigured}
+          chapterSource={chapterSource}
+          reviewingSavedChapter={reviewingSavedChapter}
+          story={story}
+        />
+        <ChapterHistory
+          activeChapter={activeChapter}
+          busy={props.busy || reviewBusy}
+          chapters={story.chapterHistory}
+          error={reviewError}
+          onSelect={onReviewChapter}
+        />
+        {displayedChapter ? (
           <div className="chapter-copy">
             <h1 ref={chapterHeading} tabIndex={-1}>
-              {story.chapter.title}
+              {displayedChapter.title}
             </h1>
             {paragraphs.map((paragraph, index) => (
               <p key={`${index}-${paragraph.slice(0, 28)}`}>{paragraph}</p>
             ))}
           </div>
         ) : null}
-        {error ? (
+        {reviewingSavedChapter ? (
+          <section className="saved-chapter-note">
+            <h2>Reviewing saved chapter {activeChapter}</h2>
+            <p>Character state and story actions stay on the latest committed chapter.</p>
+            <button onClick={() => onReviewChapter(story.world.chapter)} type="button">
+              Return to chapter {story.world.chapter}
+            </button>
+          </section>
+        ) : null}
+        {error && !reviewingSavedChapter ? (
           <div className="error-rail error-rail--reader" role="alert">
             <p>{error}</p>
             <button onClick={onRetry} type="button">
@@ -610,51 +714,55 @@ function ReaderView(props: StoryShellProps) {
             </button>
           </div>
         ) : null}
-        <ReaderActions {...props} />
-        <details className="reader-details">
-          <summary>
-            Story and character details <ChevronIcon />
-          </summary>
-          <div className="reader-details__grid">
-            <CharacterState story={story} />
-            <div className="world-detail">
-              <p className="rail-label">Story clock</p>
-              <dl className="compact-list">
-                <div>
-                  <dt>Calendar</dt>
-                  <dd>{story.world.calendar.label || `Day ${story.world.calendar.day}`}</dd>
+        {!reviewingSavedChapter ? (
+          <>
+            <ReaderActions {...props} />
+            <details className="reader-details">
+              <summary>
+                Story and character details <ChevronIcon />
+              </summary>
+              <div className="reader-details__grid">
+                <CharacterState story={story} />
+                <div className="world-detail">
+                  <p className="rail-label">Story clock</p>
+                  <dl className="compact-list">
+                    <div>
+                      <dt>Calendar</dt>
+                      <dd>{story.world.calendar.label || `Day ${story.world.calendar.day}`}</dd>
+                    </div>
+                    <div>
+                      <dt>Threat</dt>
+                      <dd>{story.world.threat}</dd>
+                    </div>
+                    <div>
+                      <dt>World</dt>
+                      <dd>v{story.world.version}</dd>
+                    </div>
+                    <div>
+                      <dt>Last chapter</dt>
+                      <dd>
+                        {formatLatency(story.latencyMs)} · {formatMoney(story.estimatedCostUsd)}
+                      </dd>
+                    </div>
+                  </dl>
+                  {story.visibleEvents.length > 0 ? (
+                    <section className="visible-events">
+                      <h2>Visible events</h2>
+                      <ul>
+                        {story.visibleEvents.map((event) => (
+                          <li key={event.id || event.summary}>
+                            <span>{event.summary}</span>
+                            {event.location ? <small>{event.location}</small> : null}
+                          </li>
+                        ))}
+                      </ul>
+                    </section>
+                  ) : null}
                 </div>
-                <div>
-                  <dt>Threat</dt>
-                  <dd>{story.world.threat}</dd>
-                </div>
-                <div>
-                  <dt>World</dt>
-                  <dd>v{story.world.version}</dd>
-                </div>
-                <div>
-                  <dt>Last chapter</dt>
-                  <dd>
-                    {formatLatency(story.latencyMs)} · {formatMoney(story.estimatedCostUsd)}
-                  </dd>
-                </div>
-              </dl>
-              {story.visibleEvents.length > 0 ? (
-                <section className="visible-events">
-                  <h2>Visible events</h2>
-                  <ul>
-                    {story.visibleEvents.map((event) => (
-                      <li key={event.id || event.summary}>
-                        <span>{event.summary}</span>
-                        {event.location ? <small>{event.location}</small> : null}
-                      </li>
-                    ))}
-                  </ul>
-                </section>
-              ) : null}
-            </div>
-          </div>
-        </details>
+              </div>
+            </details>
+          </>
+        ) : null}
       </article>
     </main>
   );

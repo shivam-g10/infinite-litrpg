@@ -4,6 +4,7 @@ import type { CharacterId, PublicCharacterProfile } from "@infinite-litrpg/share
 import { useState } from "react";
 
 interface CharacterSelectionProps {
+  readonly apiKeyConfigured: boolean;
   readonly busy: boolean;
   readonly characters: readonly PublicCharacterProfile[];
   readonly error: string | null;
@@ -12,6 +13,7 @@ interface CharacterSelectionProps {
 }
 
 export function CharacterSelection({
+  apiKeyConfigured,
   busy,
   characters,
   error,
@@ -142,7 +144,8 @@ export function CharacterSelection({
       </div>
 
       <footer className="selection-footer">
-        Local save <span aria-hidden="true">·</span> Bring your own OpenAI API key{" "}
+        Local save <span aria-hidden="true">·</span>{" "}
+        {apiKeyConfigured ? "OpenAI API key detected" : "OpenAI API key not configured"}{" "}
         <span aria-hidden="true">·</span> No account
       </footer>
     </main>

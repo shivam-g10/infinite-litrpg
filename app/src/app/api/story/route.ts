@@ -8,9 +8,13 @@ import { StoryServiceError, type TurnCommand } from "@/server/story/story-servic
 
 export const dynamic = "force-dynamic";
 
-export function GET() {
+export function GET(request: Request) {
   try {
-    return Response.json({ story: getStoryRuntime().service.getStory() });
+    const chapter = new URL(request.url).searchParams.get("chapter");
+    const service = getStoryRuntime().service;
+    return chapter === null
+      ? Response.json({ story: service.getStory() })
+      : Response.json({ chapter: service.getReaderChapter(parseReaderChapterNumber(chapter)) });
   } catch (error) {
     return errorResponse(error);
   }
@@ -35,7 +39,7 @@ export async function POST(request: Request) {
 }
 
 function requireApiKey(apiKey: string | undefined): asserts apiKey is string {
-  if (!apiKey) {
+  if (!apiKey?.trim()) {
     throw new StoryServiceError("OPENAI_API_KEY is not configured", 503);
   }
 }
@@ -179,6 +183,17 @@ function parseApprovedChapter(value: unknown): number {
     throw new StoryServiceError("Approved continuation chapter is invalid");
   }
   return value as number;
+}
+
+function parseReaderChapterNumber(value: string): number {
+  if (!/^\d{1,3}$/u.test(value)) {
+    throw new StoryServiceError("Chapter number is invalid");
+  }
+  const chapter = Number(value);
+  if (!Number.isSafeInteger(chapter) || chapter < 1 || chapter > DEMO_CHAPTER_LIMIT) {
+    throw new StoryServiceError("Chapter number is invalid");
+  }
+  return chapter;
 }
 
 function parseWorldVersion(value: unknown): number {

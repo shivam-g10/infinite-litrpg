@@ -6,4 +6,5 @@ test-results
 evals/reports
 docs/design/*.png
 docs/review-packets
+docs/SAMPLE_STORIES.md
 package-lock.json

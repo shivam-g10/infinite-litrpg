@@ -11,6 +11,7 @@ const baseStory = {
       "Smoke clung to the low eaves like a living thing, reluctant to leave. Rowan crouched beneath the shattered watchpost, the taste of ash and copper thick on their tongue.\n\nCinder Village was mostly silence now, save for the soft crackle of lingering flames and the distant groan of a beam giving way. The raiders were gone. Whatever they had wanted, they had taken.\n\nAt the center of the square, a trail of gray ash wound between toppled stalls and broken carts. It was not windblown. It was stepped through.\n\nBehind them, a voice spoke from the shadow of a half-fallen awning. “You do not have to do this alone.” Nyra’s tone was calm, unreadable.",
     title: "Embers Remember",
   },
+  chapterHistory: [{ chapter: 1, title: "Embers Remember" }],
   continuationPlan: null,
   estimatedCostUsd: 0.0241,
   godMode: {
@@ -113,7 +114,6 @@ const baseStory = {
     stats: { agility: 7, intellect: 12, strength: 6, vitality: 8, willpower: 14 },
     status: "alive",
   },
-  progress: 1 / 350,
   usage: {
     cachedInputTokens: 200,
     inputTokens: 2184,
@@ -150,6 +150,10 @@ function storyAtChapter(chapter: number, title: string, canContinue = false) {
   return {
     ...baseStory,
     chapter: { ...baseStory.chapter, title },
+    chapterHistory: Array.from({ length: chapter }, (_, index) => ({
+      chapter: index + 1,
+      title: index + 1 === chapter ? title : `Chapter ${index + 1}`,
+    })),
     continuationPlan: canContinue
       ? {
           chapterCount: endChapter - chapter,
@@ -158,7 +162,6 @@ function storyAtChapter(chapter: number, title: string, canContinue = false) {
           maxCostUsdPerChapter: 0.1,
         }
       : null,
-    progress: chapter / 350,
     world: { ...baseStory.world, chapter, version: chapter + 1 },
   };
 }
@@ -172,6 +175,7 @@ async function fulfillJson(route: Route, body: unknown, status = 200): Promise<v
 }
 
 async function confirmContinuation(page: Page): Promise<void> {
+  await page.getByText("Create several chapters", { exact: true }).click();
   await page.getByRole("button", { name: "Continue to next decision" }).click();
   await page.getByRole("button", { name: "Start generation" }).click();
 }
@@ -260,6 +264,91 @@ test("takes a suggested choice and renders the committed chapter", async ({ page
     type: "take_action",
   });
   expect((postedBody as { requestId: string }).requestId).toMatch(/^[0-9a-f-]{36}$/u);
+  await expect(page.getByText(/Generated live with OpenAI in this session/u)).toBeVisible();
+});
+
+test("creates one routine chapter without starting a batch", async ({ page }) => {
+  let postedBody: unknown = null;
+  await page.route("**/api/story", async (route) => {
+    if (route.request().method() === "GET") {
+      await fulfillJson(route, { story: storyAtChapter(1, "Embers Remember", true) });
+      return;
+    }
+    postedBody = route.request().postDataJSON();
+    await fulfillNdjson(route, [{ story: storyAtChapter(2, "The Ash Road", true), type: "story" }]);
+  });
+
+  await page.goto("/");
+  await expect(page.getByRole("button", { name: "Create chapter 2" })).toBeVisible();
+  await page.getByRole("button", { name: "Create chapter 2" }).click();
+
+  await expect(page.getByRole("heading", { level: 1, name: "The Ash Road" })).toBeVisible();
+  expect(postedBody).toMatchObject({ choiceId: "choice-1", type: "take_action" });
+});
+
+test("reviews saved chapters without generating another turn", async ({ page }) => {
+  let postCount = 0;
+  const openedChapters: number[] = [];
+  await page.route("**/api/story**", async (route) => {
+    const request = route.request();
+    if (request.method() === "POST") {
+      postCount += 1;
+      await fulfillJson(route, { error: "Unexpected generation request" }, 500);
+      return;
+    }
+    const chapter = new URL(request.url()).searchParams.get("chapter");
+    if (chapter) {
+      const chapterNumber = Number(chapter);
+      openedChapters.push(chapterNumber);
+      await fulfillJson(route, {
+        chapter: {
+          chapter: chapterNumber,
+          prose: `Saved prose for chapter ${chapterNumber}.`,
+          title: `Chapter ${chapterNumber}`,
+        },
+      });
+      return;
+    }
+    await fulfillJson(route, { story: storyAtChapter(3, "Third Ember", true) });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Previous saved chapter" }).click();
+
+  await expect(page.getByRole("heading", { level: 1, name: "Chapter 2" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Create chapter 4" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Return to chapter 3" })).toBeVisible();
+  await expect(page.getByText(/Opening chapter history made no OpenAI call/u)).toBeVisible();
+
+  await page.getByRole("button", { name: "Next saved chapter" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Third Ember" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Create chapter 4" })).toBeVisible();
+  expect(openedChapters).toEqual([2]);
+  expect(postCount).toBe(0);
+});
+
+test("rejects a mismatched saved-chapter response", async ({ page }) => {
+  await page.route("**/api/story**", async (route) => {
+    const chapter = new URL(route.request().url()).searchParams.get("chapter");
+    if (chapter) {
+      await fulfillJson(route, {
+        chapter: { chapter: 1, prose: "Wrong saved prose.", title: "Wrong chapter" },
+      });
+      return;
+    }
+    await fulfillJson(route, { story: storyAtChapter(3, "Third Ember", true) });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Previous saved chapter" }).click();
+
+  await expect(
+    page
+      .getByRole("navigation", { name: "Saved chapters" })
+      .getByText("Saved chapter response did not match the requested chapter.", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Third Ember" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Create chapter 4" })).toBeVisible();
 });
 
 test("continues routine chapters, pauses at both decisions, and stops at chapter 100", async ({
@@ -293,6 +382,8 @@ test("continues routine chapters, pauses at both decisions, and stops at chapter
   });
 
   await page.goto("/");
+  await expect(page.getByRole("button", { name: "Create chapter 2" })).toBeVisible();
+  await page.getByText("Create several chapters", { exact: true }).click();
   await expect(page.getByText("Up to 46 chapters · maximum $4.6000")).toBeVisible();
   await page.getByRole("button", { name: "Continue to next decision" }).click();
   await expect(page.getByRole("heading", { name: "Create up to 46 chapters?" })).toBeVisible();
@@ -366,13 +457,14 @@ test("stops an automatic run only after the active chapter commits", async ({ pa
 
   await page.goto("/");
   await confirmContinuation(page);
+  await expect(page.getByRole("combobox", { name: "Jump to saved chapter" })).toBeDisabled();
   await page.getByRole("button", { name: "Stop after this chapter" }).click();
   finishRequest();
 
   await expect(page.getByRole("heading", { level: 1, name: "The Next Ember" })).toBeVisible();
   await expect(page.getByRole("heading", { level: 1, name: "The Next Ember" })).toBeFocused();
   await expect(page.getByText("Stopped after chapter 2.", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Continue to next decision" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Create chapter 3" })).toBeVisible();
   expect(postCount).toBe(1);
 });
 

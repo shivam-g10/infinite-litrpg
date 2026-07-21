@@ -1,3 +1,5 @@
+import { DEMO_CHAPTER_LIMIT } from "@infinite-litrpg/shared";
+
 export interface StoryChoice {
   readonly id: string;
   readonly description: string;
@@ -71,6 +73,17 @@ export interface ChapterView {
   readonly choices: readonly StoryChoice[];
 }
 
+export interface ChapterHistoryItem {
+  readonly chapter: number;
+  readonly title: string;
+}
+
+export interface ReaderChapterView {
+  readonly chapter: number;
+  readonly prose: string;
+  readonly title: string;
+}
+
 export interface VisibleEventView {
   readonly id: string;
   readonly summary: string;
@@ -115,6 +128,7 @@ export interface GodModeView {
 }
 
 export interface StoryView {
+  readonly chapterHistory: readonly ChapterHistoryItem[];
   readonly continuationPlan: {
     readonly chapterCount: number;
     readonly endChapter: number;
@@ -125,7 +139,6 @@ export interface StoryView {
   readonly pov: PovView;
   readonly chapter: ChapterView | null;
   readonly visibleEvents: readonly VisibleEventView[];
-  readonly progress: number;
   readonly usage: UsageView;
   readonly estimatedCostUsd: number;
   readonly latencyMs: number;
@@ -367,17 +380,42 @@ export function normalizeStoryPayload(payload: unknown): StoryView | null {
       : null;
 
   const chapterNumber = numberAt(world, "chapter", "chapterNumber");
+  const chapterHistory = recordsAt(unwrapped, "chapterHistory").map((item) => ({
+    chapter: numberAt(item, "chapter"),
+    title: stringAt(item, "title"),
+  }));
+  if (
+    chapterHistory.some(
+      ({ chapter: savedChapter, title }) =>
+        !Number.isSafeInteger(savedChapter) ||
+        savedChapter < 1 ||
+        savedChapter > chapterNumber ||
+        title.length === 0,
+    ) ||
+    chapterHistory.some(
+      ({ chapter: savedChapter }, index) =>
+        index > 0 && savedChapter <= (chapterHistory[index - 1]?.chapter ?? 0),
+    )
+  ) {
+    throw new Error("Story response has invalid chapter history.");
+  }
+  const normalizedChapterHistory =
+    chapterHistory.length > 0
+      ? chapterHistory
+      : chapter && chapterNumber > 0
+        ? [{ chapter: chapterNumber, title: chapter.title }]
+        : [];
   const totalTokens = numberAt(usageSource, "totalTokens");
 
   return {
     adapterMode: stringAt(unwrapped, "adapterMode") || "sequential",
     chapter,
+    chapterHistory: normalizedChapterHistory,
     continuationPlan: normalizeContinuationPlan(unwrapped.continuationPlan),
     estimatedCostUsd: numberAt(unwrapped, "estimatedCostUsd", "costUsd"),
     godMode: normalizeGodMode(godModeSource),
     latencyMs: numberAt(unwrapped, "latencyMs"),
     pov,
-    progress: numberAt(unwrapped, "progress") || Math.min(1, Math.max(0, chapterNumber / 350)),
     usage: {
       ...EMPTY_USAGE,
       cachedInputTokens: numberAt(usageSource, "cachedInputTokens"),
@@ -412,4 +450,22 @@ export function errorMessageFromPayload(payload: unknown, fallback: string): str
   if (!isRecord(payload)) return fallback;
   return stringAt(payload, "error", "message") || fallback;
 }
-import { DEMO_CHAPTER_LIMIT } from "@infinite-litrpg/shared";
+
+export function normalizeReaderChapterPayload(payload: unknown): ReaderChapterView {
+  const unwrapped =
+    isRecord(payload) && Object.hasOwn(payload, "chapter") ? payload.chapter : payload;
+  if (!isRecord(unwrapped)) throw new Error("Chapter response was not an object.");
+  const chapter = numberAt(unwrapped, "chapter");
+  const prose = stringAt(unwrapped, "prose");
+  const title = stringAt(unwrapped, "title");
+  if (
+    !Number.isSafeInteger(chapter) ||
+    chapter < 1 ||
+    chapter > DEMO_CHAPTER_LIMIT ||
+    !prose ||
+    !title
+  ) {
+    throw new Error("Chapter response was invalid.");
+  }
+  return { chapter, prose, title };
+}

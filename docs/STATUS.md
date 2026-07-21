@@ -1,14 +1,14 @@
 # Status
 
 - Updated: 2026-07-21
-- Layer: Product hardening and human review
-- Current phase: Six ten-chapter progression stories for human review
+- Layer: Product UX hardening
+- Current phase: Local application ready for human testing; story-quality evals deferred by user
 - Repository: initialized on `main`
 - Remote: public `https://github.com/shivam-g10/infinite-litrpg`; current local build not pushed
 - Initial commit: `39b19a2` (`chore: scaffold agent workflow`)
-- App: strict Next.js Reader with meaningful-decision continuation, deterministic engine, and SQLite store
-- Live API: prompt `1.4.12` produced all 60 long-form chapters at `$0.86713` total durable exposure; human progression review rejected all six stories
-- Evals: offline suite green
+- App: strict Next.js Reader with saved-chapter history, one-chapter live generation, optional continuation through chapter 100, deterministic engine, and SQLite store
+- Live API: the root key is configured. The visible Rowan chapter is restored evidence, so page load makes zero OpenAI calls. Creating the next chapter is the first live request in a fresh browser session.
+- Evals: offline suite green; new paid story-quality runs deferred by user
 - Build Week deadline: 2026-07-22 05:30 IST
 
 ## Verified
@@ -21,25 +21,19 @@
 
 ## Current Blockers
 
+- No application blocker remains for local human testing.
 - `docs/SAMPLE_STORIES.md` and `docs/story-review-evidence.json` contain six authenticated ten-chapter stories. Automated provenance passes. Human review marked every story `revise`, so this is rejected baseline evidence, not demo copy.
-- The first paid long-form attempt produced ten Rowan chapters, then repeated an Elara route reversal. The Rowan branch also overused the first offered action. Both branches are frozen as rejected quality evidence; no chapter from them will enter the final packet.
-- A separate long-form runner now requires six exact chapter-1-through-10 prefixes, one passed runtime audit per chapter, current prompt and Git provenance, Flex receipts, canonical chapter, delta, trace, and final-state payloads, derived hashes, and one durable aggregate ledger. The strict two-chapter release matrix remains unchanged.
-- Story-review durable exposure is `$0.86713`, including `$0.1635525` carried from the first rejected branch and `$0.7035775` from the complete prompt `1.4.12` branch. The ledger has zero lock, zero active reservation, and zero uncertain exposure. `$4.22087` remains under the authorized `$5.088` cap.
-- The user authorized a 100% increase. New hard ceilings are `$0.0848` per uninterrupted chapter chain and `$5.088` aggregate. Existing `$0.1635525` exposure stays charged. Input-token count endpoint billing, if any, remains outside the local ledger.
 - Human review passed only Rowan chapters 1–2, Elara chapter 1, Maelin chapters 1–3, Varek chapters 1–3 and 6, Lucan chapter 1, and Nyra chapters 1–2. Failures include stalled arcs, repeated no-result actions, uncommitted skill and mana claims, wrong inventory and mana snapshots, route reversals, invented knowledge, and Varek learning Nyra's private class.
-
-- Human review originally rejected Rowan chapter 2, Elara chapter 1, and Lucan chapter 1 in automated-green report `fb9295d7c33ca154c7e407894b807d4a371b83d5ef066d78eee05ee42d4c49d2`.
-- The authorized re-narration chain retained a corrected Rowan chapter 2. Elara did not commit and Lucan was not reached. Failure report SHA-256 `d935b56ed039e560ac067c2ec268ed7780b9daf196497e3ffde6349be2c02e0a` is registered under `prompt-1-4-11-flex-elara-renarration-failure-3` with 43 exact bridge hashes.
-- Durable exposure is `$2.993429175`; headroom is `$0.006570825`. Ledger has zero lock and zero active or uncertain reservations. No later paid command has run or is authorized.
-- Provider-free preflight accepts only the registered report, sequential Flex mode, exact prior and chapter caps, and ordered Elara chapter 1 then Lucan chapter 1 targets. Their hard `$0.027` new-work ceiling projects `$3.020429175` and `$0.000570825` final headroom under `$3.021`. The migration and paid command exist but have not run. Fresh user authority is required.
 - Current-prompt native Multi-agent proof, a human-approved corrected six-POV report, the six ten-chapter progression verdicts, real-click video approval, feedback session ID, push, and submission remain release gates. The Reader UI can still be tested locally; narrative progression review cannot start.
 
 ## Next Action
 
-Preserve the rejected prompt `1.4.12` pack, turn every concrete human-review escape into a failing regression, and implement the next quality variant. It must improve chapter-action diversity, reject uncommitted skill and state claims, block paraphrased private facts, and keep quality-critical model routing inside the authorized cap. Run every non-live gate and provider-free migration proof before another paid request.
+Human-test the Reader at `http://localhost:3000`. Click **Create chapter 2** to prove the configured key with one live request. Review saved chapters with Previous, Next, or the chapter picker. Open **Create several chapters** only when testing automatic continuation. Resume story-quality eval work later.
 
 ## Evidence Log
 
+- 2026-07-21 application UX: proved the visible Rowan chapter is seeded SQLite evidence and page load makes no provider request. Added explicit local-save versus live-OpenAI status, API-key readiness, lazy saved-chapter review, one-chapter primary generation, and secondary exact-cost continuation through chapter 100. Historical chapter reads expose only chapter number, title, and POV-safe prose; actions remain on the latest chapter.
+- 2026-07-21 application verification: `npm run format:check`, `npm run typecheck`, `npm run lint`, `npm run test`, and `npm run build` exited 0. Vitest passed 317 tests. The final `npm run test:e2e` passed 27 tests with one intentional desktop skip across desktop and mobile. Browser inspection verified Reader, saved-chapter status, one-chapter control, optional 46-chapter disclosure, and God Mode. Secret and client-bundle scans passed. No paid request ran in this UX slice.
 - 2026-07-19: Git root resolved to `D:/Work/Consulting/KodingKorp/code/infinite-litrpg`.
 - 2026-07-19: remote fetch and push URL matched requested SSH URL.
 - 2026-07-19: all JSON and JSONL fixtures parsed successfully.

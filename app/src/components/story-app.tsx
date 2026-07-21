@@ -9,9 +9,16 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { CharacterSelection } from "./character-selection";
 import { StoryShell, type StoryCommand } from "./story-shell";
-import { errorMessageFromPayload, normalizeStoryPayload, type StoryView } from "./story-types";
+import {
+  errorMessageFromPayload,
+  normalizeReaderChapterPayload,
+  normalizeStoryPayload,
+  type ReaderChapterView,
+  type StoryView,
+} from "./story-types";
 
 interface StoryAppProps {
+  readonly apiKeyConfigured: boolean;
   readonly characters: readonly PublicCharacterProfile[];
 }
 
@@ -106,11 +113,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export function StoryApp({ characters }: StoryAppProps) {
+export function StoryApp({ apiKeyConfigured, characters }: StoryAppProps) {
   const [story, setStory] = useState<StoryView | null>(null);
-  const [streamedProse, setStreamedProse] = useState("");
+  const [receivedProse, setReceivedProse] = useState(false);
   const [busy, setBusy] = useState<BusyState>("loading");
   const [error, setError] = useState<string | null>(null);
+  const [chapterSource, setChapterSource] = useState<"live" | "local">("local");
+  const [reviewedChapter, setReviewedChapter] = useState<ReaderChapterView | null>(null);
+  const [reviewBusy, setReviewBusy] = useState(false);
+  const [reviewError, setReviewError] = useState<string | null>(null);
   const [automaticRun, setAutomaticRun] = useState(false);
   const [generationChapter, setGenerationChapter] = useState<number | null>(null);
   const [runMessage, setRunMessage] = useState<string | null>(null);
@@ -121,12 +132,17 @@ export function StoryApp({ characters }: StoryAppProps) {
   const lastRequest = useRef<RequestDescriptor>({ kind: "load" });
   const automaticRunActive = useRef(false);
   const stopRequestedRef = useRef(false);
+  const chapterCache = useRef(new Map<number, ReaderChapterView>());
+  const chapterReviewController = useRef<AbortController | null>(null);
 
   const performRequest = useCallback(async (request: RequestDescriptor, signal?: AbortSignal) => {
     lastRequest.current = request;
+    chapterReviewController.current?.abort();
+    chapterReviewController.current = null;
+    setReviewBusy(false);
     setError(null);
     setFailedRequestKind(null);
-    if (request.kind === "command") setStreamedProse("");
+    if (request.kind === "command") setReceivedProse(false);
 
     const init: RequestInit =
       request.kind === "load"
@@ -149,9 +165,7 @@ export function StoryApp({ characters }: StoryAppProps) {
       const response = await fetch("/api/story", init);
       const payload = await readPayload(
         response,
-        request.kind === "command"
-          ? (chunk) => setStreamedProse((prose) => prose + chunk)
-          : undefined,
+        request.kind === "command" ? () => setReceivedProse(true) : undefined,
       );
       if (!response.ok) {
         throw new Error(
@@ -164,13 +178,23 @@ export function StoryApp({ characters }: StoryAppProps) {
         throw new Error("Story server did not return the locked world.");
       }
       setStory(nextStory);
-      setStreamedProse("");
+      setReceivedProse(false);
+      setReviewedChapter(null);
+      setReviewError(null);
+      setChapterSource(request.kind === "command" ? "live" : "local");
+      if (nextStory?.chapter && nextStory.world.chapter > 0) {
+        chapterCache.current.set(nextStory.world.chapter, {
+          chapter: nextStory.world.chapter,
+          prose: nextStory.chapter.prose,
+          title: nextStory.chapter.title,
+        });
+      }
       return { ok: true as const, story: nextStory };
     } catch (requestError) {
       if (requestError instanceof DOMException && requestError.name === "AbortError") {
         return { aborted: true as const, ok: false as const };
       }
-      setStreamedProse("");
+      setReceivedProse(false);
       setFailedRequestKind(request.kind);
       setError(requestError instanceof Error ? requestError.message : "Story request failed.");
       return { aborted: false as const, ok: false as const };
@@ -276,6 +300,67 @@ export function StoryApp({ characters }: StoryAppProps) {
     setStopRequested(true);
   }, []);
 
+  const reviewChapter = useCallback(
+    async (chapterNumber: number) => {
+      chapterReviewController.current?.abort();
+      chapterReviewController.current = null;
+      if (!story || chapterNumber === story.world.chapter) {
+        setReviewedChapter(null);
+        setReviewError(null);
+        setReviewBusy(false);
+        return;
+      }
+      if (!story.chapterHistory.some(({ chapter }) => chapter === chapterNumber)) {
+        setReviewError("That chapter is not in this saved story.");
+        setReviewBusy(false);
+        return;
+      }
+      const cached = chapterCache.current.get(chapterNumber);
+      if (cached) {
+        setReviewedChapter(cached);
+        setReviewError(null);
+        setReviewBusy(false);
+        return;
+      }
+      const controller = new AbortController();
+      chapterReviewController.current = controller;
+      setReviewBusy(true);
+      setReviewError(null);
+      try {
+        const response = await fetch(`/api/story?chapter=${chapterNumber}`, {
+          cache: "no-store",
+          method: "GET",
+          signal: controller.signal,
+        });
+        const payload = await readPayload(response);
+        if (!response.ok) {
+          throw new Error(
+            errorMessageFromPayload(payload, `Chapter request failed (${response.status}).`),
+          );
+        }
+        const chapter = normalizeReaderChapterPayload(payload);
+        if (chapter.chapter !== chapterNumber) {
+          throw new Error("Saved chapter response did not match the requested chapter.");
+        }
+        if (chapterReviewController.current !== controller) return;
+        chapterCache.current.set(chapter.chapter, chapter);
+        setReviewedChapter(chapter);
+      } catch (chapterError) {
+        if (chapterError instanceof DOMException && chapterError.name === "AbortError") return;
+        if (chapterReviewController.current !== controller) return;
+        setReviewError(
+          chapterError instanceof Error ? chapterError.message : "Saved chapter did not open.",
+        );
+      } finally {
+        if (chapterReviewController.current === controller) {
+          chapterReviewController.current = null;
+          setReviewBusy(false);
+        }
+      }
+    },
+    [story],
+  );
+
   if (busy === "loading" && !story && !error) {
     return (
       <main className="loading-screen" role="status">
@@ -305,6 +390,7 @@ export function StoryApp({ characters }: StoryAppProps) {
   if (!story) {
     return (
       <CharacterSelection
+        apiKeyConfigured={apiKeyConfigured}
         busy={busy === "locking"}
         characters={characters}
         error={error}
@@ -316,8 +402,10 @@ export function StoryApp({ characters }: StoryAppProps) {
 
   return (
     <StoryShell
-      busy={busy === "turn"}
+      apiKeyConfigured={apiKeyConfigured}
       automaticRun={automaticRun}
+      busy={busy === "turn"}
+      chapterSource={chapterSource}
       error={error}
       generationChapter={generationChapter}
       onCommand={(command) => {
@@ -332,12 +420,16 @@ export function StoryApp({ characters }: StoryAppProps) {
         });
       }}
       onContinue={() => void continueToDecision()}
+      onReviewChapter={(chapter) => void reviewChapter(chapter)}
       onRetry={retry}
       onStop={stopAfterCurrentChapter}
+      receivedProse={receivedProse}
+      reviewBusy={reviewBusy}
+      reviewError={reviewError}
+      reviewedChapter={reviewedChapter}
       runMessage={runMessage}
       story={story}
       stopRequested={stopRequested}
-      streamedProse={streamedProse}
     />
   );
 }

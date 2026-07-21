@@ -256,6 +256,25 @@ export class StoryService {
     return state ? this.toView(state) : null;
   }
 
+  getReaderChapter(chapterNumber: number): ReaderChapterView {
+    const state = this.store.loadWorldState(WORLD_ID);
+    if (!state || state.lockedPovId === null) {
+      throw new StoryServiceError("No locked story exists", 404);
+    }
+    if (
+      !Number.isSafeInteger(chapterNumber) ||
+      chapterNumber < 1 ||
+      chapterNumber > state.chapter
+    ) {
+      throw new StoryServiceError("Chapter is outside the saved story", 404);
+    }
+    const chapter = this.store.loadChapter(state.id, chapterNumber);
+    if (!chapter || chapter.povCharacterId !== state.lockedPovId) {
+      throw new StoryServiceError("Chapter is not available to this viewpoint", 404);
+    }
+    return { chapter: chapter.chapter, prose: chapter.prose, title: chapter.title };
+  }
+
   selectPov(povCharacterId: string): StoryView {
     const existing = this.store.loadWorldState(WORLD_ID);
     if (existing) {
@@ -1137,8 +1156,8 @@ export class StoryService {
     if (state.lockedPovId === null) throw new StoryServiceError("Viewpoint is not locked", 500);
     const pov = state.characters.find(({ id }) => id === state.lockedPovId);
     if (!pov) throw new StoryServiceError("Locked viewpoint is missing", 500);
-    const latestChapter =
-      state.chapter > 0 ? this.store.loadChapter(state.id, state.chapter) : null;
+    const chapters = state.chapter > 0 ? this.store.loadChapters(state.id) : [];
+    const latestChapter = chapters.at(-1) ?? null;
     const trace = latestChapter ? this.store.loadTrace(latestChapter.traceId) : null;
     const context = buildPovContext(state, state.lockedPovId);
     const locationNames = new Map(state.locations.map(({ id, name }) => [id, name]));
@@ -1148,6 +1167,7 @@ export class StoryService {
 
     return {
       adapterMode: trace?.adapterMode ?? "sequential",
+      chapterHistory: chapters.map(({ chapter, title }) => ({ chapter, title })),
       continuationPlan: this.continuationPlanFor(state),
       chapter: latestChapter
         ? {
@@ -1193,7 +1213,6 @@ export class StoryService {
           name: characterNames.get(relationship.characterId) ?? relationship.characterId,
         })),
       },
-      progress: state.chapter / 350,
       usage,
       visibleEvents: context.observedEvents.map((event) => ({
         id: event.id,
@@ -1216,6 +1235,10 @@ export class StoryService {
 
 export interface StoryView {
   readonly adapterMode: string;
+  readonly chapterHistory: readonly {
+    readonly chapter: number;
+    readonly title: string;
+  }[];
   readonly continuationPlan: {
     readonly chapterCount: number;
     readonly endChapter: number;
@@ -1231,7 +1254,6 @@ export interface StoryView {
   readonly godMode: Readonly<Record<string, unknown>>;
   readonly latencyMs: number;
   readonly pov: Readonly<Record<string, unknown>>;
-  readonly progress: number;
   readonly usage: RuntimeUsage;
   readonly visibleEvents: readonly {
     readonly id: string;
@@ -1239,6 +1261,12 @@ export interface StoryView {
     readonly summary: string;
   }[];
   readonly world: Readonly<Record<string, unknown>>;
+}
+
+export interface ReaderChapterView {
+  readonly chapter: number;
+  readonly prose: string;
+  readonly title: string;
 }
 
 interface AuditedCanonicalNarrationOptions {
