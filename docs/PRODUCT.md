@@ -1,64 +1,37 @@
 # Product Contract
 
-## Thesis
+## Scope
 
-Choose one life. World keeps moving without you.
+Infinite LitRPG creates original reincarnation stories with an explicit System. The current creator fixes those two foundations and lets the reader choose the rest.
 
-Infinite LitRPG is not generic story chat. It is a persistent world simulation narrated through one locked character viewpoint.
+The reader sets the title, starting life, gender, power path, genres, backgrounds, personality, rebirth cause, memory state, System focus, protagonist name, and optional guidance. If no name is entered, the app generates a fresh cast. World terms are also selected fresh for every new story.
 
-## Baseline World
+## Reader loop
 
-Original setting: Ashen Crown, a continent rebuilding after Demon King Malachar died.
+1. Create or open a local book.
+2. Generate Chapter 1 as a real origin chapter.
+3. Read the committed chapter without developer telemetry.
+4. Choose when the story reaches a meaningful decision.
+5. Let routine chapters continue in the background.
+6. Reroll the latest chapter when its prose is weak. Canon remains fixed.
+7. Reject a book and try another setup without deleting its files.
+8. Stop the demo at Chapter 100. The complete engine ends at Chapter 350.
 
-Six selectable characters already exist:
+## Narrative contract
 
-| Character     | Role                                     | Starting conflict                                          |
-| ------------- | ---------------------------------------- | ---------------------------------------------------------- |
-| Rowan Ashborn | Malachar reincarnated as level-one human | Survive without revealing old identity                     |
-| Elara Voss    | Chosen Hero                              | Victory feels staged; prophecy has missing lines           |
-| Maelin Rook   | Saint                                    | Church hid proof Demon King was containing something worse |
-| Varek Thorn   | Former Demon General                     | Must choose between dead oath and living people            |
-| Lucan Aurelis | Imperial Crown Prince                    | Throne profits from endless demon war                      |
-| Nyra Vale     | Guild-ranked rival                       | System assigned a class no archive recognizes              |
+- Close-third viewpoint.
+- Chapter 1 dramatizes the prior-life ending, reincarnation, new body, immediate world, first System pressure, and a consequential response.
+- The System affects decisions, tradeoffs, progress, or risk. It is not decoration.
+- Dialogue and character behavior must alter a plan, relationship pressure, conflict, or choice when the scene supports another speaker.
+- Every chapter advances a concrete objective, location, threat, relationship, capability, resource, or knowledge state.
+- Titles, openings, scene shapes, and paragraph language must not loop.
+- Internal milestones, deadlines, prompt fields, audit language, and model instructions never appear in reader prose.
+- Models cannot invent durable canon outside an accepted `WorldDelta`.
 
-Each starts with class, level, stats, skills, inventory, location, goals, beliefs, secrets, relationships, faction, and private knowledge.
+## Product limits
 
-## User Loop
-
-1. Load the seeded Ashen Crown world.
-2. Inspect six public character profiles.
-3. Lock viewpoint.
-4. Choose one of two valid actions or enter a custom action when the story reaches a meaningful decision.
-5. Relevant background actors propose independent intents.
-6. World Director resolves one canonical delta.
-7. Read streamed POV-safe chapter.
-8. Inspect visible state, progression, clock, cost, and latency.
-9. Continue routine chapters automatically, one atomic chapter at a time, until the next meaningful decision.
-10. Stop the demo at chapter 100. Continue the full story until terminal outcome or chapter 350.
-
-## Narrative Contract
-
-- Close-third viewpoint for MVP.
-- Narrator gets POV knowledge, observed chapter events, and allowed public facts only.
-- Off-screen events surface through consequences, rumors, messages, divination, reports, or encounters.
-- User controls chosen character attempt, not world outcome.
-- Impossible actions fail honestly. They never rewrite canon.
-- At meaningful decisions, two suggested actions must be materially different, possible, and consequential.
-
-## Success
-
-- Clean local start under five minutes.
-- Core demo under three minutes.
-- Three distinct background intents visible in inspector.
-- One valid atomic delta commits.
-- No hidden fact leaks into chapter.
-- Story clock forces resolution by chapter 350.
-
-## Non-Goals
-
-- Other genres.
-- Viewpoint switching.
-- Public story hosting or social features.
-- Author marketplace.
-- Commercial validation.
-- Perfect 350-chapter prose during challenge.
+- Local only. No account, payment, hosted library, analytics, public feed, image, audio, or mobile app.
+- Bring your own OpenAI key in `.env`.
+- One active generation per story. Different stories remain independent.
+- At most three background intent agents per chapter.
+- Chapter 100 is the demo stop. Chapter 350 is terminal.

@@ -2,12 +2,13 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import type { StorySummary } from "./story-types";
+import type { StoryGenerationView, StorySummary } from "./story-types";
 
 interface StoryLibraryProps {
   readonly activeStoryId: string;
   readonly busy: boolean;
   readonly error: string | null;
+  readonly generations: readonly StoryGenerationView[];
   readonly onActivate: (storyId: string) => void;
   readonly onNewStory: () => void;
   readonly onReopen: (storyId: string) => void;
@@ -27,6 +28,7 @@ export function StoryLibrary({
   activeStoryId,
   busy,
   error,
+  generations,
   onActivate,
   onNewStory,
   onReopen,
@@ -43,6 +45,7 @@ export function StoryLibrary({
     ({ id, status }) => id !== activeStoryId && status === "active",
   );
   const rejectedStories = stories.filter(({ status }) => status === "rejected");
+  const generationFor = (storyId: string) => generations.find((item) => item.storyId === storyId);
 
   useEffect(() => {
     if (error) details.current?.setAttribute("open", "");
@@ -71,7 +74,11 @@ export function StoryLibrary({
             <p>Story library</p>
             <h2>{activeStory.title}</h2>
           </div>
-          <span>{chapterLabel(activeStory.chapterCount)}</span>
+          <span>
+            {generationFor(activeStory.id)
+              ? `Chapter ${generationFor(activeStory.id)!.targetChapter} in progress`
+              : chapterLabel(activeStory.chapterCount)}
+          </span>
         </div>
 
         {confirmingRestart ? (
@@ -117,7 +124,11 @@ export function StoryLibrary({
                 <li key={story.id}>
                   <span>
                     <strong>{story.title}</strong>
-                    <small>{chapterLabel(story.chapterCount)}</small>
+                    <small>
+                      {generationFor(story.id)
+                        ? `Chapter ${generationFor(story.id)!.targetChapter} in progress`
+                        : chapterLabel(story.chapterCount)}
+                    </small>
                   </span>
                   <button
                     disabled={busy}

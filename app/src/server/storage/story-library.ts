@@ -33,7 +33,7 @@ const STORY_METADATA_KEYS = new Set([
 ]);
 const LIBRARY_INDEX_KEYS = new Set(["activeStoryId", "schemaVersion", "stories"]);
 
-export type StoryStatus = "active" | "rejected";
+type StoryStatus = "active" | "rejected";
 
 export interface StoryMetadata {
   readonly chapterCount: number;

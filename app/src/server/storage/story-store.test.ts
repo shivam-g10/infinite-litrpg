@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import {
+  DEFAULT_STORY_SETUP,
   stageWorldDelta,
   resolveTurn,
   WorldStateSchema,
@@ -31,6 +32,65 @@ afterEach(() => {
   for (const store of stores.splice(0)) {
     store.close();
   }
+});
+
+describe("StoryStore story setup", () => {
+  it("persists a strict setup across database reopen", () => {
+    const directory = mkdtempSync(join(tmpdir(), "infinite-litrpg-setup-"));
+    const filename = join(directory, "story.sqlite");
+    let store: StoryStore | null = null;
+
+    try {
+      store = new StoryStore(filename);
+      const initial = seedState();
+      const setup = structuredClone(DEFAULT_STORY_SETUP);
+      setup.guidance = "Keep the opening intimate and dangerous.";
+      store.createWorld(initial, setup);
+      store.close();
+      store = null;
+
+      store = new StoryStore(filename);
+      expect(store.loadWorldState(initial.id)).toEqual(initial);
+      expect(store.loadStorySetup(initial.id)).toEqual(setup);
+    } finally {
+      store?.close();
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
+  it("keeps legacy worlds readable without a setup", () => {
+    const store = openStore();
+    const initial = seedState();
+
+    store.createWorld(initial);
+
+    expect(store.loadWorldState(initial.id)).toEqual(initial);
+    expect(store.loadStorySetup(initial.id)).toBeNull();
+  });
+
+  it("rolls back both world and setup after an injected setup failure", () => {
+    const injectedError = new Error("injected setup storage failure");
+    const store = openStore({
+      failureInjector: (point) => {
+        if (point === "after-story-setup-insert") throw injectedError;
+      },
+    });
+    const initial = seedState();
+
+    expect(() => store.createWorld(initial, DEFAULT_STORY_SETUP)).toThrow(injectedError);
+    expect(store.loadWorldState(initial.id)).toBeNull();
+    expect(store.loadStorySetup(initial.id)).toBeNull();
+  });
+
+  it("rejects an invalid setup before creating the world", () => {
+    const store = openStore();
+    const initial = seedState();
+
+    expect(() =>
+      store.createWorld(initial, { ...DEFAULT_STORY_SETUP, foundation: "regression-system" }),
+    ).toThrow(InvalidCommitError);
+    expect(store.loadWorldState(initial.id)).toBeNull();
+  });
 });
 
 describe("StoryStore atomic turn commit", () => {

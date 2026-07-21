@@ -15,8 +15,8 @@ import {
   type RuntimeUsage,
 } from "./usage";
 
-export const MAX_RETRIES = 2 as const;
-export const DEFAULT_TIMEOUT_MS = 60_000;
+const MAX_RETRIES = 2 as const;
+const DEFAULT_TIMEOUT_MS = 60_000;
 const NANO_USD = 1_000_000_000;
 
 export interface RuntimePolicy {
@@ -28,7 +28,7 @@ export interface RuntimePolicy {
   readonly timeoutMs?: number;
 }
 
-export interface RuntimeCostReservation {
+interface RuntimeCostReservation {
   readonly agentId: string | null;
   readonly attempt: number;
   readonly id: string;
@@ -37,7 +37,7 @@ export interface RuntimeCostReservation {
   readonly serviceTier: RuntimeServiceTier;
 }
 
-export interface RuntimeCostSettlement {
+interface RuntimeCostSettlement {
   readonly actualCostUsd: number;
   readonly id: string;
 }
@@ -72,7 +72,7 @@ export interface RuntimeCallResult<T> {
   readonly usage: RuntimeUsage;
 }
 
-export interface EvaluatedResponse<T> {
+interface EvaluatedResponse<T> {
   readonly data: T;
   readonly responseId: string;
 }

@@ -88,6 +88,79 @@ describe("narrative quality gates", () => {
     expect(countDialogueWords(prose)).toBeGreaterThanOrEqual(20);
   });
 
+  it("requires chapter one to show the prior life, new-body awakening, and System pressure", () => {
+    const missing = validateNarrativeQuality({
+      dialogueRequired: false,
+      history: [],
+      openingOriginRequired: true,
+      prose: "Rain crossed the road. Rowan chose the safer ridge and continued onward.",
+      systemNoticeRequired: false,
+      title: "Rain Before the Ridge",
+    });
+    const complete = validateNarrativeQuality({
+      dialogueRequired: false,
+      history: [],
+      openingOriginRequired: true,
+      prose: [
+        "His last breath in the old life had tasted of iron.",
+        "Rowan woke in a new body beneath an ash-dark sky and chose to crawl clear of the fire.",
+        "[System notice: Survival quest accepted. Mana 10 of 10.]",
+      ].join(" "),
+      systemNoticeRequired: false,
+      title: "A Second Breath in Ash",
+    });
+
+    expect(missing.some(({ code }) => code === "OPENING_ORIGIN_MISSING")).toBe(true);
+    expect(complete.some(({ code }) => code === "OPENING_ORIGIN_MISSING")).toBe(false);
+    expect(complete.some(({ code }) => code === "OPENING_WORLD_MISSING")).toBe(false);
+  });
+
+  it("accepts a fresh named System notice without requiring the literal word System", () => {
+    const issues = validateNarrativeQuality({
+      dialogueRequired: false,
+      history: [],
+      openingOriginRequired: true,
+      prose: [
+        "His last breath ended his old life beneath a burning sky.",
+        "Riven woke in a new body on the cold village floor and chose to stand.",
+        "The Celestial Ledger chimed and revealed his first survival quest.",
+      ].join(" "),
+      systemName: "Celestial Ledger",
+      systemNoticeRequired: true,
+      title: "The Ledger Wakes",
+    });
+
+    expect(issues.some(({ code }) => code === "SYSTEM_NOTICE_MISSING")).toBe(false);
+    expect(issues.some(({ code }) => code === "OPENING_ORIGIN_MISSING")).toBe(false);
+  });
+
+  it("requires chapter one to introduce the immediate world in-scene", () => {
+    const issues = validateNarrativeQuality({
+      dialogueRequired: false,
+      history: [],
+      openingOriginRequired: true,
+      prose:
+        "His last breath ended his old life. Rowan awoke reincarnated in a new body. [System notice: Survival quest accepted.] He chose to continue.",
+      systemNoticeRequired: false,
+      title: "A Second Life Begins",
+    });
+
+    expect(issues.some(({ code }) => code === "OPENING_WORLD_MISSING")).toBe(true);
+  });
+
+  it("rejects internal planning and chapter deadline language", () => {
+    const issues = validateNarrativeQuality({
+      dialogueRequired: false,
+      history: [],
+      prose:
+        "Rowan chose the eastern gate. [Quest: Cross the ward.] [Required by Chapter 50] The System waited.",
+      systemNoticeRequired: true,
+      title: "The Eastern Gate",
+    });
+
+    expect(issues.some(({ code }) => code === "INTERNAL_PLANNING_LEAK")).toBe(true);
+  });
+
   it("rejects exact and near-duplicate recent titles", () => {
     expect(validateTitleNovelty("Read the Ash Road", repetitiveHistory)[0]?.code).toBe(
       "TITLE_REPEATED",

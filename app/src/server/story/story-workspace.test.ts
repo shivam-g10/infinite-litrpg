@@ -25,6 +25,7 @@ import {
   StoryWorkspace,
   StoryWorkspaceClosedError,
   StoryWorkspaceDataError,
+  StoryTurnInProgressError,
   type StoryWorkspaceOptions,
   type StoryWorkspaceService,
   type StoryWorkspaceServiceFactoryInput,
@@ -311,7 +312,98 @@ describe("StoryWorkspace canonical projection", () => {
 });
 
 describe("StoryWorkspace queues and shutdown", () => {
-  it("serializes operations for one story while allowing different stories to progress", async () => {
+  it("keeps reads responsive and rejects a duplicate turn while generation is active", async () => {
+    let releaseTurn!: () => void;
+    let markEntered!: () => void;
+    const release = new Promise<void>((resolve) => {
+      releaseTurn = resolve;
+    });
+    const entered = new Promise<void>((resolve) => {
+      markEntered = resolve;
+    });
+    const workspace = openWorkspace({
+      idGenerator: sequence("rowan1"),
+      serviceFactory: gatedServiceFactory(entered, release, markEntered),
+    });
+    const rowan = await workspace.createStory({
+      povCharacterId: "rowan-ashborn",
+      title: "Responsive Rowan",
+    });
+
+    const generating = workspace.takeTurn(rowan.metadata.id, command(1));
+    await entered;
+
+    expect(workspace.getGenerationStatus(rowan.metadata.id)).toMatchObject({
+      mode: "generate",
+      phase: "preparing",
+      targetChapter: 1,
+    });
+    expect(workspace.listGenerationStatuses()).toEqual([
+      expect.objectContaining({ storyId: rowan.metadata.id, targetChapter: 1 }),
+    ]);
+    await expect(workspace.getStory(rowan.metadata.id)).resolves.toMatchObject({
+      story: { world: { chapter: 0 } },
+    });
+    await expect(workspace.getReaderChapter(rowan.metadata.id, 1)).rejects.toThrow(
+      "outside the saved story",
+    );
+    await expect(workspace.takeTurn(rowan.metadata.id, command(1))).rejects.toBeInstanceOf(
+      StoryTurnInProgressError,
+    );
+
+    releaseTurn();
+    await generating;
+    expect(workspace.getGenerationStatus(rowan.metadata.id)).toBeNull();
+  });
+
+  it("returns the committed chapter when generation finishes during a responsive read", async () => {
+    let releaseRead!: () => void;
+    let markReadEntered!: () => void;
+    const readMayFinish = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    const readEntered = new Promise<void>((resolve) => {
+      markReadEntered = resolve;
+    });
+    const files = new StoryFileStore({ rootDirectory: temporaryRoot });
+    let blockNextChapterRead = false;
+    const workspace = openWorkspace({
+      idGenerator: sequence("rowan1"),
+      projectionStore: {
+        readChapter: async (storyId, chapter) => {
+          if (blockNextChapterRead && chapter === 1) {
+            blockNextChapterRead = false;
+            markReadEntered();
+            await readMayFinish;
+          }
+          return files.readChapter(storyId, chapter);
+        },
+        writeChapter: (input, options) => files.writeChapter(input, options),
+      },
+      serviceFactory: committingServiceFactory(),
+    });
+    const rowan = await workspace.createStory({
+      povCharacterId: "rowan-ashborn",
+      title: "Refresh Race",
+    });
+    await workspace.takeTurn(rowan.metadata.id, command(1));
+
+    blockNextChapterRead = true;
+    const refresh = workspace.getStory(rowan.metadata.id);
+    await readEntered;
+    const committed = await workspace.takeTurn(rowan.metadata.id, command(2));
+    expect(committed.story.world.chapter).toBe(2);
+    releaseRead();
+
+    await expect(refresh).resolves.toMatchObject({
+      generation: null,
+      metadata: { chapterCount: 2 },
+      story: { world: { chapter: 2 } },
+    });
+    expect(workspace.getStoryMetadata(rowan.metadata.id)?.chapterCount).toBe(2);
+  });
+
+  it("allows different stories to progress together", async () => {
     const activeByPov = new Map<string, number>();
     const maxByPov = new Map<string, number>();
     let globalActive = 0;
@@ -340,12 +432,6 @@ describe("StoryWorkspace queues and shutdown", () => {
       povCharacterId: "elara-voss",
       title: "Queued Elara",
     });
-
-    await Promise.all([
-      workspace.takeTurn(rowan.metadata.id, command(1)),
-      workspace.takeTurn(rowan.metadata.id, command(1)),
-    ]);
-    expect(maxByPov.get("rowan-ashborn")).toBe(1);
 
     maxGlobalActive = 0;
     await Promise.all([
@@ -401,6 +487,29 @@ function openWorkspace(overrides: Partial<StoryWorkspaceOptions> = {}): StoryWor
   return workspace;
 }
 
+function gatedServiceFactory(
+  _entered: Promise<void>,
+  release: Promise<void>,
+  markEntered: () => void,
+) {
+  return (input: StoryWorkspaceServiceFactoryInput): StoryWorkspaceService => {
+    const base = new StoryService(input.store, input.client, input.options, input.seedLoader);
+    return {
+      exportJson: () => base.exportJson(),
+      exportMarkdown: () => base.exportMarkdown(),
+      getReaderChapter: (chapter) => base.getReaderChapter(chapter),
+      getStory: () => base.getStory(),
+      rerollLatest: (rerollCommand, onChunk) => base.rerollLatest(rerollCommand, onChunk),
+      selectPov: (pov, setup) => base.selectPov(pov, setup),
+      takeTurn: async () => {
+        markEntered();
+        await release;
+        return requireView(base.getStory());
+      },
+    };
+  };
+}
+
 function serviceOptions() {
   return {
     maxBackgroundAgents: 0,
@@ -433,7 +542,7 @@ function committingServiceFactory(
   return (input: StoryWorkspaceServiceFactoryInput): StoryWorkspaceService => {
     const base = new StoryService(input.store, input.client, input.options, input.seedLoader);
     return {
-      exportJson: (scope) => base.exportJson(scope),
+      exportJson: () => base.exportJson(),
       exportMarkdown: () => base.exportMarkdown(),
       getReaderChapter: (chapter) => base.getReaderChapter(chapter),
       getStory: () => base.getStory(),
@@ -464,7 +573,7 @@ function delayedServiceFactory(
   return (input: StoryWorkspaceServiceFactoryInput): StoryWorkspaceService => {
     const base = new StoryService(input.store, input.client, input.options, input.seedLoader);
     return {
-      exportJson: (scope) => base.exportJson(scope),
+      exportJson: () => base.exportJson(),
       exportMarkdown: () => base.exportMarkdown(),
       getReaderChapter: (chapter) => base.getReaderChapter(chapter),
       getStory: () => base.getStory(),

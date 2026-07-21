@@ -2,40 +2,44 @@
 
 ## Secrets
 
-- User places `OPENAI_API_KEY` in root `.env`.
-- Server-side code reads key. Client code never receives it.
-- `.env` and variants are ignored. Only `.env.example` is tracked.
-- Never include headers, key, or raw environment in logs, traces, exports, fixtures, screenshots, or errors.
-- Run secret scan before first push and before release.
+- Put `OPENAI_API_KEY` in root `.env`.
+- Only server modules read it.
+- `.env`, databases, logs, generated stories, and eval reports are Git-ignored.
+- Errors, traces, exports, screenshots, and client payloads must not contain the key or request headers.
+- Run `npm run security:secrets` and `npm run security:bundle` before release.
 
-## Model Output
+## Untrusted model output
 
-- Treat every model response as untrusted.
-- Parse strict schema.
-- Reject unknown fields.
-- Handle refusal and incomplete output without state mutation.
-- Cap retries, timeout, concurrency, and cost.
-- Reserve worst-case generation cost before transport and retain that reservation when response usage is unknown. Byte bounds may narrow only through the official input-token counter plus a 512-token safety margin; counter failure keeps the byte bound.
-- Carry failed-turn exposure into later attempts for the same chapter and serialize local turn execution.
-- Validate all state mutations deterministically.
+- Parse structured output with strict Zod schemas.
+- Reject unknown fields, incomplete responses, refusals, invalid actions, and illegal mutations.
+- Agents emit intent only. Deterministic code builds the accepted delta.
+- Buffer narration until deterministic checks and the independent audit pass.
+- Commit the world version, delta, knowledge, chapter, trace, and usage in one SQLite transaction.
+- A failed request makes no canonical mutation.
 
-## Content and IP
+## Reader boundary
 
-- Mark generated prose as AI-generated.
-- Use original characters, lore, and setting.
-- Do not request living-author style or copy protected universes.
-- Adult violent fantasy allowed. No explicit sexual content or sexual content involving minors.
+- Reader responses contain only POV-safe state and prose.
+- Raw prompts, hidden facts, other character ledgers, audit instructions, traces, usage, latency, and costs stay server-side.
+- Markdown and JSON exports are reader-safe.
 
-## Release Gate
+## Runtime controls
+
+- One active turn per story and idempotent request receipts prevent duplicate commits.
+- Model calls have finite retries and timeouts.
+- Background intent concurrency is capped at three.
+- Chapter 351 is rejected before a model call.
+
+## Content
+
+- Generate original settings and characters.
+- Do not request living-author imitation or protected-universe copying.
+- Adult fantasy violence is allowed. Explicit sexual content and sexual content involving minors are not.
+
+## Release gate
 
 - Secret scan clean.
-- Client bundle inspection clean.
-- Error path does not echo request headers.
-- Exports contain no hidden system state unless user explicitly selects God Mode export.
-- Dependency licenses inventoried.
-
-## Dependency License Policy
-
-- Allow permissive licenses, attribution licenses, and dynamically linked weak-copyleft runtime dependencies that permit MIT application distribution.
-- Record every installed package and declared license in `evals/reports/licenses.json`.
-- Reject unknown, proprietary, strong-copyleft, or unrecognized license expressions until reviewed and documented.
+- Client bundle scan clean.
+- Dependency audit clean.
+- License inventory contains no blocked license.
+- Browser error paths do not echo private inputs.

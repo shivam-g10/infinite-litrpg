@@ -39,9 +39,9 @@ What current OpenAI architecture best supports persistent multi-character LitRPG
 
 - Luna agents should read one immutable snapshot and emit intent only.
 - One Director and deterministic validator should own canonical delta.
-- Terra should narrate from staged prospective state and POV-safe context. Narrative audit must pass before one atomic commit.
-- Sol should handle high-value low-frequency world and finale work.
-- Native Multi-agent needs adapter and sequential Luna fallback.
+- Sol should frame and narrate from staged prospective state and POV-safe context.
+- Terra should translate custom actions and audit the buffered narration before one atomic commit.
+- Native Multi-agent needs an adapter and a concurrent application fallback for Luna intents.
 - Trace every call and convert failures into local regression cases.
 
 ## Unknowns
@@ -57,5 +57,6 @@ What current OpenAI architecture best supports persistent multi-character LitRPG
 - Responses API only.
 - Strict schemas on state-changing calls.
 - Maximum three background agents.
+- Concurrent application fallback when native Multi-agent is unavailable.
 - Single-writer world state.
 - Local in-repo eval corpus. No legacy Evals platform dependency.

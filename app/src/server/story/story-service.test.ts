@@ -2,8 +2,8 @@ import { createHash } from "node:crypto";
 
 import {
   CHARACTER_IDS,
+  DEFAULT_STORY_SETUP,
   PlayerActionSchema,
-  RUNTIME_SCHEMA_VERSION,
   buildChapterChoiceOptions,
   canonicalizeChapterFrameCandidate,
   resolveTurn,
@@ -27,7 +27,7 @@ import {
   diversifyQualityOptionIds,
   initialChoices,
   loadSeedWorld,
-  REVIEW_STORY_MODELS,
+  STORY_MODELS,
   type NarrativeCandidateEvidence,
   type NarrativeTurnIdentity,
   StoryService,
@@ -45,9 +45,44 @@ describe("StoryService", () => {
 
     expect(view.pov.id).toBe(characterId);
     expect(view.chapter.choices).toHaveLength(2);
+    expect(view.chapter).toMatchObject({ prose: "", title: "" });
     expect(view.chapterHistory).toEqual([]);
     expect(view.continuationPlan).toBeNull();
     expect(view.world).toMatchObject({ chapter: 0, terminal: false, version: 1 });
+    store.close();
+  });
+
+  it("applies and persists setup canon before locking the new protagonist", () => {
+    const store = new StoryStore();
+    const service = new StoryService(store, unusedClient(), options());
+    const setup = structuredClone(DEFAULT_STORY_SETUP);
+    setup.guidance = "Open with a broken oath and no exposition dump.";
+    setup.memory = "full";
+    setup.rebirthCause = "sacrifice";
+    setup.startingLife = "child";
+
+    const view = service.selectPov("rowan-ashborn", setup);
+    const world = store.loadWorldState("ashen-crown-v1");
+
+    expect(view.pov.id).toBe("rowan-ashborn");
+    expect(store.loadStorySetup("ashen-crown-v1")).toEqual(setup);
+    expect(world?.facts.find(({ id }) => id === "rowan-is-malachar-reincarnated")?.claim).toBe(
+      "Rowan Ashborn is Demon King Malachar reincarnated in a male eight-year-old body after a deliberate sacrifice, with full memories.",
+    );
+    expect(world?.characters.find(({ id }) => id === "rowan-ashborn")).toMatchObject({
+      health: { current: 20, maximum: 20 },
+      publicRole: "Demon King reincarnated in a male eight-year-old body",
+    });
+    store.close();
+  });
+
+  it("preserves legacy genesis when setup is absent", () => {
+    const store = new StoryStore();
+    const service = new StoryService(store, unusedClient(), options());
+
+    service.selectPov("rowan-ashborn");
+
+    expect(store.loadStorySetup("ashen-crown-v1")).toBeNull();
     store.close();
   });
 
@@ -152,7 +187,7 @@ describe("StoryService", () => {
         ...options(),
         enforceNarrativeQuality: true,
         maxBackgroundAgents: 1,
-        modelConfig: REVIEW_STORY_MODELS,
+        modelConfig: STORY_MODELS,
         promptCacheKey: "story:test-review",
       },
     );
@@ -320,7 +355,7 @@ describe("StoryService", () => {
     expect(stream).toHaveBeenCalledTimes(1);
     expect(create.mock.calls[0]?.[0]).toMatchObject({ reasoning: { effort: "low" } });
     expect(create.mock.calls[0]?.[0]).not.toHaveProperty("max_output_tokens");
-    expect(stream.mock.calls[0]?.[0]).toMatchObject({ reasoning: { effort: "none" } });
+    expect(stream.mock.calls[0]?.[0]).toMatchObject({ reasoning: { effort: "medium" } });
     expect(stream.mock.calls[0]?.[0]).not.toHaveProperty("max_output_tokens");
     expect(JSON.parse(String(stream.mock.calls[0]?.[0].input))).toMatchObject({
       retryDirective: "Keep the exact canonical route.",
@@ -330,7 +365,7 @@ describe("StoryService", () => {
     expect(
       result.trace.calls.map(({ phase, reasoningEffort }) => [phase, reasoningEffort]),
     ).toEqual([
-      ["narration", "none"],
+      ["narration", "medium"],
       ["audit", "low"],
     ]);
 
@@ -406,7 +441,7 @@ describe("StoryService", () => {
       {
         ...options(),
         enforceNarrativeQuality: true,
-        modelConfig: REVIEW_STORY_MODELS,
+        modelConfig: STORY_MODELS,
       },
     );
     const replayed: string[] = [];
@@ -614,8 +649,6 @@ describe("StoryService", () => {
         expect.objectContaining({ status: 404 }),
       );
       expect(result.chapter.prose.split(/\s+/u)).toHaveLength(180);
-      expect(result.godMode).toMatchObject({ gateResult: "passed" });
-      expect(result.godMode).toMatchObject({ schemaVersion: RUNTIME_SCHEMA_VERSION });
       expect(store.loadChapters("ashen-crown-v1")).toHaveLength(1);
       expect(replayed.join("")).toBe(prose);
       expect(store.loadFailedTurnTraces("ashen-crown-v1")).toEqual([]);
@@ -656,20 +689,16 @@ describe("StoryService", () => {
       expect(new Set(runtimeTurns.map(({ turnId }) => turnId))).toEqual(new Set([committedRunId]));
       expect(runtimeTurns.every(({ requestId }) => requestId === command.requestId)).toBe(true);
       expect(narrativeCandidates.every(({ turn }) => turn.turnId === committedRunId)).toBe(true);
-      const calls = result.godMode.calls as readonly {
-        model: string;
-        phase: string;
-        retries: number;
-      }[];
+      const calls = committedTrace.calls;
       expect(calls).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ model: "gpt-5.6-luna", phase: "intent" }),
-          expect.objectContaining({ model: "gpt-5.6-luna", phase: "narration" }),
-          expect.objectContaining({ model: "gpt-5.6-luna", phase: "audit" }),
+          expect.objectContaining({ model: "gpt-5.6-sol", phase: "intent" }),
+          expect.objectContaining({ model: "gpt-5.6-sol", phase: "narration" }),
+          expect.objectContaining({ model: "gpt-5.6-terra", phase: "audit" }),
         ]),
       );
       expect(stream.mock.calls.map(([body]) => (body as { model?: string }).model)).toEqual([
-        "gpt-5.6-luna",
+        "gpt-5.6-sol",
       ]);
       expect(
         parse.mock.calls.map(([body]) => (body as { service_tier?: string }).service_tier),
@@ -689,7 +718,6 @@ describe("StoryService", () => {
         }),
       ).rejects.toMatchObject({ status: 409 });
       expect(service.exportJson()).not.toContain("Malachar contained the Void beneath his throne");
-      expect(service.exportJson("god")).toContain("Malachar contained the Void beneath his throne");
       store.close();
     },
   );
@@ -783,7 +811,7 @@ describe("StoryService", () => {
 
     const chapter = store.loadChapter("ashen-crown-v1", 1);
     const trace = chapter ? store.loadTrace(chapter.traceId) : null;
-    expect(view.adapterMode).toBe("native-multi-agent");
+    expect(view.world).toMatchObject({ chapter: 1, version: 2 });
     expect(betaCreate).toHaveBeenCalledTimes(1);
     expect(trace?.adapterMode).toBe("native-multi-agent");
     expect(trace?.multiAgentOutputItems).toEqual([callItem, callOutputItem, rootMessage]);
@@ -1460,7 +1488,7 @@ describe("StoryService", () => {
     for (const [request] of parse.mock.calls) {
       const structuredRequest = request as
         { model?: string; text?: { format?: { name?: string } } } | undefined;
-      expect(structuredRequest?.model).toBe("gpt-5.6-luna");
+      expect(structuredRequest?.model).toBe("gpt-5.6-sol");
       expect(structuredRequest?.text?.format?.name).toBe("chapter_frame_candidate");
     }
     expect(stream).not.toHaveBeenCalled();

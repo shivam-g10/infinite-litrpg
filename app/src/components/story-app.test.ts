@@ -6,6 +6,8 @@ describe("readStoryStream", () => {
   it("accepts a committed story stream larger than the former one-megabyte ceiling", async () => {
     const prose = "ember ".repeat(170_000);
     const body = [
+      JSON.stringify({ status: "generating", type: "status" }),
+      JSON.stringify({ type: "heartbeat" }),
       JSON.stringify({ text: prose, type: "chunk" }),
       JSON.stringify({ library: { stories: [] }, story: { chapter: { prose } }, type: "story" }),
       "",

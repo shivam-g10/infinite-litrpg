@@ -8,16 +8,15 @@ export async function GET(request: Request) {
   try {
     const parameters = new URL(request.url).searchParams;
     const format = parameters.get("format");
-    const scope = parameters.get("scope") === "god" ? "god" : "reader";
     const runtime = await getStoryRuntime();
     const storyId = parameters.get("storyId") ?? runtime.workspace.getActiveStoryMetadata()?.id;
     if (storyId === undefined) throw new StoryServiceError("No active story exists", 404);
     const filename = storyId.replace(/[^a-z0-9-]/gu, "-");
     if (format === "json") {
       return download(
-        await runtime.workspace.exportJson(storyId, scope),
+        await runtime.workspace.exportJson(storyId),
         "application/json",
-        scope === "god" ? `${filename}-developer.json` : `${filename}-reader.json`,
+        `${filename}-reader.json`,
       );
     }
     if (format === "markdown") {

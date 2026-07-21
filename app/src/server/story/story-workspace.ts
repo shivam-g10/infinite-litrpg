@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 
-import type { WorldState } from "@infinite-litrpg/shared";
+import type { StorySetup, WorldState } from "@infinite-litrpg/shared";
 import type OpenAI from "openai";
 
 import {
@@ -25,9 +25,11 @@ import {
   type ReaderChapterView,
   type RerollLatestCommand,
   type StoryServiceOptions,
+  type StoryGenerationPhase,
   type StoryView,
   type TurnCommand,
 } from "./story-service";
+import { sanitizeReaderProse } from "./reader-safety";
 
 const CANONICAL_WORLD_ID = "ashen-crown-v1";
 const MAX_ID_ATTEMPTS = 8;
@@ -36,6 +38,7 @@ export interface CreateWorkspaceStoryInput {
   /** Optional deterministic ID for trusted local tooling such as review-pack generation. */
   readonly id?: string;
   readonly povCharacterId: string;
+  readonly setup?: StorySetup;
   readonly title: string;
 }
 
@@ -44,7 +47,7 @@ export interface RestartWorkspaceStoryInput {
   readonly title?: string;
 }
 
-export type StoryWorkspaceWarningCode =
+type StoryWorkspaceWarningCode =
   | "canonical-projection-incomplete"
   | "chapter-projection-failed"
   | "library-sync-failed"
@@ -67,9 +70,18 @@ export interface StoryReconciliationResult {
 }
 
 export interface WorkspaceStoryResult {
+  /** Present on responsive reads so story and generation state come from one event-loop snapshot. */
+  readonly generation?: StoryGenerationStatus | null;
   readonly metadata: StoryMetadata;
   readonly story: StoryView;
   readonly warnings: readonly StoryWorkspaceWarning[];
+}
+
+export interface StoryGenerationStatus {
+  readonly mode: "generate" | "rewrite";
+  readonly phase: StoryGenerationPhase;
+  readonly storyId: string;
+  readonly targetChapter: number;
 }
 
 export interface RestartWorkspaceStoryResult {
@@ -78,18 +90,20 @@ export interface RestartWorkspaceStoryResult {
 }
 
 export interface StoryWorkspaceService {
-  exportJson(scope?: "reader" | "god"): string;
+  exportJson(): string;
   exportMarkdown(): string;
   getReaderChapter(chapterNumber: number): ReaderChapterView;
   getStory(): StoryView | null;
   rerollLatest(
     command: RerollLatestCommand,
     onNarrationChunk?: (chunk: string) => void | Promise<void>,
+    onProgress?: (phase: StoryGenerationPhase) => void,
   ): Promise<StoryView>;
-  selectPov(povCharacterId: string): StoryView;
+  selectPov(povCharacterId: string, setup?: StorySetup): StoryView;
   takeTurn(
     command: TurnCommand,
     onNarrationChunk?: (chunk: string) => void | Promise<void>,
+    onProgress?: (phase: StoryGenerationPhase) => void,
   ): Promise<StoryView>;
 }
 
@@ -151,6 +165,16 @@ export class StoryWorkspaceClosedError extends Error {
   }
 }
 
+export class StoryTurnInProgressError extends Error {
+  readonly generation: StoryGenerationStatus;
+
+  constructor(generation: StoryGenerationStatus) {
+    super(`Chapter ${generation.targetChapter} is already generating`);
+    this.name = "StoryTurnInProgressError";
+    this.generation = generation;
+  }
+}
+
 interface StoryRuntime {
   readonly service: StoryWorkspaceService;
   readonly store: StoryStore;
@@ -175,6 +199,7 @@ export class StoryWorkspace {
   private readonly serviceOptions: StoryWorkspaceOptions["serviceOptions"];
   private readonly storeFactory: (databasePath: string) => StoryStore;
   private readonly storyQueues = new Map<string, Promise<void>>();
+  private readonly generations = new Map<string, StoryGenerationStatus>();
   private closed = false;
 
   constructor(options: StoryWorkspaceOptions) {
@@ -223,6 +248,21 @@ export class StoryWorkspace {
     return this.library.getActiveStory();
   }
 
+  getGenerationStatus(storyId: string): StoryGenerationStatus | null {
+    this.assertOpen();
+    return this.generations.get(validateStoryId(storyId)) ?? null;
+  }
+
+  getActiveGenerationStatus(): StoryGenerationStatus | null {
+    const active = this.getActiveStoryMetadata();
+    return active === null ? null : (this.generations.get(active.id) ?? null);
+  }
+
+  listGenerationStatuses(): StoryGenerationStatus[] {
+    this.assertOpen();
+    return [...this.generations.values()];
+  }
+
   async getActiveStory(): Promise<WorkspaceStoryResult | null> {
     const active = this.getActiveStoryMetadata();
     return active === null ? null : this.getStory(active.id);
@@ -235,7 +275,7 @@ export class StoryWorkspace {
 
     return this.enqueue(metadata.id, async () => {
       try {
-        const runtime = this.openRuntime(metadata, true);
+        const runtime = this.openRuntime(metadata, true, input.setup);
         const story = requireStoryView(metadata.id, runtime.service.getStory());
         return { metadata, story, warnings: [] };
       } catch (error) {
@@ -256,17 +296,18 @@ export class StoryWorkspace {
     const id = validateStoryId(storyId);
     if (this.library.getStory(id) === null) return null;
 
-    return this.enqueue(id, async () => {
-      const metadata = requireMetadata(this.library, id);
-      const runtime = this.openRuntime(metadata, false);
-      const story = requireStoryView(id, runtime.service.getStory());
-      const reconciliation = await this.reconcileWithoutHidingStory(runtime, id, story);
-      return {
-        metadata: requireMetadata(this.library, id),
-        story,
-        warnings: reconciliation.warnings,
-      };
-    });
+    const metadata = requireMetadata(this.library, id);
+    const runtime = this.openRuntime(metadata, false);
+    const initialStory = requireStoryView(id, runtime.service.getStory());
+    const reconciliation = await this.reconcileWithoutHidingStory(runtime, id, initialStory);
+    const story = requireStoryView(id, runtime.service.getStory());
+    const generation = this.generations.get(id) ?? null;
+    return {
+      generation,
+      metadata: requireMetadata(this.library, id),
+      story,
+      warnings: reconciliation.warnings,
+    };
   }
 
   async activateStory(storyId: string): Promise<WorkspaceStoryResult> {
@@ -308,8 +349,10 @@ export class StoryWorkspace {
     const id = validateStoryId(storyId);
     return this.enqueue(id, async () => {
       const current = requireMetadata(this.library, id);
+      const setup = this.openRuntime(current, false).store.loadStorySetup(CANONICAL_WORLD_ID);
       const replacement = await this.createStory({
         povCharacterId: input.povCharacterId ?? current.povCharacterId,
+        ...(setup === null ? {} : { setup }),
         title: input.title ?? restartTitle(current.title),
       });
       const rejected = this.library.rejectStory(id);
@@ -321,60 +364,66 @@ export class StoryWorkspace {
   async getReaderChapter(storyId: string, chapter: number): Promise<ReaderChapterView> {
     this.assertOpen();
     const id = validateStoryId(storyId);
-    return this.enqueue(id, async () => {
-      const metadata = requireMetadata(this.library, id);
-      return this.openRuntime(metadata, false).service.getReaderChapter(chapter);
-    });
+    const metadata = requireMetadata(this.library, id);
+    return this.openRuntime(metadata, false).service.getReaderChapter(chapter);
   }
 
   async takeTurn(
     storyId: string,
     command: TurnCommand,
     onNarrationChunk?: (chunk: string) => void | Promise<void>,
+    onProgress?: (status: StoryGenerationStatus) => void,
   ): Promise<WorkspaceStoryResult> {
     this.assertOpen();
     const id = validateStoryId(storyId);
+    const generation = this.beginGeneration(id, "generate");
     return this.enqueue(id, async () => {
       const metadataBefore = requireMetadata(this.library, id);
       if (metadataBefore.status === "rejected") throw new RejectedStoryError(id);
       const runtime = this.openRuntime(metadataBefore, false);
-      const story = await runtime.service.takeTurn(command, onNarrationChunk);
+      const story = await runtime.service.takeTurn(command, onNarrationChunk, (phase) =>
+        onProgress?.(this.updateGeneration(generation, phase)),
+      );
       const reconciliation = await this.reconcileWithoutHidingStory(runtime, id, story);
       return {
         metadata: requireMetadata(this.library, id),
         story,
         warnings: reconciliation.warnings,
       };
-    });
+    }).finally(() => this.endGeneration(generation));
   }
 
   async rerollLatest(
     storyId: string,
     command: RerollLatestCommand,
     onNarrationChunk?: (chunk: string) => void | Promise<void>,
+    onProgress?: (status: StoryGenerationStatus) => void,
   ): Promise<WorkspaceStoryResult> {
     this.assertOpen();
     const id = validateStoryId(storyId);
+    const generation = this.beginGeneration(id, "rewrite");
     return this.enqueue(id, async () => {
       const metadataBefore = requireMetadata(this.library, id);
       if (metadataBefore.status === "rejected") throw new RejectedStoryError(id);
       const runtime = this.openRuntime(metadataBefore, false);
-      const story = await runtime.service.rerollLatest(command, onNarrationChunk);
+      const story = await runtime.service.rerollLatest(command, onNarrationChunk, (phase) =>
+        onProgress?.(this.updateGeneration(generation, phase)),
+      );
       const reconciliation = await this.reconcileWithoutHidingStory(runtime, id, story);
       return {
         metadata: requireMetadata(this.library, id),
         story,
         warnings: reconciliation.warnings,
       };
-    });
+    }).finally(() => this.endGeneration(generation));
   }
 
-  async exportJson(storyId: string, scope: "reader" | "god" = "reader"): Promise<string> {
+  async exportJson(storyId: string): Promise<string> {
     this.assertOpen();
     const id = validateStoryId(storyId);
     return this.enqueue(id, async () => {
       const metadata = requireMetadata(this.library, id);
-      return this.openRuntime(metadata, false).service.exportJson(scope);
+      return this.openRuntime(metadata, false).service.exportJson();
     });
   }
 
@@ -384,7 +433,7 @@ export class StoryWorkspace {
     return this.enqueue(id, async () => {
       const metadata = requireMetadata(this.library, id);
       const markdown = this.openRuntime(metadata, false).service.exportMarkdown();
-      return markdown.replace(/^# Ashen Crown$/mu, `# ${metadata.title}`);
+      return markdown.replace(/^# .+$/mu, `# ${metadata.title}`);
     });
   }
 
@@ -405,6 +454,7 @@ export class StoryWorkspace {
     for (const runtime of this.runtimes.values()) runtime.store.close();
     this.runtimes.clear();
     this.storyQueues.clear();
+    this.generations.clear();
   }
 
   private createMetadata(input: CreateWorkspaceStoryInput): StoryMetadata {
@@ -434,7 +484,11 @@ export class StoryWorkspace {
     );
   }
 
-  private openRuntime(metadata: StoryMetadata, initialize: boolean): StoryRuntime {
+  private openRuntime(
+    metadata: StoryMetadata,
+    initialize: boolean,
+    setup?: StorySetup,
+  ): StoryRuntime {
     const cached = this.runtimes.get(metadata.id);
     if (cached !== undefined) return cached;
 
@@ -455,7 +509,7 @@ export class StoryWorkspace {
         seedLoader: this.seedLoader,
         store,
       });
-      if (initialize) service.selectPov(metadata.povCharacterId);
+      if (initialize) service.selectPov(metadata.povCharacterId, setup);
       const story = service.getStory();
       if (story === null) {
         throw new StoryWorkspaceDataError(metadata.id, "Canonical story world is missing");
@@ -510,7 +564,7 @@ export class StoryWorkspace {
         pov:
           state.characters.find(({ id }) => id === chapter.povCharacterId)?.name ??
           chapter.povCharacterId,
-        prose: chapter.prose,
+        prose: sanitizeReaderProse(chapter.prose),
         storyId,
         title: chapter.title,
         worldVersion: chapter.stateAfterVersion,
@@ -530,18 +584,22 @@ export class StoryWorkspace {
       );
     }
 
+    const latestState = runtime.store.loadWorldState(CANONICAL_WORLD_ID);
+    if (latestState === null) {
+      throw new StoryWorkspaceDataError(storyId, "Canonical story world disappeared");
+    }
     const metadata = requireMetadata(this.library, storyId);
-    if (metadata.chapterCount !== state.chapter) {
+    if (metadata.chapterCount !== latestState.chapter) {
       if (metadata.status === "active") {
         try {
-          this.library.updateStory(storyId, { chapterCount: state.chapter });
+          this.library.updateStory(storyId, { chapterCount: latestState.chapter });
         } catch (error) {
           warnings.push(
             warning(
               "library-sync-failed",
               storyId,
-              state.chapter || null,
-              `Canonical chapter count is ${state.chapter}; library sync can be retried: ${errorMessage(error)}`,
+              latestState.chapter || null,
+              `Canonical chapter count is ${latestState.chapter}; library sync can be retried: ${errorMessage(error)}`,
             ),
           );
         }
@@ -550,7 +608,7 @@ export class StoryWorkspace {
           warning(
             "library-sync-failed",
             storyId,
-            state.chapter || null,
+            latestState.chapter || null,
             "Rejected story metadata is stale; reopen it to synchronize the chapter count",
           ),
         );
@@ -558,7 +616,7 @@ export class StoryWorkspace {
     }
 
     return {
-      canonicalChapterCount: state.chapter,
+      canonicalChapterCount: latestState.chapter,
       projectedChapterCount,
       warnings,
     };
@@ -618,6 +676,41 @@ export class StoryWorkspace {
       if (this.storyQueues.get(storyId) === settled) this.storyQueues.delete(storyId);
     });
     return current;
+  }
+
+  private beginGeneration(
+    storyId: string,
+    mode: StoryGenerationStatus["mode"],
+  ): StoryGenerationStatus {
+    const existing = this.generations.get(storyId);
+    if (existing !== undefined) throw new StoryTurnInProgressError(existing);
+    const metadata = requireMetadata(this.library, storyId);
+    if (metadata.status === "rejected") throw new RejectedStoryError(storyId);
+    const story = requireStoryView(storyId, this.openRuntime(metadata, false).service.getStory());
+    const currentChapter = readStoryChapter(story);
+    const generation = {
+      mode,
+      phase: "preparing",
+      storyId,
+      targetChapter: mode === "rewrite" ? Math.max(1, currentChapter) : currentChapter + 1,
+    } as const;
+    this.generations.set(storyId, generation);
+    return generation;
+  }
+
+  private updateGeneration(
+    generation: StoryGenerationStatus,
+    phase: StoryGenerationPhase,
+  ): StoryGenerationStatus {
+    const updated = { ...generation, phase };
+    this.generations.set(generation.storyId, updated);
+    return updated;
+  }
+
+  private endGeneration(generation: StoryGenerationStatus): void {
+    if (this.generations.has(generation.storyId)) {
+      this.generations.delete(generation.storyId);
+    }
   }
 
   private closeRuntime(storyId: string): void {

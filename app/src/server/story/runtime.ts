@@ -7,8 +7,6 @@ import { resolve } from "node:path";
 import OpenAI from "openai";
 
 import { getServerEnvironment, type ServerEnvironment } from "../env";
-import { migrateLegacyStoryDatabase } from "./legacy-story-migration";
-import { REVIEW_STORY_MODELS } from "./story-service";
 import { StoryWorkspace } from "./story-workspace";
 
 export interface StoryRuntime {
@@ -49,13 +47,13 @@ async function initializeRuntime(): Promise<StoryRuntime> {
       enforceNarrativeQuality: true,
       maxBackgroundAgents: environment.maxBackgroundAgents,
       maxCostUsdPerChapter: null,
-      modelConfig: REVIEW_STORY_MODELS,
       nativeMultiAgent: environment.nativeMultiAgent,
       promptCacheKey: storyPromptCacheKey(story.id),
       serviceTier: "standard",
+      storyTitle: story.title,
+      timeoutMs: 300_000,
     }),
   });
-  await migrateLegacyStoryDatabase(workspace, resolve(root, "data", "ashen-crown.db"));
   return { environment, workspace };
 }
 

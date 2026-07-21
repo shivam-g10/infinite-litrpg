@@ -1,7 +1,7 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
+import { DEFAULT_STORY_SETUP } from "@infinite-litrpg/shared";
 
 const baseStory = {
-  adapterMode: "sequential",
   chapter: {
     choices: [
       { description: "Follow the ash trail beyond Cinder Village", id: "choice-1" },
@@ -13,81 +13,6 @@ const baseStory = {
   },
   chapterHistory: [{ chapter: 1, title: "Embers Remember" }],
   continuationPlan: null,
-  estimatedCostUsd: 0.0241,
-  godMode: {
-    audit: { approved: true, evidence: ["POV-safe narration"] },
-    calls: [
-      {
-        latencyMs: 4200,
-        model: "gpt-5.6-luna",
-        phase: "intent",
-        requestedServiceTier: "standard",
-        responseId: "resp_intent",
-        serviceTier: "standard",
-      },
-      {
-        latencyMs: 3800,
-        model: "gpt-5.6-luna",
-        phase: "narration",
-        requestedServiceTier: "standard",
-        responseId: "resp_narration",
-        serviceTier: "standard",
-      },
-    ],
-    delta: {
-      acceptedIntentIds: ["intent-elara", "intent-nyra"],
-      clock: { fromAct: 1, fromChapter: 0, toAct: 1, toChapter: 1 },
-      events: [{ id: "event-ash-trail", summary: "Ash trail leads out of Cinder Village." }],
-      knowledgeMutations: [],
-      rejectedIntents: [
-        { code: "CONFLICT_LOST", intentId: "intent-varek", reason: "Remote conflict deferred." },
-      ],
-      stateMutations: [
-        {
-          characterId: "rowan-ashborn",
-          fromLocationId: "cinder-village",
-          toLocationIds: ["ash-road"],
-          type: "set_location",
-        },
-      ],
-    },
-    gateResult: "passed",
-    intents: [
-      {
-        accepted: true,
-        actorId: "elara-voss",
-        actorName: "Elara Voss",
-        expectedEffect: "The broken seal is inspected.",
-        goal: "Verify the broken prophecy seal",
-        id: "intent-elara",
-        phase: "Execution",
-      },
-      {
-        accepted: true,
-        actorId: "nyra-vale",
-        actorName: "Nyra Vale",
-        expectedEffect: "A matching sigil is found.",
-        goal: "Trace the unmarked class sigil",
-        id: "intent-nyra",
-        phase: "Execution",
-      },
-      {
-        accepted: false,
-        actorId: "varek-thorn",
-        actorName: "Varek Thorn",
-        expectedEffect: "Survivors regroup.",
-        goal: "Rally survivors at Black March",
-        id: "intent-varek",
-        phase: "Pending",
-      },
-    ],
-    promptVersion: "1.4.11",
-    rejected: [{ code: "CONFLICT_LOST", id: "intent-varek", reason: "Remote conflict deferred." }],
-    schemaVersion: "1.1.0-runtime-candidates-5",
-    stateAfterHash: "9d7e2b4c6a1f8e3d".repeat(4),
-    stateBeforeHash: "2f1a9c7b8d3e4f6a".repeat(4),
-  },
-  latencyMs: 8400,
   pov: {
     beliefs: ["Power without restraint destroyed the old kingdom."],
     characterClass: "Ashbound",
@@ -113,13 +38,6 @@ const baseStory = {
     ],
     stats: { agility: 7, intellect: 12, strength: 6, vitality: 8, willpower: 14 },
     status: "alive",
-  },
-  usage: {
-    cachedInputTokens: 200,
-    inputTokens: 2184,
-    outputTokens: 1106,
-    reasoningTokens: 0,
-    totalTokens: 3290,
   },
   visibleEvents: [
     {
@@ -164,6 +82,25 @@ function storyAtChapter(chapter: number, title: string, canContinue = false) {
   };
 }
 
+function openingDraft() {
+  return {
+    ...baseStory,
+    chapter: {
+      choices: [
+        {
+          description: "Awaken in the new life and understand the immediate danger.",
+          id: "choice-1",
+        },
+      ],
+      prose: "Your new life is ready to begin.",
+      title: "Before the First Step",
+    },
+    chapterHistory: [],
+    continuationPlan: null,
+    world: { ...baseStory.world, chapter: 0, version: 1 },
+  };
+}
+
 interface StorySummaryFixture {
   readonly chapterCount: number;
   readonly createdAt: string;
@@ -198,6 +135,11 @@ function storyEnvelope(
   story: unknown,
   stories?: readonly StorySummaryFixture[],
   activeStoryId: string | null = story === null ? null : "rowan-story",
+  generation: Readonly<{
+    mode: "generate" | "rewrite";
+    storyId: string;
+    targetChapter: number;
+  }> | null = null,
 ) {
   const storyRecord = story as {
     readonly pov?: { readonly id?: unknown };
@@ -219,6 +161,7 @@ function storyEnvelope(
           ),
         ]);
   return {
+    generation,
     library: { activeStoryId, stories: resolvedStories },
     story,
     warnings: [],
@@ -247,15 +190,6 @@ async function confirmContinuation(page: Page): Promise<void> {
   await page.getByRole("button", { name: "Start generation" }).click();
 }
 
-async function openDeveloperDetails(page: Page, mobile: boolean): Promise<void> {
-  if (mobile) {
-    await page.locator(".mobile-menu > summary").click();
-  } else {
-    await page.getByText("More", { exact: true }).click();
-  }
-  await page.getByRole("button", { name: "Developer details" }).click();
-}
-
 async function fulfillNdjson(
   route: Route,
   events: readonly Readonly<Record<string, unknown>>[],
@@ -273,54 +207,86 @@ async function mockLoadedStory(page: Page): Promise<void> {
   });
 }
 
-test("selects one of six characters, locks POV, and enters reader", async ({ page }) => {
-  let postedBody: unknown = null;
+function expectFreshCreateBody(
+  body: unknown,
+  title: string,
+  overrides: Partial<Pick<typeof DEFAULT_STORY_SETUP, "protagonistGender" | "startingLife">> = {},
+): void {
+  expect(body).toMatchObject({
+    povCharacterId: "rowan-ashborn",
+    setup: {
+      backgrounds: DEFAULT_STORY_SETUP.backgrounds,
+      foundation: "reincarnation-system",
+      genres: DEFAULT_STORY_SETUP.genres,
+      guidance: "",
+      memory: DEFAULT_STORY_SETUP.memory,
+      personalityTraits: DEFAULT_STORY_SETUP.personalityTraits,
+      powerPath: DEFAULT_STORY_SETUP.powerPath,
+      protagonistGender: overrides.protagonistGender ?? DEFAULT_STORY_SETUP.protagonistGender,
+      rebirthCause: DEFAULT_STORY_SETUP.rebirthCause,
+      startingLife: overrides.startingLife ?? DEFAULT_STORY_SETUP.startingLife,
+      systemFocus: DEFAULT_STORY_SETUP.systemFocus,
+    },
+    title,
+    type: "create",
+  });
+  const setup = (body as { setup: typeof DEFAULT_STORY_SETUP }).setup;
+  expect(setup.cast).not.toEqual(DEFAULT_STORY_SETUP.cast);
+  expect(setup.world).not.toEqual(DEFAULT_STORY_SETUP.world);
+}
+
+test("configures a reincarnation story and creates chapter one automatically", async ({ page }) => {
+  let createBody: unknown = null;
+  let openingBody: unknown = null;
   await page.route("**/api/story", async (route) => {
-    await fulfillJson(route, storyEnvelope(null, [], null));
+    if (route.request().method() === "GET") {
+      await fulfillJson(route, storyEnvelope(null, [], null));
+      return;
+    }
+    openingBody = route.request().postDataJSON();
+    await fulfillNdjson(route, [
+      { status: "generating", type: "status" },
+      storyEvent(
+        baseStory,
+        [storySummary("second-life", "The Child Beneath the Crown", 1)],
+        "second-life",
+      ),
+    ]);
   });
   await page.route("**/api/stories", async (route) => {
-    postedBody = route.request().postDataJSON();
-    const elaraStory = {
-      ...baseStory,
-      pov: {
-        ...baseStory.pov,
-        characterClass: "Sunblade",
-        id: "elara-voss",
-        level: 18,
-        location: "Capital",
-        name: "Elara Voss",
-        publicRole: "Chosen Hero who doubts the prophecy",
-      },
-    };
+    createBody = route.request().postDataJSON();
     await fulfillJson(
       route,
       storyEnvelope(
-        elaraStory,
-        [storySummary("elara-story", "Elara's Ashen Crown", 1, "active", "elara-voss")],
-        "elara-story",
+        openingDraft(),
+        [storySummary("second-life", "The Child Beneath the Crown", 0)],
+        "second-life",
       ),
     );
   });
 
   await page.goto("/");
   await expect(page).toHaveTitle("Infinite LitRPG");
-  await expect(page.getByRole("heading", { level: 1, name: "Choose one life." })).toBeVisible();
-  await expect(
-    page.getByRole("radiogroup", { name: "Selectable characters" }).getByRole("radio"),
-  ).toHaveCount(6);
-  await expect(page.locator(".lock-warning")).toContainText(
-    "Viewpoint stays locked for the full 350-chapter canon. This demo auto-stops at chapter 100.",
-  );
+  await expect(page.getByRole("heading", { level: 1, name: "Create your story" })).toBeVisible();
+  await expect(page.getByText("Reincarnation", { exact: true })).toBeVisible();
+  await expect(page.getByText("System", { exact: true })).toBeVisible();
+  await page.getByLabel("Story title").fill("The Child Beneath the Crown");
+  await page.getByText("Born again", { exact: true }).click();
+  await page.getByText("Female", { exact: true }).click();
+  await page.getByRole("button", { name: "Create chapter one" }).click();
 
-  await page.getByRole("radio", { name: /Rowan Ashborn/ }).focus();
-  await page.keyboard.press("ArrowDown");
-  await expect(page.getByRole("radio", { name: /Elara Voss/ })).toBeChecked();
-  await page.getByRole("button", { name: "Begin as Elara" }).click();
-
-  await expect(page.locator(".reader-context strong")).toContainText("Elara Voss");
+  await expect(page.locator(".reader-context strong")).toContainText("Rowan Ashborn");
   await expect(page.getByRole("heading", { level: 1, name: "Embers Remember" })).toBeVisible();
   await expect(page.getByText("Viewpoint locked")).toBeAttached();
-  expect(postedBody).toEqual({ povCharacterId: "elara-voss", type: "create" });
+  expectFreshCreateBody(createBody, "The Child Beneath the Crown", {
+    protagonistGender: "female",
+    startingLife: "birth",
+  });
+  expect(openingBody).toMatchObject({
+    choiceId: "choice-1",
+    expectedWorldVersion: 1,
+    type: "take_action",
+  });
 });
 
 test("takes a suggested choice and renders the committed chapter", async ({ page }) => {
@@ -349,9 +315,7 @@ test("takes a suggested choice and renders the committed chapter", async ({ page
     type: "take_action",
   });
   expect((postedBody as { requestId: string }).requestId).toMatch(/^[0-9a-f-]{36}$/u);
-  await expect(
-    page.getByText("Chapter saved locally. OpenAI generation is complete."),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "The Ash Road" })).toBeFocused();
 });
 
 test("creates one routine chapter without starting a batch", async ({ page }) => {
@@ -405,7 +369,7 @@ test("reviews saved chapters without generating another turn", async ({ page }) 
   await expect(page.getByRole("heading", { level: 1, name: "Chapter 2" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Create chapter 4" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Return to chapter 3" })).toBeVisible();
-  await expect(page.getByText(/Opening chapter history made no OpenAI call/u)).toBeVisible();
+  await expect(page.getByText("Saved prose for chapter 2.")).toBeVisible();
 
   await page.getByRole("button", { name: "Next saved chapter" }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Third Ember" })).toBeVisible();
@@ -476,36 +440,34 @@ test("switches stories, updates scoped exports, and clears the chapter cache", a
 
 test("starts a new story and exposes remaining stories after rejecting it", async ({ page }) => {
   const firstSummary = storySummary("story-a", "First Path", 1);
-  const secondSummary = storySummary("story-b", "Elara's Path", 1, "active", "elara-voss");
-  const elaraStory = {
-    ...baseStory,
-    pov: {
-      ...baseStory.pov,
-      characterClass: "Sunblade",
-      id: "elara-voss",
-      name: "Elara Voss",
-    },
-  };
+  const secondSummary = storySummary("story-b", "Second Path", 1);
   const lifecycleBodies: unknown[] = [];
 
   await page.route("**/api/story", async (route) => {
-    await fulfillJson(route, storyEnvelope(baseStory, [firstSummary], "story-a"));
+    if (route.request().method() === "GET") {
+      await fulfillJson(route, storyEnvelope(baseStory, [firstSummary], "story-a"));
+      return;
+    }
+    await fulfillNdjson(route, [storyEvent(baseStory, [firstSummary, secondSummary], "story-b")]);
   });
   await page.route("**/api/stories", async (route) => {
     const body = route.request().postDataJSON() as { type: string };
     lifecycleBodies.push(body);
     if (body.type === "create") {
-      await fulfillJson(route, storyEnvelope(elaraStory, [firstSummary, secondSummary], "story-b"));
+      await fulfillJson(
+        route,
+        storyEnvelope(
+          openingDraft(),
+          [firstSummary, { ...secondSummary, chapterCount: 0 }],
+          "story-b",
+        ),
+      );
       return;
     }
     if (body.type === "reopen") {
       await fulfillJson(
         route,
-        storyEnvelope(
-          elaraStory,
-          [firstSummary, { ...secondSummary, status: "active" }],
-          "story-b",
-        ),
+        storyEnvelope(baseStory, [firstSummary, { ...secondSummary, status: "active" }], "story-b"),
       );
       return;
     }
@@ -529,27 +491,26 @@ test("starts a new story and exposes remaining stories after rejecting it", asyn
   await page.goto("/");
   await page.getByLabel("Open story library. Current story: First Path").click();
   await page.getByRole("button", { name: "Start new story" }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Choose one life." })).toBeVisible();
-  await page.getByRole("button", { name: "Back to current story" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Create your story" })).toBeVisible();
+  await page.getByRole("button", { name: "Back to library" }).click();
   await expect(page.getByLabel("Open story library. Current story: First Path")).toBeVisible();
   expect(lifecycleBodies).toEqual([]);
 
   await page.getByLabel("Open story library. Current story: First Path").click();
   await page.getByRole("button", { name: "Start new story" }).click();
-  await page.getByRole("radio", { name: /Rowan Ashborn/u }).focus();
-  await page.keyboard.press("ArrowDown");
-  await expect(page.getByRole("radio", { name: /Elara Voss/u })).toBeChecked();
-  await page.getByRole("button", { name: "Begin as Elara" }).click();
-  await expect(page.getByLabel("Open story library. Current story: Elara's Path")).toBeVisible();
+  await page.getByLabel("Story title").fill("Second Path");
+  await page.getByRole("button", { name: "Create chapter one" }).click();
+  await expect(page.getByLabel("Open story library. Current story: Second Path")).toBeVisible();
 
-  await page.getByLabel("Open story library. Current story: Elara's Path").click();
+  await page.getByLabel("Open story library. Current story: Second Path").click();
   await page.getByRole("button", { name: "Try another" }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Choose one life." })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Create your story" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Continue a saved story" })).toBeVisible();
-  await page.getByRole("button", { name: "Open First Path · Chapter 1" }).click();
+  await page.getByRole("button", { name: "First Path Chapter 1" }).click();
   await expect(page.getByLabel("Open story library. Current story: First Path")).toBeVisible();
-  expect(lifecycleBodies).toEqual([
-    { povCharacterId: "elara-voss", type: "create" },
+  expect(lifecycleBodies).toHaveLength(3);
+  expectFreshCreateBody(lifecycleBodies[0], "Second Path");
+  expect(lifecycleBodies.slice(1)).toEqual([
     { storyId: "story-b", type: "reject" },
     { storyId: "story-a", type: "activate" },
   ]);
@@ -643,7 +604,9 @@ test("keeps the active chapter readable while later chapters generate", async ({
 
   await page.goto("/");
   await confirmContinuation(page);
-  await expect(page.getByText("Creating chapter 3 of 100")).toBeVisible();
+  await expect(
+    page.getByRole("status").getByRole("heading", { level: 2, name: "Chapter 3" }),
+  ).toBeVisible();
 
   await expect(page.getByRole("heading", { level: 1, name: "Embers Remember" })).toBeVisible();
   await expect(page.getByRole("combobox", { name: "Jump to saved chapter" })).toBeEnabled();
@@ -660,7 +623,16 @@ test("keeps the reader pinned and resumes after a mid-batch failure", async ({ p
   const postedVersions: number[] = [];
   await page.route("**/api/story", async (route) => {
     if (route.request().method() === "GET") {
-      await fulfillJson(route, storyEnvelope(storyAtChapter(1, "Embers Remember", true)));
+      await fulfillJson(
+        route,
+        storyEnvelope(
+          storyAtChapter(
+            chapter,
+            chapter === 1 ? "Embers Remember" : `Chapter ${chapter}`,
+            chapter === 1 || chapter === 2,
+          ),
+        ),
+      );
       return;
     }
 
@@ -743,7 +715,10 @@ test("rewrites only the latest saved chapter and keeps canon in place", async ({
 
   await page.goto("/");
   await page.getByRole("button", { name: "Rewrite latest chapter" }).click();
-  await expect(page.getByRole("heading", { name: "Rewriting chapter 2" })).toBeVisible();
+  await expect(
+    page.getByRole("status").getByRole("heading", { level: 2, name: "Chapter 2" }),
+  ).toBeVisible();
+  await expect(page.getByRole("status")).toContainText("Writing a new version.");
   await expect(page.getByRole("button", { name: "Rewrite latest chapter" })).toBeDisabled();
   finishRewrite();
 
@@ -776,7 +751,7 @@ test("does not offer rewrite before chapter one commits", async ({ page }) => {
 
   await page.goto("/");
 
-  await expect(page.getByText("Chapter 0 of 100", { exact: true })).toBeVisible();
+  await expect(page.getByText("Chapter 0", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Rewrite latest chapter" })).toHaveCount(0);
 });
 
@@ -876,7 +851,7 @@ test("continues routine chapters, pauses at both decisions, and stops at chapter
   await expect(
     page.getByRole("heading", { exact: true, level: 1, name: "Chapter 100" }),
   ).toBeFocused();
-  await expect(page.getByText("Chapter 100 of 100", { exact: true })).toBeVisible();
+  await expect(page.getByRole("progressbar", { name: "Chapter 100 of 100" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Continue to next decision" })).toHaveCount(0);
 
   expect(postedBodies).toHaveLength(99);
@@ -937,6 +912,38 @@ test("stops an automatic run only after the active chapter commits", async ({ pa
   expect(postCount).toBe(1);
 });
 
+test("keeps the reader usable after refresh while a chapter finishes in the background", async ({
+  page,
+}) => {
+  let getCount = 0;
+  await page.route("**/api/story", async (route) => {
+    getCount += 1;
+    const generating = getCount === 1;
+    await fulfillJson(
+      route,
+      storyEnvelope(
+        generating
+          ? storyAtChapter(1, "Embers Remember", true)
+          : storyAtChapter(2, "The Next Ember", true),
+        undefined,
+        "rowan-story",
+        generating ? { mode: "generate", storyId: "rowan-story", targetChapter: 2 } : null,
+      ),
+    );
+  });
+
+  await page.goto("/");
+
+  await expect(page.getByRole("heading", { level: 1, name: "Embers Remember" })).toBeVisible();
+  await expect(
+    page.getByRole("status").getByRole("heading", { level: 2, name: "Chapter 2" }),
+  ).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "The Next Ember" })).toBeVisible({
+    timeout: 5_000,
+  });
+  expect(getCount).toBeGreaterThanOrEqual(2);
+});
+
 test("submits a custom action", async ({ page }) => {
   let postedBody: unknown = null;
   await page.route("**/api/story", async (route) => {
@@ -992,61 +999,18 @@ test("shows a turn failure and retries the same command", async ({ page }) => {
   expect(postedBodies[1]).toEqual(postedBodies[0]);
 });
 
-test("keeps cost telemetry out of Reader and behind developer details", async ({ page }) => {
+test("keeps cost telemetry and developer controls out of Reader", async ({ page }) => {
   await mockLoadedStory(page);
   await page.goto("/");
 
   await expect(page.getByText("$0.0241")).toHaveCount(0);
   await expect(page.getByText(/3,290 tokens/u)).toHaveCount(0);
   await expect(page.getByText("God Mode", { exact: true })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Developer details" })).not.toBeVisible();
+  await expect(page.getByRole("button", { name: "Developer details" })).toHaveCount(0);
+  await expect(page.getByText("More", { exact: true })).toHaveCount(0);
 });
 
-test("opens secondary developer details with intents, rejection, delta, usage, and trace", async ({
-  page,
-}, testInfo) => {
-  await mockLoadedStory(page);
-  await page.goto("/");
-
-  await openDeveloperDetails(page, testInfo.project.name === "mobile");
-
-  await expect(page.getByRole("heading", { level: 1, name: "Developer details" })).toBeAttached();
-  await expect(page.getByRole("heading", { level: 2, name: "Background intents" })).toBeVisible();
-  await expect(page.getByText("Verify the broken prophecy seal")).toBeVisible();
-  await expect(page.getByRole("heading", { level: 3, name: "Rejected intents" })).toBeVisible();
-  await expect(page.getByRole("heading", { level: 2, name: "Canonical resolution" })).toBeVisible();
-  await expect(page.getByRole("heading", { level: 2, name: "Trace" })).toBeVisible();
-  await expect(page.locator(".trace-column").getByText("$0.0241")).toBeVisible();
-  await expect(page.locator(".trace-column").getByText("1.4.11", { exact: true })).toBeVisible();
-  await expect(
-    page.locator(".trace-column").getByText("1.1.0-runtime-candidates-5", { exact: true }),
-  ).toBeVisible();
-
-  const hashLayout = await page.locator(".trace-hashes > div").evaluateAll((rows) =>
-    rows.map((row) => {
-      const term = row.querySelector("dt")?.getBoundingClientRect();
-      const value = row.querySelector("dd")?.getBoundingClientRect();
-      const bounds = row.getBoundingClientRect();
-      return {
-        fits: Boolean(
-          term &&
-          value &&
-          term.right <= value.left + 1 &&
-          value.right <= bounds.right + 1 &&
-          row.scrollWidth <= row.clientWidth,
-        ),
-      };
-    }),
-  );
-  expect(hashLayout).toEqual([{ fits: true }, { fits: true }]);
-  const dimensions = await page.evaluate(() => ({
-    clientWidth: document.documentElement.clientWidth,
-    scrollWidth: document.documentElement.scrollWidth,
-  }));
-  expect(dimensions.scrollWidth).toBe(dimensions.clientWidth);
-});
-
-test("exposes Markdown and JSON export endpoints", async ({ page }, testInfo) => {
+test("exposes Markdown and reader JSON export endpoints", async ({ page }) => {
   await mockLoadedStory(page);
   await page.goto("/");
 
@@ -1062,11 +1026,6 @@ test("exposes Markdown and JSON export endpoints", async ({ page }, testInfo) =>
   await expect(
     page.locator('a[href="/api/story/export?format=json&storyId=rowan-story"]').first(),
   ).toHaveAttribute("download", "");
-  await openDeveloperDetails(page, testInfo.project.name === "mobile");
-  await expect(
-    page.locator('a[href="/api/story/export?format=json&scope=god&storyId=rowan-story"]'),
-  ).toHaveCount(2);
-  await expect(page.getByText("Developer JSON").first()).toBeAttached();
 });
 
 test("mobile reader has no horizontal overflow", async ({ page }, testInfo) => {

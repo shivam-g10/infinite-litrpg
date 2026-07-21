@@ -16,25 +16,32 @@ import type { StoryRuntime } from "./runtime";
 import { StoryServiceError } from "./story-service";
 import {
   StoryWorkspaceDataError,
+  StoryTurnInProgressError,
   StoryWorkspaceValidationError,
   type WorkspaceStoryResult,
 } from "./story-workspace";
 
 export function storyEnvelope(runtime: StoryRuntime, result: WorkspaceStoryResult | null) {
   return {
+    generation:
+      result !== null && Object.hasOwn(result, "generation")
+        ? (result.generation ?? null)
+        : runtime.workspace.getActiveGenerationStatus(),
+    generations: runtime.workspace.listGenerationStatuses(),
     library: {
       activeStoryId: runtime.workspace.getActiveStoryMetadata()?.id ?? null,
       stories: runtime.workspace.listStories(),
     },
     story: result?.story ?? null,
+    storyId: result?.metadata.id ?? null,
     warnings: result?.warnings ?? [],
   };
 }
 
 export function defaultStoryTitle(povCharacterId: string, existingStoryCount: number): string {
-  if (existingStoryCount === 0) return "Ashen Crown";
   const character = PUBLIC_CHARACTERS.find(({ id }) => id === povCharacterId);
-  return `${character?.name ?? "New hero"}'s Ashen Crown ${existingStoryCount + 1}`;
+  const suffix = existingStoryCount === 0 ? "" : ` ${existingStoryCount + 1}`;
+  return `${character?.name ?? "New Hero"}'s Second Life${suffix}`;
 }
 
 export function storyErrorResponse(error: unknown): Response {
@@ -75,6 +82,15 @@ export function describeStoryError(error: unknown): {
   if (error instanceof StaleChapterNarrationError) {
     return {
       body: { code: "STALE_CHAPTER_NARRATION", error: "Chapter changed before rewrite" },
+      status: 409,
+    };
+  }
+  if (error instanceof StoryTurnInProgressError) {
+    return {
+      body: {
+        code: "STORY_TURN_IN_PROGRESS",
+        error: `Chapter ${error.generation.targetChapter} is already generating`,
+      },
       status: 409,
     };
   }

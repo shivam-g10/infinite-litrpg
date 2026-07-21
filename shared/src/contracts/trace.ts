@@ -69,7 +69,7 @@ export const RuntimeAttemptTraceSchema = z
 export const TraceEnvelopeSchema = z
   .object({
     acceptedDelta: WorldDeltaSchema,
-    adapterMode: z.enum(["native-multi-agent", "sequential"]),
+    adapterMode: z.enum(["application-parallel", "native-multi-agent", "sequential"]),
     attempts: z.array(RuntimeAttemptTraceSchema).max(1_000).default([]),
     calls: z.array(ModelCallTraceSchema).min(1).max(12),
     contractVersion: z.literal(CONTRACT_VERSION),

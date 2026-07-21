@@ -1,36 +1,36 @@
 import { DEMO_CHAPTER_LIMIT } from "@infinite-litrpg/shared";
 
-export interface StoryChoice {
+interface StoryChoice {
   readonly id: string;
   readonly description: string;
 }
 
-export interface ResourcePool {
+interface ResourcePool {
   readonly current: number;
   readonly maximum: number;
 }
 
-export interface SkillView {
+interface SkillView {
   readonly id: string;
   readonly name: string;
   readonly rank: number;
 }
 
-export interface InventoryView {
+interface InventoryView {
   readonly id: string;
   readonly name: string;
   readonly quantity: number;
   readonly equipped: boolean;
 }
 
-export interface RelationshipView {
+interface RelationshipView {
   readonly id: string;
   readonly name: string;
   readonly label: string;
   readonly score: number;
 }
 
-export interface PovView {
+interface PovView {
   readonly id: string;
   readonly name: string;
   readonly publicRole: string;
@@ -51,12 +51,12 @@ export interface PovView {
   readonly relationships: readonly RelationshipView[];
 }
 
-export interface CalendarView {
+interface CalendarView {
   readonly day: number;
   readonly label: string;
 }
 
-export interface WorldView {
+interface WorldView {
   readonly id: string;
   readonly version: number;
   readonly chapter: number;
@@ -67,7 +67,7 @@ export interface WorldView {
   readonly calendar: CalendarView;
 }
 
-export interface ChapterView {
+interface ChapterView {
   readonly title: string;
   readonly prose: string;
   readonly choices: readonly StoryChoice[];
@@ -99,59 +99,32 @@ export interface StoryLibraryView {
   readonly stories: readonly StorySummary[];
 }
 
-export interface StoryWarningView {
+interface StoryWarningView {
   readonly code: string;
   readonly message: string;
   readonly storyId: string;
 }
 
 export interface StoryEnvelope {
+  readonly generation: StoryGenerationView | null;
+  readonly generations: readonly StoryGenerationView[];
   readonly library: StoryLibraryView;
   readonly story: StoryView | null;
+  readonly storyId: string | null;
   readonly warnings: readonly StoryWarningView[];
 }
 
-export interface VisibleEventView {
+export interface StoryGenerationView {
+  readonly mode: "generate" | "rewrite";
+  readonly phase: "preparing" | "characters" | "writing" | "checking" | "saving";
+  readonly storyId: string;
+  readonly targetChapter: number;
+}
+
+interface VisibleEventView {
   readonly id: string;
   readonly summary: string;
   readonly location: string;
-}
-
-export interface UsageView {
-  readonly inputTokens: number;
-  readonly outputTokens: number;
-  readonly reasoningTokens: number;
-  readonly cachedInputTokens: number;
-  readonly totalTokens: number;
-}
-
-export interface IntentView {
-  readonly id: string;
-  readonly actorId: string;
-  readonly actorName: string;
-  readonly goal: string;
-  readonly expectedEffect: string;
-  readonly phase: string;
-  readonly accepted: boolean;
-}
-
-export interface RejectedIntentView {
-  readonly id: string;
-  readonly code: string;
-  readonly reason: string;
-}
-
-export interface GodModeView {
-  readonly intents: readonly IntentView[];
-  readonly rejected: readonly RejectedIntentView[];
-  readonly delta: unknown;
-  readonly calls: readonly unknown[];
-  readonly audit: unknown;
-  readonly stateBeforeHash: string;
-  readonly stateAfterHash: string;
-  readonly promptVersion: string;
-  readonly schemaVersion: string;
-  readonly gateResult: string;
 }
 
 export interface StoryView {
@@ -164,20 +137,8 @@ export interface StoryView {
   readonly pov: PovView;
   readonly chapter: ChapterView | null;
   readonly visibleEvents: readonly VisibleEventView[];
-  readonly usage: UsageView;
-  readonly estimatedCostUsd: number;
-  readonly latencyMs: number;
-  readonly adapterMode: string;
-  readonly godMode: GodModeView;
+  readonly systemName: string;
 }
-
-const EMPTY_USAGE: UsageView = {
-  cachedInputTokens: 0,
-  inputTokens: 0,
-  outputTokens: 0,
-  reasoningTokens: 0,
-  totalTokens: 0,
-};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -307,56 +268,6 @@ function normalizePov(source: Record<string, unknown>): PovView {
   };
 }
 
-function normalizeIntents(source: Record<string, unknown>): readonly IntentView[] {
-  const acceptedIds = new Set(
-    recordsAt(source, "acceptedIntentIds").map((intent) => stringAt(intent, "id")),
-  );
-  const explicitAcceptedIds = source.acceptedIntentIds;
-  if (Array.isArray(explicitAcceptedIds)) {
-    for (const id of explicitAcceptedIds) {
-      if (typeof id === "string") acceptedIds.add(id);
-    }
-  }
-
-  return recordsAt(source, "intents").map((intent) => {
-    const id = stringAt(intent, "id");
-    const status = stringAt(intent, "status");
-    return {
-      accepted: booleanAt(intent, "accepted") || status === "accepted" || acceptedIds.has(id),
-      actorId: stringAt(intent, "actorId"),
-      actorName: stringAt(intent, "actorName") || stringAt(intent, "actorId"),
-      expectedEffect: stringAt(intent, "expectedEffect", "description"),
-      goal: stringAt(intent, "goal"),
-      id,
-      phase: stringAt(intent, "phase") || "Resolution",
-    };
-  });
-}
-
-function normalizeGodMode(source: Record<string, unknown>): GodModeView {
-  const delta = source.delta ?? source.acceptedDelta ?? null;
-  const deltaRecord = isRecord(delta) ? delta : {};
-  const intentsSource = recordsAt(source, "intents").length > 0 ? source : deltaRecord;
-  const rejectedSource = recordsAt(source, "rejected").length > 0 ? source : deltaRecord;
-
-  return {
-    audit: source.audit ?? source.narrativeAudit ?? null,
-    calls: recordsAt(source, "calls"),
-    delta,
-    gateResult: stringAt(source, "gateResult"),
-    intents: normalizeIntents(intentsSource),
-    promptVersion: stringAt(source, "promptVersion"),
-    rejected: recordsAt(rejectedSource, "rejected").map((item) => ({
-      code: stringAt(item, "code"),
-      id: stringAt(item, "id", "intentId"),
-      reason: stringAt(item, "reason"),
-    })),
-    schemaVersion: stringAt(source, "schemaVersion"),
-    stateAfterHash: stringAt(source, "stateAfterHash"),
-    stateBeforeHash: stringAt(source, "stateBeforeHash"),
-  };
-}
-
 function unwrapStory(value: unknown): unknown {
   if (!isRecord(value)) return value;
   return Object.prototype.hasOwnProperty.call(value, "story") ? value.story : value;
@@ -435,18 +346,48 @@ function normalizeStoryWarnings(value: unknown): readonly StoryWarningView[] {
   });
 }
 
+function normalizeStoryGeneration(value: unknown): StoryGenerationView | null {
+  if (value === undefined || value === null) return null;
+  if (!isRecord(value)) throw new Error("Story response has invalid generation state.");
+  const mode = stringAt(value, "mode");
+  const storyId = stringAt(value, "storyId");
+  const targetChapter = numberAt(value, "targetChapter");
+  const phase = stringAt(value, "phase") || "preparing";
+  if (
+    (mode !== "generate" && mode !== "rewrite") ||
+    !["preparing", "characters", "writing", "checking", "saving"].includes(phase) ||
+    !storyId ||
+    !Number.isSafeInteger(targetChapter) ||
+    targetChapter < 1 ||
+    targetChapter > DEMO_CHAPTER_LIMIT
+  ) {
+    throw new Error("Story response has invalid generation state.");
+  }
+  return { mode, phase: phase as StoryGenerationView["phase"], storyId, targetChapter };
+}
+
 export function normalizeStoryEnvelope(payload: unknown): StoryEnvelope {
   if (!isRecord(payload) || !Object.hasOwn(payload, "story")) {
     throw new Error("Story response was not an envelope.");
   }
   const library = normalizeStoryLibrary(payload.library);
   const story = normalizeStoryPayload(payload);
-  if ((story === null) !== (library.activeStoryId === null)) {
+  const storyId =
+    payload.storyId === null ? null : stringAt(payload, "storyId") || library.activeStoryId;
+  if ((story === null) !== (storyId === null)) {
     throw new Error("Story response does not match its active library story.");
   }
+  const generations = Array.isArray(payload.generations)
+    ? payload.generations.map((generation) => normalizeStoryGeneration(generation)!)
+    : [normalizeStoryGeneration(payload.generation)].filter(
+        (generation): generation is StoryGenerationView => generation !== null,
+      );
   return {
+    generation: normalizeStoryGeneration(payload.generation),
+    generations,
     library,
     story,
+    storyId,
     warnings: normalizeStoryWarnings(payload.warnings),
   };
 }
@@ -463,8 +404,6 @@ export function normalizeStoryPayload(payload: unknown): StoryView | null {
   const chapterCandidate =
     Object.keys(chapterSource).length > 0 ? chapterSource : recordAt(unwrapped, "latestChapter");
   const calendarSource = recordAt(world, "calendar");
-  const usageSource = recordAt(unwrapped, "usage");
-  const godModeSource = recordAt(unwrapped, "godMode");
 
   const worldId = stringAt(world, "id", "worldId");
   const pov = normalizePov(povSource);
@@ -512,26 +451,12 @@ export function normalizeStoryPayload(payload: unknown): StoryView | null {
       : chapter && chapterNumber > 0
         ? [{ chapter: chapterNumber, title: chapter.title }]
         : [];
-  const totalTokens = numberAt(usageSource, "totalTokens");
-
   return {
-    adapterMode: stringAt(unwrapped, "adapterMode") || "sequential",
     chapter,
     chapterHistory: normalizedChapterHistory,
     continuationPlan: normalizeContinuationPlan(unwrapped.continuationPlan),
-    estimatedCostUsd: numberAt(unwrapped, "estimatedCostUsd", "costUsd"),
-    godMode: normalizeGodMode(godModeSource),
-    latencyMs: numberAt(unwrapped, "latencyMs"),
+    systemName: stringAt(unwrapped, "systemName") || "System",
     pov,
-    usage: {
-      ...EMPTY_USAGE,
-      cachedInputTokens: numberAt(usageSource, "cachedInputTokens"),
-      inputTokens: numberAt(usageSource, "inputTokens"),
-      outputTokens: numberAt(usageSource, "outputTokens"),
-      reasoningTokens: numberAt(usageSource, "reasoningTokens"),
-      totalTokens:
-        totalTokens || numberAt(usageSource, "inputTokens") + numberAt(usageSource, "outputTokens"),
-    },
     visibleEvents: recordsAt(unwrapped, "visibleEvents").map((event) => ({
       id: stringAt(event, "id"),
       location: stringAt(event, "location", "locationName", "locationId"),

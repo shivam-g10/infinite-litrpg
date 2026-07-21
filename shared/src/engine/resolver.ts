@@ -335,7 +335,7 @@ export function resolveTurnLevelStateMutations(
   }
   if (!policy.terminal && canEndStoryEarly(state, playerIntent)) {
     mutations.push({
-      reason: "The final Ashen Crown choice resolved the Void, Crown, and chosen life.",
+      reason: "The final choice resolved the Void, the Crown, and the chosen life.",
       resolvedEndingConstraints: [...state.endingConstraints],
       type: "end_story",
     });

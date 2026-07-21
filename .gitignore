@@ -19,6 +19,7 @@ test-results/
 data/
 exports/
 logs/
+.codex-demo-*.log
 /stories/
 evals/reports/
 

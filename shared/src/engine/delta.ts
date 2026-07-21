@@ -135,7 +135,7 @@ export function stageWorldDelta(
   staged.arcClock.convergencePressure = policy.convergencePressure;
   staged.arcClock.transitionRequired = policy.transitionRequired;
   staged.calendar.day += 1;
-  staged.calendar.label = `Year 1, Ashfall ${staged.calendar.day}`;
+  staged.calendar.label = `${calendarPrefix(staged.calendar.label)} ${staged.calendar.day}`;
   staged.chapter = policy.nextChapter;
   staged.terminal = delta.clock.terminal;
   staged.terminalReason = staged.terminal
@@ -149,6 +149,11 @@ export function stageWorldDelta(
   }
 
   return { data: { delta, state: finalValidation.data }, ok: true };
+}
+
+function calendarPrefix(label: string): string {
+  const prefix = label.replace(/\s+\d+$/u, "").trim();
+  return prefix || "Year 1";
 }
 
 function validateIntentDisposition(

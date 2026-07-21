@@ -5,7 +5,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Infinite LitRPG",
-  description: "Choose one life. The world keeps moving without you.",
+  description: "Create and continue a reincarnation System LitRPG.",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {

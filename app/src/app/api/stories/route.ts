@@ -1,7 +1,7 @@
-import { CHARACTER_IDS } from "@infinite-litrpg/shared";
+import { CHARACTER_IDS, StorySetupSchema, type StorySetup } from "@infinite-litrpg/shared";
 
 import { getStoryRuntime } from "@/server/story/runtime";
-import { defaultStoryTitle, storyEnvelope, storyErrorResponse } from "@/server/story/story-http";
+import { storyEnvelope, storyErrorResponse } from "@/server/story/story-http";
 import { StoryServiceError } from "@/server/story/story-service";
 
 export const dynamic = "force-dynamic";
@@ -23,9 +23,8 @@ export async function POST(request: Request) {
     if (command.type === "create") {
       const result = await runtime.workspace.createStory({
         povCharacterId: command.povCharacterId,
-        title:
-          command.title ??
-          defaultStoryTitle(command.povCharacterId, runtime.workspace.listStories().length),
+        setup: command.setup,
+        title: command.title,
       });
       return Response.json(storyEnvelope(runtime, result));
     }
@@ -50,7 +49,8 @@ export async function POST(request: Request) {
 type StoryLifecycleCommand =
   | {
       readonly povCharacterId: (typeof CHARACTER_IDS)[number];
-      readonly title?: string;
+      readonly setup: StorySetup;
+      readonly title: string;
       readonly type: "create";
     }
   | { readonly storyId: string; readonly type: "activate" | "reject" | "reopen" | "restart" };
@@ -60,17 +60,21 @@ function parseCommand(value: unknown): StoryLifecycleCommand {
     throw new StoryServiceError("Request body is invalid");
   }
   if (value.type === "create") {
-    requireAllowedKeys(value, ["povCharacterId", "title", "type"]);
+    requireExactKeys(value, ["povCharacterId", "setup", "title", "type"]);
     if (
       typeof value.povCharacterId !== "string" ||
       !CHARACTER_IDS.includes(value.povCharacterId as (typeof CHARACTER_IDS)[number])
     ) {
       throw new StoryServiceError("Unknown viewpoint character");
     }
-    const title = value.title === undefined ? undefined : parseTitle(value.title);
+    const setup = StorySetupSchema.safeParse(value.setup);
+    if (!setup.success) {
+      throw new StoryServiceError("Story setup is invalid");
+    }
     return {
       povCharacterId: value.povCharacterId as (typeof CHARACTER_IDS)[number],
-      ...(title === undefined ? {} : { title }),
+      setup: setup.data,
+      title: parseTitle(value.title),
       type: "create",
     };
   }
@@ -96,15 +100,6 @@ function parseTitle(value: unknown): string {
     throw new StoryServiceError("Story title must be 1 to 100 single-line characters");
   }
   return value;
-}
-
-function requireAllowedKeys(value: Record<string, unknown>, allowed: readonly string[]): void {
-  if (Object.keys(value).some((key) => !allowed.includes(key))) {
-    throw new StoryServiceError("Request contains unsupported fields");
-  }
-  if (!Object.hasOwn(value, "povCharacterId") || !Object.hasOwn(value, "type")) {
-    throw new StoryServiceError("Request body is invalid");
-  }
 }
 
 function requireExactKeys(value: Record<string, unknown>, expected: readonly string[]): void {

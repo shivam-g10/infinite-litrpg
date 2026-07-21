@@ -194,7 +194,7 @@ function estimateMaximumCostFromInputUpperBound(
   return standardCost * serviceTierPriceMultiplier(options.serviceTier ?? "standard");
 }
 
-export function serviceTierPriceMultiplier(serviceTier: RuntimeServiceTier): number {
+function serviceTierPriceMultiplier(serviceTier: RuntimeServiceTier): number {
   return serviceTier === "flex" ? 0.5 : 1;
 }
 

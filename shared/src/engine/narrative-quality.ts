@@ -8,7 +8,9 @@ export interface NarrativeHistoryEntry {
 export interface NarrativeQualityInput {
   readonly dialogueRequired: boolean;
   readonly history: readonly NarrativeHistoryEntry[];
+  readonly openingOriginRequired?: boolean;
   readonly prose: string;
+  readonly systemName?: string;
   readonly systemNoticeRequired: boolean;
   readonly title: string;
 }
@@ -63,6 +65,14 @@ const CHARACTER_BEAT_PATTERN =
   /\b(?:accept(?:ed|s)?|admit(?:ted|s)?|chose|confess(?:ed|es)?|decid(?:e|ed|es)|doubt(?:ed|s)?|fear(?:ed|s)?|flinch(?:ed|es)?|forgav(?:e|en)|hesitat(?:e|ed|es)|refus(?:e|ed|es)|regret(?:ted|s)?|relent(?:ed|s)?|trust(?:ed|s)?|want(?:ed|s)?|would not|could not)\b/iu;
 const SYSTEM_NOTICE_PATTERN =
   /(?:\[(?=[^\]\n]{2,160}\])(?=[^\]\n]*\b(?:System|XP|Experience|Level|Skill|Stat|Quest|Class|Title|Status|Health|Mana)\b)[^\]\n]+\]|\b(?:the\s+)?System\s+(?:alert|announc(?:ed|es)|award(?:ed|s)|chimed|confirm(?:ed|s)|declar(?:ed|es)|display(?:ed|s)|flash(?:ed|es)|grant(?:ed|s)|mark(?:ed|s)|message|notice|notif(?:ied|ies)|panel|record(?:ed|s)|register(?:ed|s)|report(?:ed|s)|reveal(?:ed|s)|update(?:d|s)|window)\b)/iu;
+const PRIOR_LIFE_PATTERN =
+  /\b(?:died|death|execution|former life|last breath|old life|past life|previous life|prior life|reincarnat(?:ed|ion)|reborn|sacrifice|second life)\b/iu;
+const AWAKENING_PATTERN =
+  /\b(?:awaken(?:ed|ing)?|born again|new body|newborn|opened (?:his|her|their) eyes|reincarnat(?:ed|ion)|reborn|second life|woke)\b/iu;
+const OPENING_WORLD_PATTERN =
+  /\b(?:air|ash|blood|cold|danger|door|earth|fire|floor|forest|heat|light|rain|road|room|sky|smoke|stone|street|village|wall|wind|world)\b/iu;
+const INTERNAL_PLANNING_PATTERN =
+  /\b(?:arc position|character autonomy|due by chapter|evaluation score|internal milestone|planning phase|quality rubric|required by chapter|scheduled beat|serial arc|ten[- ]chapter quality)\b|\bchapter\s+\d+\s+(?:deadline|target)\b/iu;
 const TITLE_ACTION_VERBS = new Set([
   "awaken",
   "bind",
@@ -146,6 +156,8 @@ export function buildTenChapterQualityPlan(
 export function validateNarrativeQuality(input: NarrativeQualityInput): ValidationIssue[] {
   const issues = validateTitleNovelty(input.title, input.history);
   const prose = input.prose.trim();
+  const hasSystemNotice =
+    SYSTEM_NOTICE_PATTERN.test(prose) || namedSystemMentionPattern(input.systemName).test(prose);
   const words = wordsIn(prose);
   const dialogueWords = countDialogueWords(prose);
   const dialogueTurns = dialogueSpans(prose).filter((span) => wordsIn(span).length >= 2).length;
@@ -174,12 +186,50 @@ export function validateNarrativeQuality(input: NarrativeQualityInput): Validati
     );
   }
 
-  if (input.systemNoticeRequired && !SYSTEM_NOTICE_PATTERN.test(prose)) {
+  if (input.openingOriginRequired && !OPENING_WORLD_PATTERN.test(prose)) {
+    issues.push(
+      issue(
+        "OPENING_WORLD_MISSING",
+        "Chapter one must introduce the immediate new world through concrete in-scene detail",
+        "prose",
+      ),
+    );
+  }
+
+  if (input.systemNoticeRequired && !hasSystemNotice) {
     issues.push(
       issue(
         "SYSTEM_NOTICE_MISSING",
         "Chapter must show the accepted LitRPG progression through an explicit System notice",
         "prose",
+      ),
+    );
+  }
+
+  if (
+    input.openingOriginRequired &&
+    (!PRIOR_LIFE_PATTERN.test(prose) || !AWAKENING_PATTERN.test(prose) || !hasSystemNotice)
+  ) {
+    issues.push(
+      issue(
+        "OPENING_ORIGIN_MISSING",
+        "Chapter one must dramatize the prior life, awakening in the new body, and first System pressure",
+        "prose",
+      ),
+    );
+  }
+
+  const planningLeakPath = INTERNAL_PLANNING_PATTERN.test(input.title)
+    ? "title"
+    : INTERNAL_PLANNING_PATTERN.test(prose)
+      ? "prose"
+      : null;
+  if (planningLeakPath !== null) {
+    issues.push(
+      issue(
+        "INTERNAL_PLANNING_LEAK",
+        "Chapter exposes internal planning, deadlines, or evaluation language",
+        planningLeakPath,
       ),
     );
   }
@@ -223,6 +273,12 @@ export function validateNarrativeQuality(input: NarrativeQualityInput): Validati
   }
 
   return issues;
+}
+
+function namedSystemMentionPattern(systemName: string | undefined): RegExp {
+  if (!systemName?.trim()) return /(?!)/u;
+  const escapedName = systemName.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  return new RegExp(`\\b${escapedName}\\b`, "iu");
 }
 
 export function validateTitleNovelty(

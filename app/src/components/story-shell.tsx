@@ -5,7 +5,12 @@ import { forwardRef, useEffect, useRef, useState } from "react";
 
 import { ChapterHistory } from "./chapter-history";
 import { StoryLibrary } from "./story-library";
-import type { ReaderChapterView, StorySummary, StoryView } from "./story-types";
+import type {
+  ReaderChapterView,
+  StoryGenerationView,
+  StorySummary,
+  StoryView,
+} from "./story-types";
 
 const ACT_NAMES = [
   "Reincarnation and survival",
@@ -35,6 +40,8 @@ interface StoryShellProps {
   readonly error: string | null;
   readonly generationChapter: number | null;
   readonly generationMode: "generate" | "rewrite";
+  readonly generationPhase: "preparing" | "characters" | "writing" | "checking" | "saving";
+  readonly generations: readonly StoryGenerationView[];
   readonly libraryBusy: boolean;
   readonly libraryError: string | null;
   readonly libraryWarnings: readonly string[];
@@ -58,21 +65,10 @@ interface StoryShellProps {
   readonly stopRequested: boolean;
 }
 
-type Mode = "reader" | "god";
-
 function BookIcon() {
   return (
     <svg aria-hidden="true" viewBox="0 0 24 24">
       <path d="M3 5.5c3.2-.8 6-.2 9 1.8v12c-3-2-5.8-2.6-9-1.8v-12Zm18 0c-3.2-.8-6-.2-9 1.8v12c3-2 5.8-2.6 9-1.8v-12Z" />
-    </svg>
-  );
-}
-
-function InspectIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24">
-      <path d="M12 2.8 14.2 6l3.8-.5.4 3.8 3.4 1.8-1.8 3.4 1.8 3.4-3.4 1.8-.4 3.8-3.8-.5-2.2 3.2L9.8 23 6 23.5l-.4-3.8-3.4-1.8L4 14.5 2.2 11l3.4-1.8L6 5.5l3.8.5L12 2.8Z" />
-      <circle cx="12" cy="14" r="3.2" />
     </svg>
   );
 }
@@ -113,21 +109,11 @@ function percent(current: number, maximum: number): number {
   return Math.min(100, Math.max(0, (current / maximum) * 100));
 }
 
-function formatMoney(value: number): string {
-  return `$${value.toFixed(4)}`;
-}
-
-function formatLatency(value: number): string {
-  return value >= 1_000 ? `${(value / 1_000).toFixed(1)}s` : `${value}ms`;
-}
-
 function ExportMenu({
   mobile = false,
-  mode,
   storyId,
 }: {
   readonly mobile?: boolean;
-  readonly mode: Mode;
   readonly storyId: string;
 }) {
   const encodedStoryId = encodeURIComponent(storyId);
@@ -141,15 +127,8 @@ function ExportMenu({
         <a download href={`/api/story/export?format=markdown&storyId=${encodedStoryId}`}>
           Markdown
         </a>
-        <a
-          download
-          href={
-            mode === "god"
-              ? `/api/story/export?format=json&scope=god&storyId=${encodedStoryId}`
-              : `/api/story/export?format=json&storyId=${encodedStoryId}`
-          }
-        >
-          {mode === "god" ? "Developer JSON" : "Reader JSON"}
+        <a download href={`/api/story/export?format=json&storyId=${encodedStoryId}`}>
+          Reader JSON
         </a>
       </div>
     </details>
@@ -161,9 +140,8 @@ function StoryHeader({
   libraryBusy,
   libraryError,
   libraryWarnings,
-  mode,
+  generations,
   onActivateStory,
-  onMode,
   onNewStory,
   onReopenStory,
   onRestartStory,
@@ -175,9 +153,8 @@ function StoryHeader({
   readonly libraryBusy: boolean;
   readonly libraryError: string | null;
   readonly libraryWarnings: readonly string[];
-  readonly mode: Mode;
+  readonly generations: readonly StoryGenerationView[];
   readonly onActivateStory: (storyId: string) => void;
-  readonly onMode: (mode: Mode) => void;
   readonly onNewStory: () => void;
   readonly onReopenStory: (storyId: string) => void;
   readonly onRestartStory: (storyId: string) => void;
@@ -196,6 +173,7 @@ function StoryHeader({
           activeStoryId={activeStory.id}
           busy={libraryBusy}
           error={libraryError}
+          generations={generations}
           onActivate={onActivateStory}
           onNewStory={onNewStory}
           onReopen={onReopenStory}
@@ -207,33 +185,17 @@ function StoryHeader({
         />
       </div>
       <nav aria-label="Story views" className="desktop-nav">
-        <button
-          aria-current={mode === "reader" ? "page" : undefined}
-          className={mode === "reader" ? "is-active" : ""}
-          onClick={() => onMode("reader")}
-          type="button"
-        >
+        <span aria-current="page" className="reader-label">
           <BookIcon />
           Reader
-        </button>
-        <ExportMenu mode={mode} storyId={activeStory.id} />
-        <details className="developer-menu">
-          <summary>More</summary>
-          <button onClick={() => onMode(mode === "god" ? "reader" : "god")} type="button">
-            <InspectIcon />
-            {mode === "god" ? "Back to Reader" : "Developer details"}
-          </button>
-        </details>
+        </span>
+        <ExportMenu storyId={activeStory.id} />
       </nav>
       <details className="mobile-menu">
         <summary aria-label="Open story menu">
           <MenuIcon />
         </summary>
-        <button onClick={() => onMode(mode === "god" ? "reader" : "god")} type="button">
-          <InspectIcon />
-          {mode === "god" ? "Back to Reader" : "Developer details"}
-        </button>
-        <ExportMenu mobile mode={mode} storyId={activeStory.id} />
+        <ExportMenu mobile storyId={activeStory.id} />
       </details>
     </header>
   );
@@ -241,14 +203,10 @@ function StoryHeader({
 
 function ReaderContext({
   activeChapter,
-  apiKeyConfigured,
-  chapterSource,
   reviewingSavedChapter,
   story,
 }: {
   readonly activeChapter: number;
-  readonly apiKeyConfigured: boolean;
-  readonly chapterSource: "live" | "local";
   readonly reviewingSavedChapter: boolean;
   readonly story: StoryView;
 }) {
@@ -262,9 +220,7 @@ function ReaderContext({
           {story.pov.name}
           <small>Viewpoint locked</small>
         </strong>
-        <span>
-          Chapter {activeChapter} of {DEMO_CHAPTER_LIMIT}
-        </span>
+        <span>Chapter {activeChapter}</span>
       </div>
       {reviewingSavedChapter ? (
         <p>Saved chapter · latest is chapter {story.world.chapter}</p>
@@ -282,23 +238,6 @@ function ReaderContext({
         role="progressbar"
       >
         <span style={{ width: `${chapterProgress}%` }} />
-      </div>
-      <div className="chapter-source" role="status">
-        <span aria-hidden="true" />
-        <p>
-          {reviewingSavedChapter ? (
-            <>Loaded from your local save. Opening chapter history made no OpenAI call.</>
-          ) : chapterSource === "live" ? (
-            <>Chapter saved locally. OpenAI generation is complete.</>
-          ) : apiKeyConfigured ? (
-            <>Loaded from your local story. Opening this page made no OpenAI call.</>
-          ) : (
-            <>
-              Loaded from your local save. Add your OpenAI API key to the server before creating
-              another chapter.
-            </>
-          )}
-        </p>
       </div>
     </section>
   );
@@ -344,7 +283,7 @@ function CharacterState({ story }: { readonly story: StoryView }) {
 
   return (
     <div className="state-content">
-      <p className="rail-label">Ashen System</p>
+      <p className="rail-label">{story.systemName}</p>
       <dl className="state-summary">
         <div>
           <dt>Level</dt>
@@ -466,8 +405,10 @@ function ReaderActions({
   busy,
   generationChapter,
   generationMode,
+  generationPhase,
   onCommand,
   onContinue,
+  onRetry,
   onStop,
   receivedProse,
   runMessage,
@@ -478,8 +419,10 @@ function ReaderActions({
   readonly busy: boolean;
   readonly generationChapter: number | null;
   readonly generationMode: "generate" | "rewrite";
+  readonly generationPhase: StoryShellProps["generationPhase"];
   readonly onCommand: (command: StoryCommand) => void;
   readonly onContinue: () => void;
+  readonly onRetry: () => void;
   readonly onStop: () => void;
   readonly receivedProse: boolean;
   readonly runMessage: string | null;
@@ -526,12 +469,25 @@ function ReaderActions({
         automaticRun={automaticRun}
         generationChapter={generationChapter}
         generationMode={generationMode}
+        generationPhase={generationPhase}
         onStop={onStop}
         receivedProse={receivedProse}
         ref={generationPanel}
         story={story}
         stopRequested={stopRequested}
       />
+    );
+  }
+
+  if (story.world.chapter === 0) {
+    return (
+      <section className="terminal-state">
+        <h2>Chapter 1 is not ready</h2>
+        <p>Retry the opening chapter. No placeholder text has been saved.</p>
+        <button onClick={onRetry} type="button">
+          Create chapter 1
+        </button>
+      </section>
     );
   }
 
@@ -688,13 +644,23 @@ const GenerationStatus = forwardRef<
     readonly automaticRun: boolean;
     readonly generationChapter: number | null;
     readonly generationMode: "generate" | "rewrite";
+    readonly generationPhase: StoryShellProps["generationPhase"];
     readonly onStop: () => void;
     readonly receivedProse: boolean;
     readonly story: StoryView;
     readonly stopRequested: boolean;
   }
 >(function GenerationStatus(
-  { automaticRun, generationChapter, generationMode, onStop, receivedProse, story, stopRequested },
+  {
+    automaticRun,
+    generationChapter,
+    generationMode,
+    generationPhase,
+    onStop,
+    receivedProse,
+    story,
+    stopRequested,
+  },
   ref,
 ) {
   const chapter = generationChapter ?? story.world.chapter + 1;
@@ -702,19 +668,19 @@ const GenerationStatus = forwardRef<
     <section aria-live="polite" className="generation-panel" ref={ref} role="status" tabIndex={-1}>
       <span aria-hidden="true" className="generation-mark" />
       <div>
-        <h2>
-          {generationMode === "rewrite"
-            ? `Rewriting chapter ${chapter}`
-            : `Creating chapter ${chapter} of ${DEMO_CHAPTER_LIMIT}`}
-        </h2>
+        <h2>Chapter {chapter}</h2>
         <p>
-          {generationMode === "rewrite"
-            ? receivedProse
-              ? "Canon checked. Saving the revised chapter."
-              : "Rewriting the prose and checking it against saved canon."
-            : receivedProse
-              ? "Canon checked. Saving the chapter in the background."
-              : "Building and checking the next chapter in the background. Keep reading."}
+          {receivedProse || generationPhase === "saving"
+            ? "Saving the finished chapter."
+            : generationPhase === "checking"
+              ? "Checking story continuity and quality."
+              : generationPhase === "writing"
+                ? generationMode === "rewrite"
+                  ? "Writing a new version."
+                  : "Writing the chapter."
+                : generationPhase === "characters"
+                  ? "Resolving character actions."
+                  : "Preparing the next scene."}
         </p>
       </div>
       {automaticRun ? (
@@ -728,8 +694,6 @@ const GenerationStatus = forwardRef<
 
 function ReaderView(props: StoryShellProps) {
   const {
-    apiKeyConfigured,
-    chapterSource,
     error,
     onReviewChapter,
     onRetry,
@@ -740,13 +704,14 @@ function ReaderView(props: StoryShellProps) {
     story,
   } = props;
   const chapterHeading = useRef<HTMLHeadingElement>(null);
-  const latestChapter = story.chapter
-    ? {
-        chapter: story.world.chapter,
-        prose: story.chapter.prose,
-        title: story.chapter.title,
-      }
-    : null;
+  const latestChapter =
+    story.chapter && story.world.chapter > 0
+      ? {
+          chapter: story.world.chapter,
+          prose: story.chapter.prose,
+          title: story.chapter.title,
+        }
+      : null;
   const displayedChapter = reviewedChapter ?? latestChapter;
   const activeChapter = displayedChapter?.chapter ?? story.world.chapter;
   const reviewingSavedChapter = activeChapter !== story.world.chapter;
@@ -763,9 +728,9 @@ function ReaderView(props: StoryShellProps) {
     <main className="reader-layout">
       <article className="chapter-column">
         <ReaderContext
-          activeChapter={activeChapter}
-          apiKeyConfigured={apiKeyConfigured}
-          chapterSource={chapterSource}
+          activeChapter={
+            story.world.chapter === 0 && props.busy ? (props.generationChapter ?? 1) : activeChapter
+          }
           reviewingSavedChapter={reviewingSavedChapter}
           story={story}
         />
@@ -810,6 +775,7 @@ function ReaderView(props: StoryShellProps) {
                 automaticRun={props.automaticRun}
                 generationChapter={props.generationChapter}
                 generationMode={props.generationMode}
+                generationPhase={props.generationPhase}
                 onStop={props.onStop}
                 receivedProse={props.receivedProse}
                 story={story}
@@ -890,200 +856,16 @@ function ReaderView(props: StoryShellProps) {
   );
 }
 
-function JsonBlock({
-  defaultOpen = false,
-  label,
-  value,
-}: {
-  readonly defaultOpen?: boolean;
-  readonly label: string;
-  readonly value: unknown;
-}) {
-  return (
-    <details className="json-block" open={defaultOpen}>
-      <summary>
-        {label} <ChevronIcon />
-      </summary>
-      <pre>{JSON.stringify(value, null, 2)}</pre>
-    </details>
-  );
-}
-
-function GodModeView({ story }: { readonly story: StoryView }) {
-  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
-  const tracePayload = {
-    adapterMode: story.adapterMode,
-    costUsd: story.estimatedCostUsd,
-    godMode: story.godMode,
-    latencyMs: story.latencyMs,
-    usage: story.usage,
-    world: story.world,
-  };
-
-  async function copyTrace(): Promise<void> {
-    try {
-      await navigator.clipboard.writeText(JSON.stringify(tracePayload, null, 2));
-      setCopyState("copied");
-    } catch {
-      setCopyState("failed");
-    }
-  }
-
-  return (
-    <main className="god-shell">
-      <h1 className="sr-only">Developer details</h1>
-      <header className="god-context">
-        <p>
-          {story.pov.name} <span>·</span> Chapter {story.world.chapter} <span>·</span> World v
-          {Math.max(1, story.world.version - 1)} → v{story.world.version}
-        </p>
-      </header>
-      <div className="god-grid">
-        <section className="intent-column" aria-labelledby="intents-heading">
-          <h2 id="intents-heading">Background intents</h2>
-          {story.godMode.intents.length > 0 ? (
-            <ol>
-              {story.godMode.intents.map((intent, index) => (
-                <li className={intent.accepted ? "is-accepted" : ""} key={intent.id || index}>
-                  <header>
-                    <strong>
-                      {index + 1}. <span>{intent.actorName}</span>
-                    </strong>
-                    <em>{intent.accepted ? "Accepted" : "Deferred"}</em>
-                  </header>
-                  <p>{intent.goal}</p>
-                  {intent.expectedEffect ? <p>{intent.expectedEffect}</p> : null}
-                  <small>Phase: {intent.phase}</small>
-                </li>
-              ))}
-            </ol>
-          ) : (
-            <p className="empty-copy">No background intents for this chapter.</p>
-          )}
-          {story.godMode.rejected.length > 0 ? (
-            <section className="rejected-intents">
-              <h3>Rejected intents</h3>
-              <ul>
-                {story.godMode.rejected.map((intent) => (
-                  <li key={`${intent.id}-${intent.code}`}>
-                    <strong>{intent.code}</strong>
-                    <span>{intent.reason}</span>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          ) : null}
-        </section>
-        <section className="resolution-column" aria-labelledby="resolution-heading">
-          <h2 id="resolution-heading">Canonical resolution</h2>
-          <div className="resolution-lead">
-            <span>Committed WorldDelta</span>
-            <strong>World v{story.world.version}</strong>
-          </div>
-          <JsonBlock defaultOpen label="Accepted delta" value={story.godMode.delta} />
-          {story.visibleEvents.length > 0 ? (
-            <section className="resolution-section">
-              <h3>Observed events</h3>
-              <ul>
-                {story.visibleEvents.map((event) => (
-                  <li key={event.id || event.summary}>{event.summary}</li>
-                ))}
-              </ul>
-            </section>
-          ) : null}
-        </section>
-        <section className="trace-column" aria-labelledby="trace-heading">
-          <h2 id="trace-heading">Trace</h2>
-          <p className="trace-mode">{titleCase(story.adapterMode)}</p>
-          <dl className="trace-list">
-            <div>
-              <dt>Prompt version</dt>
-              <dd>{story.godMode.promptVersion || "—"}</dd>
-            </div>
-            <div>
-              <dt>Schema version</dt>
-              <dd>{story.godMode.schemaVersion || "—"}</dd>
-            </div>
-            <div>
-              <dt>Input</dt>
-              <dd>{story.usage.inputTokens.toLocaleString()} tokens</dd>
-            </div>
-            <div>
-              <dt>Output</dt>
-              <dd>{story.usage.outputTokens.toLocaleString()} tokens</dd>
-            </div>
-            <div>
-              <dt>Reasoning</dt>
-              <dd>{story.usage.reasoningTokens.toLocaleString()}</dd>
-            </div>
-            <div>
-              <dt>Latency</dt>
-              <dd>{formatLatency(story.latencyMs)}</dd>
-            </div>
-            <div>
-              <dt>Estimated cost</dt>
-              <dd>{formatMoney(story.estimatedCostUsd)}</dd>
-            </div>
-          </dl>
-          <dl className="trace-list trace-hashes">
-            <div>
-              <dt>Before</dt>
-              <dd>{story.godMode.stateBeforeHash || "—"}</dd>
-            </div>
-            <div>
-              <dt>After</dt>
-              <dd>{story.godMode.stateAfterHash || "—"}</dd>
-            </div>
-          </dl>
-          {story.godMode.calls.length > 0 ? (
-            <JsonBlock label="Model calls" value={story.godMode.calls} />
-          ) : null}
-          <button className="copy-trace" onClick={() => void copyTrace()} type="button">
-            {copyState === "copied"
-              ? "Trace copied"
-              : copyState === "failed"
-                ? "Copy failed"
-                : "Copy trace"}
-          </button>
-        </section>
-      </div>
-      <div className="commit-rail">
-        <details>
-          <summary>
-            <span>Narrative audit</span>
-            <strong className={story.godMode.gateResult === "failed" ? "is-danger" : "is-success"}>
-              {story.godMode.gateResult === "failed" ? "Failed" : "Passed"}
-            </strong>
-            <ChevronIcon />
-          </summary>
-          <pre>{JSON.stringify(story.godMode.audit, null, 2)}</pre>
-        </details>
-        <details>
-          <summary>
-            <span>Atomic commit</span>
-            <strong>Committed v{story.world.version}</strong>
-            <ChevronIcon />
-          </summary>
-          <p>Chapter, world delta, knowledge, usage, and trace share one committed version.</p>
-        </details>
-      </div>
-    </main>
-  );
-}
-
 export function StoryShell(props: StoryShellProps) {
-  const [mode, setMode] = useState<Mode>("reader");
-
   return (
-    <div className={`story-app story-app--${mode}`}>
+    <div className="story-app story-app--reader">
       <StoryHeader
         activeStory={props.activeStory}
         libraryBusy={props.libraryBusy}
         libraryError={props.libraryError}
         libraryWarnings={props.libraryWarnings}
-        mode={mode}
+        generations={props.generations}
         onActivateStory={props.onActivateStory}
-        onMode={setMode}
         onNewStory={props.onNewStory}
         onReopenStory={props.onReopenStory}
         onRestartStory={props.onRestartStory}
@@ -1091,13 +873,7 @@ export function StoryShell(props: StoryShellProps) {
         onTryAnother={props.onTryAnother}
         stories={props.stories}
       />
-      {mode === "reader" ? <ReaderView {...props} /> : <GodModeView story={props.story} />}
-      {props.busy && mode === "god" ? (
-        <div aria-live="polite" className="turn-progress" role="status">
-          <span />
-          Creating chapter {props.generationChapter ?? props.story.world.chapter + 1}
-        </div>
-      ) : null}
+      <ReaderView {...props} />
     </div>
   );
 }

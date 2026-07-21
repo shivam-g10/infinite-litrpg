@@ -14,9 +14,9 @@ Finish Infinite LitRPG as a tested OpenAI Build Week project. Build working soft
 ## Scope Locks
 
 - LitRPG only.
-- Original reincarnated Demon King setting.
-- Six existing selectable characters.
-- Viewpoint locks after selection.
+- User-named reincarnation story with an explicit LitRPG System.
+- Reader-facing cast and world terms are generated for every new story. Stable internal actor IDs are implementation details.
+- Reincarnation and System are fixed creator foundations for the current product slice.
 - Maximum three active background character agents per chapter.
 - One canonical state writer.
 - Seven acts, at most 50 chapters each.
@@ -35,7 +35,7 @@ Finish Infinite LitRPG as a tested OpenAI Build Week project. Build working soft
 - Stage prospective delta, generate and validate chapter, then commit world delta, knowledge delta, chapter, usage, and version atomically.
 - Accepted `WorldDelta` is sole source of new canon. Narration and canon audit cannot invent state mutations.
 - Keep POV prompts limited to selected character knowledge.
-- Hide Multi-agent beta behind adapter. Keep sequential Luna fallback.
+- Hide Multi-agent beta behind an adapter. Keep the concurrent application fallback.
 - API key stays server-side. Never log, expose, or commit secrets.
 - Preserve prompt, schema, and fixture versions in traces.
 - Add regression case for every discovered defect.
@@ -54,7 +54,7 @@ Finish Infinite LitRPG as a tested OpenAI Build Week project. Build working soft
 
 ## Commands
 
-App not bootstrapped yet. During bootstrap, create and keep these stable root commands:
+Keep these stable root commands:
 
 ```text
 npm run format:check
@@ -67,16 +67,16 @@ npm run test:e2e
 npm run check
 ```
 
-`npm run check` must run all non-live gates. Live API evals need a separate explicit command and authorization. Record usage and estimated cost, but do not impose an application-side token, prose-size, prompt-size, or cost ceiling.
+`npm run check` must remain provider-free. Paid eval runners are not part of this repository. Product generation records usage but imposes no application-side token, prose-size, prompt-size, or cost ceiling.
 
 ## Autonomous Build Done Bar
 
 - All acceptance checks in `docs/PLAN.md` complete.
-- All hard gates in `evals/README.md` pass.
+- All provider-free gates in `evals/README.md` pass.
 - Clean-clone setup verified.
 - Core user path verified in browser.
-- Six POV review packets generated and agent-reviewed.
-- Multi-agent path and sequential fallback tested.
+- Creator-to-chapter-1 path and saved-story recovery verified in a browser.
+- Multi-agent path and concurrent application fallback tested.
 - No hidden-knowledge leaks or chapter 351 path.
 - Secret scan clean.
 - README, architecture, screenshots, demo script, and submission evidence packet complete.
@@ -84,7 +84,7 @@ npm run check
 
 ## User-Owned Release Gates
 
-- User approves six POV review packets.
+- User approves the configurable Rowan story experience.
 - User records or approves public demo video.
 - User supplies Codex feedback session ID.
 - User authorizes push, publication, and challenge submission.

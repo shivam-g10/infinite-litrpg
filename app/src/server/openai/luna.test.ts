@@ -203,7 +203,7 @@ describe("Luna world-tick adapters", () => {
     expect(parse).not.toHaveBeenCalled();
   });
 
-  it("runs explicit sequential fallback in order without a hidden output cap", async () => {
+  it("runs the application fallback concurrently without a hidden output cap", async () => {
     const parse = vi
       .fn()
       .mockResolvedValueOnce(parsedIntentCandidate(intentCandidate(), "resp_actor-one"))
@@ -214,7 +214,7 @@ describe("Luna world-tick adapters", () => {
 
     const result = await runLunaWorldTick(client({ create, parse }), tickRequest);
 
-    expect(result.mode).toBe("sequential");
+    expect(result.mode).toBe("application-parallel");
     expect(result.batch.intents).toEqual([
       canonicalIntent("actor-one", "intent-background-1-1"),
       canonicalIntent("actor-two", "intent-background-1-2"),
@@ -246,7 +246,28 @@ describe("Luna world-tick adapters", () => {
     }
   });
 
-  it("omits an unset output cap from every sequential request", async () => {
+  it("starts independent fallback character calls in parallel", async () => {
+    const releases: Array<() => void> = [];
+    let started = 0;
+    const parse = vi.fn().mockImplementation(
+      () =>
+        new Promise<Response>((resolve) => {
+          started += 1;
+          releases.push(() => resolve(parsedIntentCandidate(intentCandidate(), `resp_${started}`)));
+        }),
+    );
+    const pending = runLunaWorldTick(
+      client({ create: vi.fn(), parse }),
+      request(false, ["actor-one", "actor-two", "actor-three"]),
+    );
+
+    await vi.waitFor(() => expect(started).toBe(3));
+    for (const release of releases) release();
+
+    await expect(pending).resolves.toMatchObject({ mode: "application-parallel" });
+  });
+
+  it("omits an unset output cap from every parallel request", async () => {
     const parse = vi
       .fn()
       .mockResolvedValueOnce(parsedIntentCandidate(intentCandidate(), "resp_actor-one"))
@@ -262,7 +283,7 @@ describe("Luna world-tick adapters", () => {
     }
   });
 
-  it("identifies the sequential agent on a failed runtime attempt", async () => {
+  it("identifies the parallel agent on a failed runtime attempt", async () => {
     const attempts: RuntimeAttempt[] = [];
     const parse = vi.fn().mockResolvedValue(
       parsedIntentCandidate(

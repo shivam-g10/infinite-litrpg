@@ -2,7 +2,7 @@ import { z } from "zod";
 
 export const CONTRACT_VERSION = "1.1.0" as const;
 export const FIXTURE_VERSION = "1.1.0" as const;
-export const PROMPT_VERSION = "1.6.0" as const;
+export const PROMPT_VERSION = "1.7.0" as const;
 export const RUNTIME_SCHEMA_VERSION = "1.1.0-runtime-candidates-5" as const;
 export const PERSISTED_PROMPT_VERSIONS = [
   "1.4.9",
@@ -10,6 +10,7 @@ export const PERSISTED_PROMPT_VERSIONS = [
   "1.4.11",
   "1.4.12",
   "1.5.0",
+  "1.6.0",
   PROMPT_VERSION,
 ] as const;
 export const PersistedPromptVersionSchema = z.enum(PERSISTED_PROMPT_VERSIONS);

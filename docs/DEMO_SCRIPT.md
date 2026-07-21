@@ -1,96 +1,52 @@
-# Three-Minute Demo Script
+# Three-Minute Demo
 
-Target: 2 minutes 45 seconds. Record one clean local run. Use voice audio. No music.
+Target: 2 minutes 45 seconds.
 
-## Capture Setup
+## Setup
 
-Final recording uses a fresh local world and a real Standard-tier chapter request.
+1. Run `npm run dev`.
+2. Open `http://127.0.0.1:3000` at 1280 by 720.
+3. Keep `.env`, the API key, provider pages, databases, and logs hidden.
+4. Use a new title and a real provider response.
 
-1. Stop every local app process.
-2. Preserve any existing save with a recoverable move, for example `Move-Item data/ashen-crown.db data/ashen-crown.before-demo.db`. Include matching `-shm` and `-wal` files if present. Never overwrite a backup.
-3. Run `npm run dev`, then open `http://localhost:3000` at a 1280 by 720 browser viewport.
-4. Record a 1920 by 1080 canvas at 30 fps with an English microphone track. Hide notifications, `.env`, provider pages, and private account data.
-5. Keep a terminal ready with completed `npm run evals` output for the terminal-guard segment. Do not show API keys or ignored reports.
+## 0:00 to 0:40 — Create
 
-Generation is variable. Start the final take only after one successful private rehearsal. If the real turn exceeds 60 seconds or fails, stop the take. Do not cut a failure into apparent success. Diagnose it, keep its trace, then record a new full take.
+Show the fixed Reincarnation and System foundation. Change starting life, power path, genres, background, personality, and System focus. Leave the protagonist name blank.
 
-For no-cost layout rehearsal only, start from an empty `data/` directory and run `npm run demo:seed`. It restores the authenticated Rowan chapter-1 checkpoint from tracked evidence, verifies its result hash, and makes no model request. It refuses to overwrite a save. This path rehearses Reader, God Mode, continuation confirmation, and evidence timing; it does not replace the real click-to-result segment in the final video.
+Say: “I choose the story shape. The app creates fresh character names and world terms, then writes an origin chapter for that setup.”
 
-The 2026-07-21 real-browser layout rehearsal completed Reader, God Mode, exact cost confirmation, cancel, trace, and return-to-Reader interactions in 87.4 seconds at 1280 by 720. Console warnings and errors: zero. Provider calls: zero. The final real-generation rehearsal and recording remain open gates.
+## 0:40 to 1:15 — Chapter 1
 
-## 0:00 to 0:18 — One Life
+Create the story. Point out the current phase. Read a short section showing the prior-life ending, arrival, world, and System.
 
-Show six-character selection.
+Say: “Sol writes the chapter. Terra checks continuity and reader safety. Deterministic code owns every state change.”
 
-Say:
+## 1:15 to 1:50 — Background work
 
-> Infinite LitRPG is a local story engine where you choose one character and live only through that viewpoint. The other five keep pursuing their own goals. Canon stays deterministic, and the story must end by chapter 350.
+Start the next chapter. Open another book while it runs, then return.
 
-Select Rowan. Show permanent viewpoint lock.
+Say: “Generation belongs to the server and locks only this book. I can read another book, refresh, and return without losing the task.”
 
-## 0:18 to 0:42 — Player Action
+## 1:50 to 2:15 — Reader control
 
-Choose the first suggested action.
+Show a meaningful choice, custom guidance, latest-chapter reroll, reject, and export.
 
-Say:
+Say: “I intervene when a decision matters. Routine chapters can continue in the background. A reroll changes prose without rewriting accepted canon.”
 
-> Player choices and custom actions become strict typed intents. Models never write world state. Application code validates the action before any canonical change.
+## 2:15 to 2:45 — Local architecture
 
-## 0:42 to 1:08 — Living World
+Show `stories/<story-id>/` and `docs/ARCHITECTURE.md`.
 
-Open God Mode. Show up to three background intents and canonical resolution.
+Say: “Every book has local SQLite canon and one Markdown file per chapter. Up to three Luna character intents run together, one resolver decides the delta, and Chapter 351 is blocked before any model call.”
 
-Say:
+End on the Reader.
 
-> GPT-5.6 Luna gives background characters bounded intent. One deterministic World Director resolves every intent, stages one WorldDelta, and remains the sole canon writer.
+## Checklist
 
-Point to accepted and rejected intents, world version, and accepted delta.
-
-## 1:08 to 1:38 — Safe Chapter
-
-Return to Reader. Show chapter prose and `Continue to next decision`. Open its confirmation, show the exact chapter count and maximum cost, then cancel it for the timed demo.
-
-Say:
-
-> Luna writes only from Rowan's supplied knowledge. The draft is buffered, length-checked, audited for canon and hidden facts, then replayed as a stream. Routine chapters can continue automatically, but the app stops for meaningful act decisions. The cost is explicit before a multi-chapter run starts.
-
-## 1:38 to 2:04 — Trace and Cost
-
-Open God Mode. Show model calls, prompt and schema versions, service tier, usage, cost, latency, state hashes, and audit.
-
-Say:
-
-> Every attempt keeps model, tier, tokens, cost, latency, response identity, state hashes, and validation result. Canon, chapter, knowledge, usage, and version commit atomically.
-
-## 2:04 to 2:24 — Hard Limits
-
-Show the chapter-100 browser test and terminal test output or the submission evidence page.
-
-Say:
-
-> The browser path pauses for decisions after chapters 47 and 97, commits chapter 100, and makes no chapter-101 request. The full engine still ends at chapter 350, and chapter 351 is blocked before any model call.
-
-## 2:24 to 2:45 — Codex Build Story
-
-Show Git history, `docs/STATUS.md`, or test output.
-
-Say:
-
-> I built this with Codex and GPT-5.6. Codex drove source research, design concepts, strict TypeScript implementation, browser testing, security review, failure analysis, and regression-first fixes. Terra translates custom actions. Luna runs background intent, narration, bounded length recovery, and audit.
-
-End on Reader plus title:
-
-> Choose one life. The world keeps moving without you.
-
-## Recording Checklist
-
-- Keep final video below 2:55.
-- Use English voice audio.
-- Show no API key, `.env`, private account data, or provider dashboard.
-- Use only original app visuals and spoken audio.
-- Show real click-to-result behavior.
-- Include Codex and GPT-5.6 use in spoken track.
-- Upload as public YouTube video.
-- Watch exported video once at normal speed before approval.
-- Confirm the final take shows a real action click through committed Reader output.
-- Do not start the long continuation batch during the three-minute recording. Show and cancel its explicit confirmation, then use provider-free test evidence for chapter 100.
+- Video below 2:55 with English voice.
+- No secret or private provider data shown.
+- Fresh cast and world terms visible.
+- Real Chapter 1 visible.
+- Library switching works during generation.
+- No developer telemetry in Reader.
+- Watch the final export once before approval.

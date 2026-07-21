@@ -1,4 +1,4 @@
-import { CHARACTER_IDS, DEMO_CHAPTER_LIMIT } from "@infinite-litrpg/shared";
+import { CHARACTER_IDS, DEFAULT_STORY_SETUP, DEMO_CHAPTER_LIMIT } from "@infinite-litrpg/shared";
 
 import { getStoryRuntime, type StoryRuntime } from "@/server/story/runtime";
 import {
@@ -51,6 +51,7 @@ export async function POST(request: Request) {
                 command.povCharacterId,
                 runtime.workspace.listStories().length,
               ),
+              setup: DEFAULT_STORY_SETUP,
             })
           : await requireMatchingActiveStory(
               runtime,
@@ -77,25 +78,55 @@ function requireApiKey(apiKey: string | undefined): asserts apiKey is string {
   }
 }
 
-function streamTurn(
+const HEARTBEAT_INTERVAL_MS = 10_000;
+
+export function streamTurn(
   runtime: StoryRuntime,
   storyId: string,
   command: StoryMutationCommand,
 ): Response {
   const encoder = new TextEncoder();
   let cancelled = false;
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
+  const stopHeartbeat = (): void => {
+    if (heartbeat === undefined) return;
+    clearInterval(heartbeat);
+    heartbeat = undefined;
+  };
   const stream = new ReadableStream<Uint8Array>({
     cancel() {
       cancelled = true;
+      stopHeartbeat();
     },
     start(controller) {
+      if (!enqueue(controller, encoder, { status: "generating", type: "status" })) {
+        cancelled = true;
+      }
+      if (!cancelled) {
+        heartbeat = setInterval(() => {
+          if (!enqueue(controller, encoder, { type: "heartbeat" })) {
+            cancelled = true;
+            stopHeartbeat();
+          }
+        }, HEARTBEAT_INTERVAL_MS);
+      }
       void (async () => {
         try {
-          const result = await dispatchStoryCommand(runtime, storyId, command, (text) => {
-            if (!cancelled && !enqueue(controller, encoder, { text, type: "chunk" })) {
-              cancelled = true;
-            }
-          });
+          const result = await dispatchStoryCommand(
+            runtime,
+            storyId,
+            command,
+            (text) => {
+              if (!cancelled && !enqueue(controller, encoder, { text, type: "chunk" })) {
+                cancelled = true;
+              }
+            },
+            (generation) => {
+              if (!cancelled && !enqueue(controller, encoder, { generation, type: "status" })) {
+                cancelled = true;
+              }
+            },
+          );
           if (
             !cancelled &&
             !enqueue(controller, encoder, { ...storyEnvelope(runtime, result), type: "story" })
@@ -116,6 +147,7 @@ function streamTurn(
             }
           }
         } finally {
+          stopHeartbeat();
           if (!cancelled) {
             try {
               controller.close();
@@ -227,6 +259,7 @@ async function dispatchStoryCommand(
   storyId: string,
   command: StoryMutationCommand,
   onNarrationChunk?: (chunk: string) => void | Promise<void>,
+  onProgress?: Parameters<StoryRuntime["workspace"]["takeTurn"]>[3],
 ): Promise<WorkspaceStoryResult> {
   if (command.type === "reroll_latest") {
     return runtime.workspace.rerollLatest(
@@ -236,9 +269,10 @@ async function dispatchStoryCommand(
         requestId: command.requestId,
       },
       onNarrationChunk,
+      onProgress,
     );
   }
-  return runtime.workspace.takeTurn(storyId, command, onNarrationChunk);
+  return runtime.workspace.takeTurn(storyId, command, onNarrationChunk, onProgress);
 }
 
 function requireActiveStoryId(runtime: StoryRuntime): string {

@@ -7,7 +7,6 @@ import {
   WorldVersionSchema,
   canonicalizeBackgroundIntentCandidate,
   type AssignedBackgroundIntentCandidate,
-  type WorldIntent,
 } from "@infinite-litrpg/shared";
 import type OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
@@ -32,8 +31,8 @@ const LUNA_MODEL = "gpt-5.6-luna" as const;
 const MULTI_AGENT_BETA = "responses_multi_agent=v1" as const;
 const MAX_BACKGROUND_AGENTS = 3;
 
-export type IntentBatch = z.infer<typeof IntentBatchSchema>;
-export type NativeMultiAgentOutputItem = BetaResponseOutputItem;
+type IntentBatch = z.infer<typeof IntentBatchSchema>;
+type NativeMultiAgentOutputItem = BetaResponseOutputItem;
 
 export type LunaOpenAIClient = Pick<OpenAI, "beta" | "responses">;
 
@@ -42,7 +41,7 @@ export interface LunaAgentInput {
   readonly instructions: string;
 }
 
-export interface LunaRuntimeCapabilities {
+interface LunaRuntimeCapabilities {
   readonly nativeMultiAgent: boolean;
 }
 
@@ -72,7 +71,7 @@ export interface LunaCallSummary {
 export interface LunaWorldTickResult {
   readonly batch: IntentBatch;
   readonly calls: readonly LunaCallSummary[];
-  readonly mode: "native-multi-agent" | "sequential";
+  readonly mode: "application-parallel" | "native-multi-agent";
   readonly multiAgentOutputItems: readonly NativeMultiAgentOutputItem[];
 }
 
@@ -84,10 +83,10 @@ export async function runLunaWorldTick(
   if (request.capabilities.nativeMultiAgent) {
     return runNativeLunaWorldTick(client, request);
   }
-  return runSequentialLunaWorldTick(client, request);
+  return runParallelLunaWorldTick(client, request);
 }
 
-export async function runNativeLunaWorldTick(
+async function runNativeLunaWorldTick(
   client: Pick<OpenAI, "beta">,
   request: LunaWorldTickRequest,
 ): Promise<LunaWorldTickResult> {
@@ -208,57 +207,58 @@ export async function runNativeLunaWorldTick(
   };
 }
 
-export async function runSequentialLunaWorldTick(
+async function runParallelLunaWorldTick(
   client: StableOpenAIClient,
   request: LunaWorldTickRequest,
 ): Promise<LunaWorldTickResult> {
   validateLunaRequest(request);
-  const intents: WorldIntent[] = [];
-  const calls: LunaCallSummary[] = [];
-
-  for (const [index, agent] of request.agents.entries()) {
-    const call = await runStructuredResponse(client, {
-      agentId: agent.actorId,
-      input: request.resolverInput,
-      instructions: agent.instructions,
-      ...(request.maxOutputTokens === undefined
-        ? {}
-        : { maxOutputTokens: request.maxOutputTokens }),
-      model: LUNA_MODEL,
-      policy: request.policy,
-      reasoningEffort: request.reasoningEffort,
-      schema: BackgroundIntentCandidateSchema,
-      schemaName: "background_intent",
-      validate: (candidate) => {
-        canonicalizeBackgroundIntentCandidate(
-          candidate,
+  const results = await Promise.all(
+    request.agents.map(async (agent, index) => {
+      const call = await runStructuredResponse(client, {
+        agentId: agent.actorId,
+        input: request.resolverInput,
+        instructions: agent.instructions,
+        ...(request.maxOutputTokens === undefined
+          ? {}
+          : { maxOutputTokens: request.maxOutputTokens }),
+        model: LUNA_MODEL,
+        policy: request.policy,
+        reasoningEffort: request.reasoningEffort,
+        schema: BackgroundIntentCandidateSchema,
+        schemaName: "background_intent",
+        validate: (candidate) => {
+          canonicalizeBackgroundIntentCandidate(
+            candidate,
+            agent.actorId,
+            request.stateVersion,
+            index + 1,
+          );
+        },
+      });
+      return {
+        call: toCallSummary(agent.actorId, call),
+        intent: canonicalizeBackgroundIntentCandidate(
+          call.data,
           agent.actorId,
           request.stateVersion,
           index + 1,
-        );
-      },
-    });
-    intents.push(
-      canonicalizeBackgroundIntentCandidate(
-        call.data,
-        agent.actorId,
-        request.stateVersion,
-        index + 1,
-      ),
-    );
-    calls.push(toCallSummary(agent.actorId, call));
-  }
+        ),
+      };
+    }),
+  );
+  const intents = results.map(({ intent }) => intent);
+  const calls = results.map(({ call }) => call);
 
   const batch = IntentBatchSchema.safeParse({ intents });
   if (!batch.success) {
-    throw new OpenAIRuntimeError("INVALID_OUTPUT", "Sequential Luna intents failed batch schema", {
+    throw new OpenAIRuntimeError("INVALID_OUTPUT", "Parallel Luna intents failed batch schema", {
       cause: batch.error,
     });
   }
   return {
     batch: batch.data,
     calls,
-    mode: "sequential",
+    mode: "application-parallel",
     multiAgentOutputItems: [],
   };
 }
@@ -306,7 +306,7 @@ function extractMultiAgentOutputItems(
   return [...output];
 }
 
-export function hasHostedMultiAgentEvidence(
+function hasHostedMultiAgentEvidence(
   output: readonly unknown[],
   rootAgentNames: readonly string[] = ["root", "/root"],
 ): boolean {

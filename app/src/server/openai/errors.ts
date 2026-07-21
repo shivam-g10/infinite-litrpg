@@ -1,20 +1,17 @@
-export const OPENAI_RUNTIME_ERROR_CODES = [
-  "COST_CAP_EXCEEDED",
-  "FAILED_RESPONSE",
-  "INCOMPLETE_RESPONSE",
-  "INVALID_MODEL",
-  "INVALID_OUTPUT",
-  "INVALID_POLICY",
-  "INVALID_USAGE",
-  "MISSING_USAGE",
-  "NARRATIVE_AUDIT_REJECTED",
-  "REFUSAL",
-  "RESPONSE_NOT_COMPLETED",
-  "TIMEOUT",
-  "TRANSPORT_ERROR",
-] as const;
-
-export type OpenAIRuntimeErrorCode = (typeof OPENAI_RUNTIME_ERROR_CODES)[number];
+export type OpenAIRuntimeErrorCode =
+  | "COST_CAP_EXCEEDED"
+  | "FAILED_RESPONSE"
+  | "INCOMPLETE_RESPONSE"
+  | "INVALID_MODEL"
+  | "INVALID_OUTPUT"
+  | "INVALID_POLICY"
+  | "INVALID_USAGE"
+  | "MISSING_USAGE"
+  | "NARRATIVE_AUDIT_REJECTED"
+  | "REFUSAL"
+  | "RESPONSE_NOT_COMPLETED"
+  | "TIMEOUT"
+  | "TRANSPORT_ERROR";
 
 export class OpenAIRuntimeError extends Error {
   readonly code: OpenAIRuntimeErrorCode;

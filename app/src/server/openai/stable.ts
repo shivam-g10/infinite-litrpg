@@ -1,4 +1,4 @@
-import { ReasoningEffortSchema, type ModelCallTrace } from "@infinite-litrpg/shared";
+import { ReasoningEffortSchema } from "@infinite-litrpg/shared";
 import type OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
 import type { InputTokenCountParams } from "openai/resources/responses/input-tokens";
@@ -39,12 +39,12 @@ export interface StructuredResponseRequest<T> {
   readonly validate?: (data: T) => void;
 }
 
-export interface StructuredResponseCandidateContext {
+interface StructuredResponseCandidateContext {
   readonly attempt: number;
   readonly responseId: string;
 }
 
-export interface StructuredResponseRawCandidateContext extends StructuredResponseCandidateContext {
+interface StructuredResponseRawCandidateContext extends StructuredResponseCandidateContext {
   readonly rawOutputText: string;
   readonly status: Response["status"];
 }
@@ -165,13 +165,13 @@ function invokeEvidenceHook(callback: () => void, message: string): void {
   }
 }
 
-export interface NarrativeAuditVerdict {
+interface NarrativeAuditVerdict {
   readonly accepted: boolean;
   readonly auditedProse?: string;
   readonly reason?: string;
 }
 
-export interface NarrativeAuditContext {
+interface NarrativeAuditContext {
   readonly attempt: number;
   readonly responseId: string;
 }
@@ -513,5 +513,3 @@ async function countMaximumRequestCost(
     return byteBound;
   }
 }
-
-export type RuntimePhase = ModelCallTrace["phase"];

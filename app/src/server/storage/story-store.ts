@@ -11,6 +11,7 @@ import {
   TraceEnvelopeSchema,
   WorldDeltaSchema,
   WorldStateSchema,
+  StorySetupSchema,
   stageWorldDelta,
   validateChapterDraft,
   validateNarrativeStateClaims,
@@ -19,6 +20,7 @@ import {
   type FailedTurnTrace,
   type PersistedTraceEnvelope,
   type PersistedWorldDelta,
+  type StorySetup,
   type TraceEnvelope,
   type WorldDelta,
   type WorldState,
@@ -27,6 +29,8 @@ import {
 const DEFAULT_BUSY_TIMEOUT_MS = 5_000;
 
 export type CommitFailurePoint =
+  | "after-world-create"
+  | "after-story-setup-insert"
   | "after-world-update"
   | "after-delta-insert"
   | "after-knowledge-changes"
@@ -195,22 +199,46 @@ export class StoryStore {
     }
   }
 
-  createWorld(input: unknown): WorldState {
+  createWorld(input: unknown, setupInput?: unknown): WorldState {
     const validated = validateWorldState(input);
     if (!validated.ok) {
       throw new InvalidCommitError(`Invalid initial world: ${JSON.stringify(validated.issues)}`);
     }
     const state = validated.data;
     const stateJson = JSON.stringify(state);
+    const setup = parseStorySetup(setupInput);
 
     this.db
-      .prepare<[string, number, number, string]>(
-        `INSERT INTO worlds (id, world_version, chapter, state_json)
-         VALUES (?, ?, ?, ?)`,
-      )
-      .run(state.id, state.version, state.chapter, stateJson);
+      .transaction(() => {
+        this.db
+          .prepare<[string, number, number, string]>(
+            `INSERT INTO worlds (id, world_version, chapter, state_json)
+             VALUES (?, ?, ?, ?)`,
+          )
+          .run(state.id, state.version, state.chapter, stateJson);
+        this.injectFailure("after-world-create");
+
+        if (setup) {
+          this.db
+            .prepare<[string, number, string]>(
+              `INSERT INTO story_setups (world_id, setup_version, setup_json)
+               VALUES (?, ?, ?)`,
+            )
+            .run(state.id, 1, JSON.stringify(setup));
+          this.injectFailure("after-story-setup-insert");
+        }
+      })
+      .immediate();
 
     return state;
+  }
+
+  loadStorySetup(worldId: string): StorySetup | null {
+    const row = this.db
+      .prepare<[string], JsonRow>("SELECT setup_json AS json FROM story_setups WHERE world_id = ?")
+      .get(worldId);
+
+    return row ? StorySetupSchema.parse(parseJson(row.json)) : null;
   }
 
   loadWorldState(worldId: string): WorldState | null {
@@ -794,6 +822,13 @@ export class StoryStore {
         state_json TEXT NOT NULL CHECK (json_valid(state_json))
       );
 
+      CREATE TABLE IF NOT EXISTS story_setups (
+        world_id TEXT PRIMARY KEY,
+        setup_version INTEGER NOT NULL CHECK (setup_version = 1),
+        setup_json TEXT NOT NULL CHECK (json_valid(setup_json)),
+        FOREIGN KEY (world_id) REFERENCES worlds(id) ON DELETE CASCADE
+      );
+
       CREATE TABLE IF NOT EXISTS world_deltas (
         world_id TEXT NOT NULL,
         chapter INTEGER NOT NULL CHECK (chapter BETWEEN 1 AND 350),
@@ -1150,6 +1185,15 @@ function prepareCommit(input: CommitTurnInput): PreparedCommit {
 
 function parseJson(json: string): unknown {
   return JSON.parse(json) as unknown;
+}
+
+function parseStorySetup(input: unknown): StorySetup | null {
+  if (input === undefined) return null;
+  const result = StorySetupSchema.safeParse(input);
+  if (!result.success) {
+    throw new InvalidCommitError(`Invalid story setup: ${JSON.stringify(result.error.issues)}`);
+  }
+  return result.data;
 }
 
 function hashJson(value: unknown): string {

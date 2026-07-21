@@ -59,10 +59,9 @@ Run relevant gates in this order:
 4. unit and invariant tests
 5. offline evals
 6. integration tests
-7. explicitly confirmed live evals when required
-8. build
-9. browser smoke and end-to-end tests
-10. secret scan
+7. build
+8. browser smoke and end-to-end tests
+9. secret scan
 
 Review diff after checks. Fix root cause. Convert every escaped defect into regression fixture.
 
